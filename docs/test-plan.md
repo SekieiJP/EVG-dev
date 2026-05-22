@@ -1,0 +1,44 @@
+# Test Plan
+
+## 自動テスト
+
+```sh
+node tests/engine.test.js
+```
+
+対象:
+
+- 同一階指定は乗車成功時に実上昇1階になる。
+- 定員超過時は当該階の既存乗客と乗車希望者が強制下車になり、実上昇0階になる。
+- 禁止階を指定した投票は受理されるが、乗車失敗としてQペナルティのみ発生する。
+- E3a区間倍率はP側にのみ適用され、Qペナルティには掛からない。
+- E1予想イベントの正解・無回答点が適用される。
+- 現在Skill値は最高StageSkillを除外し、2〜5番目を合算する。
+
+## 手動テスト
+
+1. `python3 -m http.server 8000 -d game` で起動する。
+2. `?view=player` で2名以上参加する。
+3. `?view=host` でパスワード `host` を入力する。
+4. ホストで「説明」→「受付」を押す。
+5. プレイヤーでチケットを購入する。
+6. ホストで「締切」を押し、15秒後または「集計」で結果を出す。
+7. `?view=screen` でカウントダウン、結果発表、ランキングを確認する。
+8. `?view=settings` でUUIDコピー、名前変更、通信ログを確認する。
+9. `?view=history` で累積ランキングと個人統計を確認する。
+
+## GAS確認
+
+Apps Script上で以下を確認する。
+
+1. `setupElevatorGameSheets()` が必要なシートとヘッダーを作成する。
+2. `doPost` に `/api/player/join` 相当のpayloadを渡して参加登録できる。
+3. `doPost` に `/api/ticket/submit` 相当のpayloadを渡して投票できる。
+4. ホスト進行APIで集計後、`current_game` のJSONと `players` シートが更新される。
+
+## 残テスト
+
+- 実GAS Web App URLでのCORS/認証/パスルーティング確認。
+- 100人規模のポーリング負荷試験。
+- iOS SafariとAndroid Chromeでのタップターゲット、フォーム、localStorage挙動確認。
+- スクリーン音声素材追加後の自動再生制限とSkipフェード確認。

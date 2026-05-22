@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>実装メモ - エレベーターゲーム</title>
+    <style>
+      body {
+        margin: 0;
+        background: #f7f8f8;
+        color: #172325;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.7;
+      }
+      main {
+        width: min(960px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 56px;
+      }
+      h1, h2 {
+        line-height: 1.2;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 34px;
+      }
+      h2 {
+        margin-top: 32px;
+        border-bottom: 1px solid #d7dedf;
+        padding-bottom: 8px;
+      }
+      section {
+        border: 1px solid #d7dedf;
+        border-radius: 8px;
+        background: #fff;
+        padding: 20px;
+        margin-top: 18px;
+      }
+      li {
+        margin: 8px 0;
+      }
+      code {
+        background: #edf3f2;
+        border-radius: 4px;
+        padding: 2px 5px;
+      }
+      .meta {
+        color: #607074;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>実装メモ</h1>
+      <p class="meta">更新日: 2026-05-23 / 対象: <code>docs/elevator-game-requirements.md</code> v0.6</p>
+
+      <section>
+        <h2>今回実装した範囲</h2>
+        <ul>
+          <li><code>game/index.html</code> に、プレイヤー・ホスト・スクリーン・戦歴・設定を切り替える静的SPAを実装した。</li>
+          <li><code>game/assets/js/engine.js</code> に、乗車処理、人数判定、下車処理、禁止階、E1/E2/E3a/E3b/E4/E5/E6、Skill計算の純粋関数を実装した。</li>
+          <li><code>gas/src/Code.gs</code> に、GAS Web App用の暫定API、Spreadsheet初期化、単一ルーム永続化、ホスト認証、参加、投票、進行、集計、履歴APIを実装した。</li>
+          <li><code>tests/engine.test.js</code> に、同一階、強制下車、禁止階、倍率、予想イベント、現在Skill値のNodeテストを追加した。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>デザインの決定</h2>
+        <ul>
+          <li>初版はフレームワークなしのHTML/CSS/JavaScriptにした。要件ではフレームワーク選定が未確定だったため、GitHub PagesやGAS連携に載せやすい依存なし構成を優先した。</li>
+          <li>ローカル確認用に、ブラウザの<code>localStorage</code>を使う単一ルーム実装を入れた。GAS未デプロイでも画面遷移と集計を確認できるようにするため。</li>
+          <li>ホスト・スクリーン・プレイヤーは同じHTMLを<code>?view=host</code>などのクエリで切り替える方式にした。静的配信ファイル数を増やさず、同一端末・別端末運用の両方に対応しやすい。</li>
+          <li>ホストパスワードの既定値は<code>host</code>にした。GASでは<code>config</code>シートの<code>hostPassword</code>で変更可能。</li>
+          <li>クライアント通信ログの保持件数は80件にした。要件では件数未定だったため、スマホで過剰にならない範囲の暫定値とした。</li>
+          <li>結果発表アニメーションはCSSのエレベーター上昇とランキング表示で実装した。各階の詳細な乗降者表示はタイムラインデータとして保持し、初版UIでは強制下車階の強調までに留めた。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>仕様解釈</h2>
+        <ul>
+          <li>強制下車に巻き込まれた既存乗客は、過去に上昇していても当該ステージの実上昇階数を0として扱う。要件2.3の「実上昇階数=0」を全強制下車者に適用した。</li>
+          <li>E3aの区間倍率は、成功区間<code>floor → floor+1</code>がイベントの<code>S〜T</code>内に完全に含まれる場合に適用する。例: 7〜10階は7→8、8→9、9→10が対象。</li>
+          <li>E3bの得点倍率は、申告乗車階から申告降車階までの経路が<code>S〜T</code>に触れる場合、乗車成功点全体へ適用する。要件の「条件は別途指定」が未確定のため、設定JSONにある<code>fromFloor/toFloor</code>を条件にした。</li>
+          <li>E5は、移動区間の乗車人数がしきい値以上のとき、その区間の乗車成功点へ倍率を掛ける。要件3.2には成功瞬間判定の記述があるが、E5の名称と概要は「乗車中の区間」なので区間倍率として実装した。</li>
+          <li>E4は、人数判定通過時にその階にいたプレイヤーへ加点する。現行実装ではブラウザ側の内訳表示に対応しているが、GAS側の簡略集計ではE4の加点は未実装。</li>
+          <li>同一階指定は、人数判定通過後に即時下車し、実上昇1階、成功区間1つとして扱う。</li>
+          <li>名前重複は現行ルーム内のプレイヤーで判定している。過去ゲームを含む全プレイヤー名の永久予約はGASの<code>players</code>運用で拡張が必要。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>逸脱</h2>
+        <ul>
+          <li>プレイヤー側からGASへ実通信するAPIクライアントは未接続。静的SPAは現時点ではローカルストレージモードで動く。GAS APIは別途実装済みだが、URL設定UIとfetch接続は次段階。</li>
+          <li>参加画面のQRコードは未実装。外部ライブラリなしで正しいQRを生成する実装を今回の初版に含めると検証負荷が高いため、参加URL表示に留めた。</li>
+          <li>BGM/SEファイルは同梱していない。音声ファイル名規約が未確定で、素材も未提供のため、スクリーンの初回「準備完了」とAudioContext起動のみ実装した。</li>
+          <li>GASの<code>current_game</code>は正規化テーブルではなく、状態JSONを1行に保存する実装にした。初版の整合性と競合制御を優先し、運用可視化用の各シートは初期化・一部同期に留めた。</li>
+          <li>Skip検知の低頻度ポーリングは未接続。ローカルモードでは同一ブラウザのstorageイベントと再描画で追従する。</li>
+          <li>同時ホストのボタンロックは、GASの<code>LockService</code>による先着処理を優先し、UI上のリアルタイムロック表示は未実装。</li>
+          <li>途中離脱者の自動遷移方針は未確定のため、ローカルUIではランキング画面の「次へ」ボタンとホストの次ステージ操作を簡略化している。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>トレードオフ</h2>
+        <ul>
+          <li>GASシートを完全正規化する案もあったが、初版ではJSONスナップショット方式にした。理由は、複雑なステージ設定・投票・演出状態を一括でロック更新でき、同時ホスト競合を扱いやすいため。</li>
+          <li>クライアントでリアルタイム通信層まで作る案もあったが、先にゲームロジックと画面を固定した。GASデプロイURLが未確定のため、fetch先設定を後から差し込める構成にする方が手戻りが少ない。</li>
+          <li>イベント仕様をすべて細かいGUIにする案もあったが、初版の設定GUIはJSON import/export中心にした。イベント種別が多く、先にスキーマ互換性を保つ方が安全なため。</li>
+          <li>GAS側へブラウザ版エンジンを完全移植する案もあったが、サイズと検証時間を抑えるために主要ルール中心の実装にした。正式運用前には差分をなくす必要がある。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>未解決の質問</h2>
+        <ul>
+          <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>
+          <li>E5は区間乗車人数で倍率を掛ける実装でよいか。要件3.2の「乗車成功した瞬間」判定を優先するならロジックを変更する。</li>
+          <li>強制下車に巻き込まれた既存乗客の実上昇を完全に0にする解釈でよいか。実際に上がった区間分だけ加点する運用もあり得る。</li>
+          <li>参加URLのQRコードは外部ライブラリを同梱して実装してよいか。</li>
+          <li>音声ファイル名とフェーズ対応表、Skip時のフェードアウト秒数を確定したい。</li>
+          <li>GAS APIに接続する静的クライアント設定は、URL手入力、ビルド時定数、設定JSONのどれで管理するか。</li>
+          <li>過去ゲームを含む名前の永久予約を、<code>players</code>シートだけで扱うか、削除済み・引退済み名前用の別シートを作るか。</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

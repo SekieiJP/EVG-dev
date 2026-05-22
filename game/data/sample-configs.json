@@ -1,0 +1,57 @@
+{
+  "shortParty": {
+    "schemaVersion": "1.0.0",
+    "gameMeta": {
+      "title": "短時間パーティ版",
+      "description": "3ステージ・10分想定",
+      "createdAt": "2026-05-23T00:00:00+09:00"
+    },
+    "stages": [
+      {
+        "stageId": "short-001",
+        "name": "オープニング",
+        "params": { "N": 10, "X": 3, "P": 10, "Q": 4 },
+        "events": [
+          {
+            "type": "E1_prediction",
+            "question": "強制下車は何回発生する？",
+            "answerFormat": "integer",
+            "correctAnswer": 1,
+            "scoreOnCorrect": 30,
+            "scoreOnWrong": 0,
+            "scoreOnNoAnswer": -5
+          },
+          { "type": "E2_forbidden", "fromFloor": 4, "toFloor": 4 },
+          { "type": "E3a_zone_multiplier", "fromFloor": 7, "toFloor": 10, "multiplier": 2 }
+        ]
+      },
+      {
+        "stageId": "short-002",
+        "name": "混雑予報",
+        "params": { "N": 14, "X": 4, "P": 8, "Q": 3 },
+        "events": [
+          {
+            "type": "E1_prediction",
+            "question": "全員が乗車成功する？",
+            "answerFormat": "yesno",
+            "correctAnswer": "no",
+            "scoreOnCorrect": 25,
+            "scoreOnWrong": 0,
+            "scoreOnNoAnswer": -5
+          },
+          { "type": "E4_special_floor", "floor": 8, "bonus": 25 },
+          { "type": "E5_occupancy_multiplier", "threshold": 3, "multiplier": 1.5 }
+        ]
+      },
+      {
+        "stageId": "short-003",
+        "name": "ラストライド",
+        "params": { "N": 20, "X": 5, "P": 7, "Q": 2 },
+        "events": [
+          { "type": "E3b_score_multiplier", "fromFloor": 12, "toFloor": 20, "multiplier": 1.8 },
+          { "type": "E6_view_bonus", "bonusPerExitFloor": 2 }
+        ]
+      }
+    ]
+  }
+}
