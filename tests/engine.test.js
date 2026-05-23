@@ -79,6 +79,19 @@ run("zone multiplier applies only to successful P side", () => {
   assert.strictEqual(result.players.p1.score, 65);
 });
 
+run("special floor bonus applies after capacity check", () => {
+  const result = Engine.calculateStage(
+    stage({ events: [{ type: "E4_special_floor", floor: 3, bonus: 25 }] }),
+    players(["A"]),
+    { p1: { uuid: "p1", boardFloor: 1, exitFloor: 3, predictions: {} } }
+  );
+  assert.strictEqual(result.players.p1.status, "success");
+  assert.strictEqual(result.players.p1.actualRise, 3);
+  assert.strictEqual(result.players.p1.successPoint, 30);
+  assert.strictEqual(result.players.p1.eventBonus, 25);
+  assert.strictEqual(result.players.p1.score, 46);
+});
+
 run("prediction no answer and correct answer scoring are applied", () => {
   const result = Engine.calculateStage(
     stage({

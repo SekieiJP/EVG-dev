@@ -9,6 +9,7 @@
     },
     window.EVG_BUILD_CONFIG || {}
   );
+  const REMOTE_REVEAL_POLL_INTERVAL_MS = 7000;
   const STORAGE_KEYS = {
     room: "evg.room.v1",
     playerUuid: "evg.playerUuid.v1",
@@ -26,6 +27,8 @@
     toast: "",
     selectedHistoryUuid: "",
     syncing: false,
+    lastRevealPollAt: 0,
+    revealCompletionCheckedFor: "",
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -38,7 +41,7 @@
     if (isRemoteMode()) {
       restoreRemotePlayer();
       refreshRemoteState();
-      setInterval(refreshRemoteState, Math.max(1500, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 3000));
+      setInterval(pollRemoteState, Math.max(1500, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 3000));
     }
     window.addEventListener("storage", (event) => {
       if (!isRemoteMode() && event.key === STORAGE_KEYS.room) {
@@ -92,6 +95,7 @@
       [Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase) &&
       (state.role === "screen" || state.role === "player");
     const needsRevealRefresh = state.room.phase === Engine.PHASES.REVEAL && state.role === "screen";
+    if (needsRevealRefresh) checkRevealCompletionRemoteState();
     if (changed || needsCountdownRefresh || needsRevealRefresh) render();
   }
 
@@ -1068,12 +1072,39 @@
     }
   }
 
-  async function refreshRemoteState() {
+  function pollRemoteState() {
+    if (!isRemoteMode() || !state.room) return;
+    if (state.room.phase === Engine.PHASES.REVEAL) {
+      if (state.role !== "screen" && state.role !== "player") return;
+      const now = Date.now();
+      if (now - state.lastRevealPollAt < REMOTE_REVEAL_POLL_INTERVAL_MS) return;
+      state.lastRevealPollAt = now;
+      refreshRemoteState({ revealOnly: true });
+      return;
+    }
+    state.lastRevealPollAt = 0;
+    state.revealCompletionCheckedFor = "";
+    refreshRemoteState();
+  }
+
+  function checkRevealCompletionRemoteState() {
+    if (!isRemoteMode() || state.syncing || state.room.phase !== Engine.PHASES.REVEAL) return;
+    const stage = Engine.getCurrentStage(state.room);
+    if (!stage || getRevealFloor(stage, getRevealDuration(stage)) < stage.params.N) return;
+    const checkKey = `${stage.stageId}:${state.room.animationStartedAt || ""}`;
+    if (state.revealCompletionCheckedFor === checkKey) return;
+    state.revealCompletionCheckedFor = checkKey;
+    state.lastRevealPollAt = Date.now();
+    refreshRemoteState({ revealOnly: true });
+  }
+
+  async function refreshRemoteState(options = {}) {
     if (!isRemoteMode() || state.syncing) return;
     try {
       state.syncing = true;
       const response = await apiGet("/api/room/state", { uuid: state.playerUuid });
       if (response.ok && response.room) {
+        if (options.revealOnly && !shouldApplyRevealRemoteRoom(state.room, response.room)) return;
         state.room = response.room;
         localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
         render();
@@ -1085,6 +1116,25 @@
     } finally {
       state.syncing = false;
     }
+  }
+
+  function shouldApplyRevealRemoteRoom(currentRoom, nextRoom) {
+    if (!currentRoom || !nextRoom) return true;
+    if (currentRoom.phase !== Engine.PHASES.REVEAL) return true;
+    if (nextRoom.phase !== Engine.PHASES.REVEAL) return true;
+    if (currentRoom.currentStageIndex !== nextRoom.currentStageIndex) return true;
+    if ((currentRoom.animationStartedAt || "") !== (nextRoom.animationStartedAt || "")) return true;
+    if ((currentRoom.animationSkippedAt || "") !== (nextRoom.animationSkippedAt || "")) return true;
+    const currentStage = getRoomCurrentStage(currentRoom);
+    const nextStage = getRoomCurrentStage(nextRoom);
+    if ((currentStage && currentStage.stageId) !== (nextStage && nextStage.stageId)) return true;
+    const currentResult = currentStage ? (currentRoom.stageResults || {})[currentStage.stageId] : null;
+    const nextResult = nextStage ? (nextRoom.stageResults || {})[nextStage.stageId] : null;
+    return !currentResult && Boolean(nextResult);
+  }
+
+  function getRoomCurrentStage(room) {
+    return room && room.config && room.config.stages ? room.config.stages[room.currentStageIndex] || null : null;
   }
 
   async function restoreRemotePlayer() {

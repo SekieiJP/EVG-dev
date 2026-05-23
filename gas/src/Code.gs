@@ -330,6 +330,7 @@ function calculateStage_(stage, players, ticketsByUuid) {
   const playerMap = {};
   const validTickets = {};
   const forcedEvents = [];
+  const specialSuccess = {};
   const timeline = [];
   players.forEach(function(player) {
     const ticket = ticketsByUuid[player.uuid];
@@ -385,6 +386,8 @@ function calculateStage_(stage, players, ticketsByUuid) {
     passengers = beforeCheck;
     step.passengersAfterCheck = passengers.map(prop_('uuid'));
     passengers.forEach(function(item) {
+      specialSuccess[item.uuid] = specialSuccess[item.uuid] || [];
+      specialSuccess[item.uuid].push(floor);
       const result = playerMap[item.uuid];
       if (result.status === 'pending') result.status = 'success';
       if (!result.forcedOff) {
@@ -414,7 +417,7 @@ function calculateStage_(stage, players, ticketsByUuid) {
     if (!result.ticket || result.ticket.abstained || result.status === 'absent' || result.status === 'abstained') return;
     result.penalty = result.chargedDistance * params.Q;
     result.successPoint = calculateSuccessPoint_(stage, result);
-    result.eventBonus = calculateEventBonus_(stage, result, playerMap, forcedEvents);
+    result.eventBonus = calculateEventBonus_(stage, result, specialSuccess[uuid] || [], forcedEvents);
     result.score = round_(result.successPoint + result.eventBonus - result.penalty);
   });
 
@@ -452,10 +455,13 @@ function calculateTicketFloorUnits_(ticket) {
   return Math.max(0, Number(ticket.exitFloor) - Number(ticket.boardFloor) + 1);
 }
 
-function calculateEventBonus_(stage, result, playerMap, forcedEvents) {
+function calculateEventBonus_(stage, result, successFloors, forcedEvents) {
   if (result.actualRise <= 0 && !(result.ticket && result.ticket.predictions)) return 0;
   let total = 0;
   (stage.events || []).forEach(function(event, eventIndex) {
+    if (event.type === 'E4_special_floor' && successFloors.indexOf(Number(event.floor)) >= 0) {
+      total += Number(event.bonus || event.score || 0);
+    }
     if (event.type === 'E6_view_bonus' && result.status === 'success') {
       total += Number(result.ticket.exitFloor) * Number(event.bonusPerExitFloor || event.multiplier || 0);
     }
