@@ -36,13 +36,63 @@ const EVG_DEFAULT_CONFIG = {
           type: 'E1_prediction',
           question: '強制下車は何回発生する？',
           answerFormat: 'integer',
-          correctAnswer: 1,
+          metric: 'forcedOffCount',
           scoreOnCorrect: 30,
           scoreOnWrong: 0,
           scoreOnNoAnswer: -5,
         },
         { type: 'E2_forbidden', fromFloor: 4, toFloor: 4 },
         { type: 'E3a_zone_multiplier', fromFloor: 7, toFloor: 10, multiplier: 2 },
+      ],
+    },
+    {
+      stageId: 'stage-002',
+      name: 'ステージ2',
+      params: { N: 14, X: 4, P: 8, Q: 3 },
+      events: [
+        {
+          type: 'E1_prediction',
+          question: '全員が乗車成功する？',
+          answerFormat: 'yesno',
+          metric: 'allSucceeded',
+          scoreOnCorrect: 25,
+          scoreOnWrong: 0,
+          scoreOnNoAnswer: -5,
+        },
+        {
+          type: 'E1_prediction',
+          question: '乗車成功者数は？',
+          answerFormat: 'range',
+          metric: 'totalBoarded',
+          ranges: [
+            { value: 'low', label: '0〜2人', min: 0, max: 2 },
+            { value: 'mid', label: '3〜4人', min: 3, max: 4 },
+            { value: 'high', label: '5人以上', min: 5 },
+          ],
+          scoreOnCorrect: 20,
+          scoreOnWrong: 0,
+          scoreOnNoAnswer: -5,
+        },
+        { type: 'E4_special_floor', floor: 8, bonus: 25 },
+        { type: 'E5_occupancy_multiplier', threshold: 3, multiplier: 1.5 },
+      ],
+    },
+    {
+      stageId: 'stage-003',
+      name: 'ステージ3',
+      params: { N: 20, X: 5, P: 7, Q: 2 },
+      events: [
+        {
+          type: 'E1_prediction',
+          question: 'このステージの最高得点者は？',
+          answerFormat: 'player',
+          metric: 'topPlayer',
+          scoreOnCorrect: 30,
+          scoreOnWrong: 0,
+          scoreOnNoAnswer: -5,
+        },
+        { type: 'E3b_score_multiplier', fromFloor: 12, toFloor: 20, multiplier: 1.8 },
+        { type: 'E6_view_bonus', bonusPerExitFloor: 2 },
       ],
     },
   ],
@@ -239,7 +289,7 @@ function renamePlayer_(room, uuid, name) {
 function submitTicket_(room, uuid, ticket) {
   const stage = getCurrentStage_(room);
   if (!stage) return error_('stage_missing', 'ステージがありません。', 400);
-  if ([EVG_PHASES.VOTING, EVG_PHASES.COUNTDOWN].indexOf(room.phase) < 0) {
+  if (!canSubmitTicket_(room)) {
     return error_('phase', '現在はチケット購入を受け付けていません。', 409);
   }
   if (!room.players.some(function(player) { return player.uuid === uuid; })) {
@@ -260,6 +310,12 @@ function submitTicket_(room, uuid, ticket) {
 function abstain_(room, uuid) {
   const stage = getCurrentStage_(room);
   if (!stage) return error_('stage_missing', 'ステージがありません。', 400);
+  if (!canSubmitTicket_(room)) {
+    return error_('phase', '現在は棄権を受け付けていません。', 409);
+  }
+  if (!room.players.some(function(player) { return player.uuid === uuid; })) {
+    return error_('not_joined', '参加登録が必要です。', 403);
+  }
   room.tickets[stage.stageId] = room.tickets[stage.stageId] || {};
   room.tickets[stage.stageId][uuid] = { uuid, abstained: true, predictions: {}, submittedAt: new Date().toISOString() };
   touchRoom_(room);
@@ -296,21 +352,36 @@ function normalizePredictionAnswer_(event, raw) {
   return String(raw).trim().slice(0, 64);
 }
 
+function canSubmitTicket_(room) {
+  if (room.phase === EVG_PHASES.VOTING) return true;
+  if (room.phase !== EVG_PHASES.COUNTDOWN) return false;
+  if (!room.countdownEndsAt) return false;
+  return Date.now() <= new Date(room.countdownEndsAt).getTime();
+}
+
 function advancePhase_(room, action, actor) {
   if (action === 'start-stage') {
+    if (room.phase !== EVG_PHASES.LOBBY) return error_('phase', '現在はステージ説明へ進めません。', 409);
     room.phase = EVG_PHASES.STAGE_INTRO;
     applyPendingNames_(room);
-  } else if (action === 'open-voting') room.phase = EVG_PHASES.VOTING;
+  } else if (action === 'open-voting') {
+    if (room.phase !== EVG_PHASES.STAGE_INTRO) return error_('phase', '現在は受付を開始できません。', 409);
+    room.phase = EVG_PHASES.VOTING;
+  }
   else if (action === 'close-voting') {
+    if (room.phase !== EVG_PHASES.VOTING) return error_('phase', '現在は締切できません。', 409);
     room.phase = EVG_PHASES.COUNTDOWN;
     room.countdownEndsAt = new Date(Date.now() + 15000).toISOString();
     room.tallyingEndsAt = new Date(Date.now() + 18000).toISOString();
   } else if (action === 'show-ranking') {
+    if (room.phase !== EVG_PHASES.REVEAL) return error_('phase', '現在は順位発表へ進めません。', 409);
     room.phase = EVG_PHASES.RANKING;
   } else if (action === 'skip-animation') {
+    if (room.phase !== EVG_PHASES.REVEAL) return error_('phase', '現在はスキップできません。', 409);
     room.animationSkippedAt = new Date().toISOString();
     room.phase = EVG_PHASES.RANKING;
   } else if (action === 'next-stage') {
+    if (room.phase !== EVG_PHASES.RANKING) return error_('phase', '現在は次へ進めません。', 409);
     if (room.currentStageIndex < room.config.stages.length - 1) {
       room.currentStageIndex += 1;
       room.phase = EVG_PHASES.STAGE_INTRO;
@@ -330,6 +401,13 @@ function advancePhase_(room, action, actor) {
 
 function tallyCurrentStage_(room, actor) {
   const stage = getCurrentStage_(room);
+  if (!stage) return error_('stage_missing', 'ステージがありません。', 400);
+  if ([EVG_PHASES.COUNTDOWN, EVG_PHASES.TALLYING].indexOf(room.phase) < 0) {
+    return error_('phase', '現在は集計できません。', 409);
+  }
+  if (room.stageResults && room.stageResults[stage.stageId]) {
+    return error_('already_tallied', 'このステージはすでに集計済みです。', 409);
+  }
   const result = calculateStage_(stage, room.players, room.tickets[stage.stageId] || {});
   room.stageResults[stage.stageId] = result;
   Object.keys(result.players).forEach(function(uuid) {

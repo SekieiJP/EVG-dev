@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-05-23 / 対象: <code>docs/elevator-game-requirements.md</code> v1.4</p>
+      <p class="meta">更新日: 2026-05-24 / 対象: <code>docs/elevator-game-requirements.md</code> v1.5</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -81,6 +81,11 @@
           <li>2026-05-23追記: GAS側のE4特別階加点をブラウザエンジンと同じ人数判定通過階ベースで実装した。</li>
           <li>2026-05-23追記: GAS通信中の結果発表フェーズでは、スクリーン・プレイヤー端末のみ低頻度でSkip検知を行い、スクリーンは最上階到達時に最終確認フェッチを行うようにした。</li>
           <li>2026-05-23追記: 予想イベントの範囲選択、プレイヤー指名、<code>forcedOffCount</code>/<code>totalBoarded</code>/<code>allSucceeded</code>/<code>topPlayer</code>メトリクスによる自動正誤判定をブラウザエンジンとGASに実装した。</li>
+          <li>2026-05-24追記: 複数プレイヤーの参加・投票・棄権・集計・次ステージ名前反映を確認する<code>tests/multiplayer-flow.test.js</code>を追加した。</li>
+          <li>2026-05-24追記: GASロジックをローカルNode VMで読み込み、不正フェーズ操作・締切後送信・二重集計を確認する<code>tests/gas-logic.test.js</code>を追加した。</li>
+          <li>2026-05-24追記: Host/Screen/Player A/B/Cを同一ブラウザで並べて確認する<code>tests/multiplayer-browser-harness.html</code>を追加した。</li>
+          <li>2026-05-24追記: ブラウザエンジンとGASで、未参加者の棄権、受付外の棄権/投票、締切後の送信、フェーズ外ホスト操作、同一ステージの二重集計を拒否するようにした。</li>
+          <li>2026-05-24追記: GASの既定ゲーム設定をブラウザ版の既定設定と揃え、予想イベント形式と3ステージ構成の差分をなくした。</li>
         </ul>
       </section>
 
@@ -101,6 +106,7 @@
           <li>GAS接続先はランタイム入力ではなくビルド時定数にした。運営中に誤ったURLを入力するリスクを避けるため。</li>
           <li>GASへのPOSTは<code>application/json</code>ではなく<code>text/plain</code>でJSON文字列を送る。Apps Script Web AppでCORSプリフライトに詰まりにくい運用を優先した。</li>
           <li><code>topPlayer</code>予想の正解は、予想イベント得点を加える前のステージ得点1位にした。予想得点によって正解が変わる自己参照を避けるため。</li>
+          <li>複数プレイヤーブラウザハーネスでは、<code>testSlot</code>クエリをUUID保存キーのサフィックスとして使う。同一ブラウザ内でもプレイヤーごとのUUIDを分離して、実端末を複数用意しなくても参加フローを確認できるようにした。</li>
         </ul>
       </section>
 
@@ -116,6 +122,7 @@
           <li>範囲選択の予想は、選択肢の<code>value</code>を回答として保存し、正解メトリクスの数値が選択肢の<code>min/max</code>内なら正解とする。片側だけ指定した範囲も許容する。</li>
           <li>プレイヤー指名の予想は、表示名ではなくUUIDを回答として保存する。名前変更があっても判定対象を安定させるため。</li>
           <li>名前重複は現行ルーム内のプレイヤーで判定している。今後GAS接続時は、UUIDと現在名の対応を管理する<code>players</code>または<code>save_data</code>由来の現在名で重複判定する。</li>
+          <li>GASの<code>reveal-result</code>は、すでに当該ステージの結果が存在する場合は拒否する。再集計は別APIの<code>recalculate</code>に限定し、通常進行で累積得点とSkill履歴が二重加算されないことを優先した。</li>
         </ul>
       </section>
 
@@ -139,6 +146,7 @@
           <li>イベント仕様をすべて細かいGUIにする案もあったが、初版の設定GUIはJSON import/export中心にした。イベント種別が多く、先にスキーマ互換性を保つ方が安全なため。</li>
           <li>GAS側へブラウザ版エンジンを完全移植する案もあったが、サイズと検証時間を抑えるために主要ルール中心の実装にした。正式運用前には差分をなくす必要がある。</li>
           <li><code>topPlayer</code>を最終得点ベースにする案もあったが、予想イベント得点を含めると循環参照になるため、予想イベント加算前の基礎得点ベースを採用した。</li>
+          <li>ブラウザ複数プレイヤーテストは、まず依存追加なしのHTMLハーネスにした。Playwright等の追加導入よりも、会場運用者がすぐ手動再現できることを優先した。</li>
         </ul>
       </section>
 
@@ -146,6 +154,8 @@
         <h2>未解決の質問</h2>
         <ul>
           <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>
+          <li>GASホストAPIの認証方式は未確定。現状は<code>/api/host/auth</code>でパスワード確認できるが、後続のホストmutationに署名やセッションを要求する設計はまだ入れていない。</li>
+          <li>GASの<code>current_game</code>を1セルJSONで持つ実装は、100人規模・複数ステージ結果ではSpreadsheetの1セル上限に近づく可能性がある。分割保存へ移行するか要検討。</li>
           <li>音声ファイル名とフェーズ対応表、Skip時のフェードアウト秒数を確定したい。</li>
         </ul>
       </section>

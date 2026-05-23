@@ -9,6 +9,8 @@
     },
     window.EVG_BUILD_CONFIG || {}
   );
+  const QUERY = new URLSearchParams(location.search);
+  const TEST_SLOT = String(QUERY.get("testSlot") || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
   const REMOTE_REVEAL_POLL_INTERVAL_MS = 7000;
   const STORAGE_KEYS = {
     room: "evg.room.v1",
@@ -18,9 +20,9 @@
     screenReady: "evg.screenReady.v1",
   };
   const state = {
-    role: new URLSearchParams(location.search).get("view") || "player",
+    role: QUERY.get("view") || "player",
     room: null,
-    playerUuid: localStorage.getItem(STORAGE_KEYS.playerUuid) || "",
+    playerUuid: localStorage.getItem(playerUuidStorageKey()) || "",
     hostAuthed: localStorage.getItem(STORAGE_KEYS.hostAuthed) === "true",
     screenReady: localStorage.getItem(STORAGE_KEYS.screenReady) === "true",
     logs: loadJson(STORAGE_KEYS.logs, []),
@@ -113,7 +115,7 @@
       if (!result.ok) return showToast(result.error);
       state.room = result.room;
       state.playerUuid = result.player.uuid;
-      localStorage.setItem(STORAGE_KEYS.playerUuid, state.playerUuid);
+      localStorage.setItem(playerUuidStorageKey(), state.playerUuid);
       saveRoom("join", result.player.uuid);
       showToast("参加しました。");
       render();
@@ -183,7 +185,7 @@
         state.room = result.room;
       }
       state.playerUuid = uuid;
-      localStorage.setItem(STORAGE_KEYS.playerUuid, uuid);
+      localStorage.setItem(playerUuidStorageKey(), uuid);
       showToast("UUIDを設定しました。");
       render();
     }
@@ -546,7 +548,7 @@
           <section class="panel">
             <h2>進行</h2>
             <div class="button-grid">
-              ${hostButton("start-stage", "説明", state.room.phase === Engine.PHASES.LOBBY || state.room.phase === Engine.PHASES.RANKING)}
+              ${hostButton("start-stage", "説明", state.room.phase === Engine.PHASES.LOBBY)}
               ${hostButton("open-voting", "受付", state.room.phase === Engine.PHASES.STAGE_INTRO)}
               ${hostButton("close-voting", "締切", state.room.phase === Engine.PHASES.VOTING)}
               ${hostButton("tally", "集計", canTally())}
@@ -1086,6 +1088,10 @@
 
   function loadRoom() {
     return loadJson(STORAGE_KEYS.room, null) || Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  }
+
+  function playerUuidStorageKey() {
+    return TEST_SLOT ? `${STORAGE_KEYS.playerUuid}.${TEST_SLOT}` : STORAGE_KEYS.playerUuid;
   }
 
   function saveRoom(kind, actor) {

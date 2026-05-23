@@ -213,7 +213,7 @@
   function submitTicket(room, uuid, ticket) {
     const stage = getCurrentStage(room);
     if (!stage) return { room, ok: false, error: "ステージがありません。" };
-    if (![PHASES.VOTING, PHASES.COUNTDOWN].includes(room.phase)) {
+    if (!canSubmitTicket(room)) {
       return { room, ok: false, error: "現在はチケット購入を受け付けていません。" };
     }
     const player = room.players.find((item) => item.uuid === uuid);
@@ -235,6 +235,11 @@
   function abstain(room, uuid) {
     const stage = getCurrentStage(room);
     if (!stage) return { room, ok: false, error: "ステージがありません。" };
+    if (!canSubmitTicket(room)) {
+      return { room, ok: false, error: "現在は棄権を受け付けていません。" };
+    }
+    const player = room.players.find((item) => item.uuid === uuid);
+    if (!player) return { room, ok: false, error: "参加登録が必要です。" };
     const next = deepClone(room);
     next.tickets[stage.stageId] = next.tickets[stage.stageId] || {};
     next.tickets[stage.stageId][uuid] = {
@@ -282,6 +287,12 @@
   function tallyCurrentStage(room) {
     const stage = getCurrentStage(room);
     if (!stage) return { room, ok: false, error: "ステージがありません。" };
+    if (![PHASES.COUNTDOWN, PHASES.TALLYING].includes(room.phase)) {
+      return { room, ok: false, error: "現在は集計できません。" };
+    }
+    if (room.stageResults && room.stageResults[stage.stageId]) {
+      return { room, ok: false, error: "このステージはすでに集計済みです。" };
+    }
     const stageTickets = room.tickets[stage.stageId] || {};
     const result = calculateStage(stage, room.players, stageTickets);
     const next = deepClone(room);
@@ -685,22 +696,28 @@
     const label = actor || "host";
     const log = { at: nowIso(), actor: label, action };
     if (action === "start-stage") {
+      if (next.phase !== PHASES.LOBBY) return { room, ok: false, error: "現在はステージ説明へ進めません。" };
       next.phase = PHASES.STAGE_INTRO;
       applyPendingNames(next);
     } else if (action === "open-voting") {
+      if (next.phase !== PHASES.STAGE_INTRO) return { room, ok: false, error: "現在は受付を開始できません。" };
       next.phase = PHASES.VOTING;
     } else if (action === "close-voting") {
+      if (next.phase !== PHASES.VOTING) return { room, ok: false, error: "現在は締切できません。" };
       next.phase = PHASES.COUNTDOWN;
       next.countdownEndsAt = new Date(Date.now() + 15000).toISOString();
       next.tallyingEndsAt = new Date(Date.now() + 18000).toISOString();
     } else if (action === "tally") {
       return tallyCurrentStage(next);
     } else if (action === "show-ranking") {
+      if (next.phase !== PHASES.REVEAL) return { room, ok: false, error: "現在は順位発表へ進めません。" };
       next.phase = PHASES.RANKING;
     } else if (action === "skip-animation") {
+      if (next.phase !== PHASES.REVEAL) return { room, ok: false, error: "現在はスキップできません。" };
       next.animationSkippedAt = nowIso();
       next.phase = PHASES.RANKING;
     } else if (action === "next-stage") {
+      if (next.phase !== PHASES.RANKING) return { room, ok: false, error: "現在は次へ進めません。" };
       if (next.currentStageIndex < next.config.stages.length - 1) {
         next.currentStageIndex += 1;
         next.phase = PHASES.STAGE_INTRO;
@@ -743,6 +760,13 @@
       }
     });
     return warnings;
+  }
+
+  function canSubmitTicket(room) {
+    if (room.phase === PHASES.VOTING) return true;
+    if (room.phase !== PHASES.COUNTDOWN) return false;
+    if (!room.countdownEndsAt) return false;
+    return Date.now() <= new Date(room.countdownEndsAt).getTime();
   }
 
   function intervalOverlapsZone(interval, event) {

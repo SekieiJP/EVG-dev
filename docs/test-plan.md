@@ -4,6 +4,8 @@
 
 ```sh
 node tests/engine.test.js
+node tests/multiplayer-flow.test.js
+node tests/gas-logic.test.js
 ```
 
 対象:
@@ -18,11 +20,27 @@ node tests/engine.test.js
 - E1範囲選択は、数値メトリクスが選択範囲内に入った場合に正解になる。
 - E1プレイヤー指名は、予想イベント得点を加える前の最高得点者UUIDで正誤判定する。
 - 現在Skill値は最高StageSkillを除外し、2〜5番目を合算する。
+- 複数プレイヤーの参加、重複名拒否、投票、棄権、締切、集計、次ステージへの名前反映が破綻しない。
+- チケット送信・棄権は受付/カウントダウン中だけ許可し、カウントダウン終了後は拒否する。
+- 同一ステージの二重集計を拒否し、累積得点とSkillの二重加算を防ぐ。
+- GAS版ロジックでも、不正フェーズ操作、未参加者の棄権、締切後送信、二重集計を拒否する。
+
+## 複数プレイヤーブラウザハーネス
+
+```sh
+python3 -m http.server 8000
+```
+
+`http://127.0.0.1:8000/tests/multiplayer-browser-harness.html` を開く。
+
+- Host、Screen、Player A/B/C を同一ページのiframeで並べて操作できる。
+- Player A/B/C は `testSlot` クエリでUUID保存先を分けるため、同一ブラウザ・同一localStorage内でも複数プレイヤーとして参加できる。
+- Reset Local Roomで `evg.room.v1` とテスト用UUIDを消して、複数人フローを最初から確認できる。
 
 ## 手動テスト
 
 1. `python3 -m http.server 8000 -d game` で起動する。
-2. `?view=player` で2名以上参加する。
+2. `?view=player&testSlot=player-a` と `?view=player&testSlot=player-b` で2名以上参加する。
 3. `?view=host` でパスワード `host` を入力する。
 4. ホストで「説明」→「受付」を押す。
 5. プレイヤーでチケットを購入する。
