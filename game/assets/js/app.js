@@ -451,7 +451,7 @@
             <div><dt>乗車成功点</dt><dd>${formatScore(myResult.successPoint)}</dd></div>
             <div><dt>イベント補正</dt><dd>${formatScore(myResult.eventBonus)}</dd></div>
             <div><dt>チケット代</dt><dd>-${formatScore(myResult.penalty)}</dd></div>
-            <div><dt>実上昇</dt><dd>${formatScore(myResult.actualRise)}階</dd></div>
+            <div><dt>成功階数</dt><dd>${formatScore(myResult.actualRise)}階</dd></div>
             <div><dt>StageSkill</dt><dd>${myResult.stageSkill === null ? "-" : formatSkill(myResult.stageSkill)}</dd></div>
           </dl>
         </section>

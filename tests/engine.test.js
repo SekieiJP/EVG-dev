@@ -30,7 +30,19 @@ run("same-floor success counts as one floor", () => {
   });
   assert.strictEqual(result.players.p1.status, "success");
   assert.strictEqual(result.players.p1.actualRise, 1);
-  assert.strictEqual(result.players.p1.score, 10);
+  assert.strictEqual(result.players.p1.penalty, 3);
+  assert.strictEqual(result.players.p1.score, 7);
+});
+
+run("full route counts inclusive floor units", () => {
+  const result = Engine.calculateStage(stage(), players(["A"]), {
+    p1: { uuid: "p1", boardFloor: 1, exitFloor: 10, predictions: {} },
+  });
+  assert.strictEqual(result.players.p1.status, "success");
+  assert.strictEqual(result.players.p1.actualRise, 10);
+  assert.strictEqual(result.players.p1.successPoint, 100);
+  assert.strictEqual(result.players.p1.penalty, 30);
+  assert.strictEqual(result.players.p1.score, 70);
 });
 
 run("capacity overflow keeps climbed distance for existing passengers", () => {
@@ -42,8 +54,8 @@ run("capacity overflow keeps climbed distance for existing passengers", () => {
   assert.strictEqual(result.players.p2.status, "forced_off");
   assert.strictEqual(result.players.p1.actualRise, 2);
   assert.strictEqual(result.players.p2.actualRise, 0);
-  assert.strictEqual(result.players.p1.score, -7);
-  assert.strictEqual(result.players.p2.score, -15);
+  assert.strictEqual(result.players.p1.score, -10);
+  assert.strictEqual(result.players.p2.score, -18);
 });
 
 run("forbidden floor accepts ticket but charges penalty only", () => {
@@ -53,7 +65,7 @@ run("forbidden floor accepts ticket but charges penalty only", () => {
     { p1: { uuid: "p1", boardFloor: 4, exitFloor: 8, predictions: {} } }
   );
   assert.strictEqual(result.players.p1.status, "invalid");
-  assert.strictEqual(result.players.p1.score, -12);
+  assert.strictEqual(result.players.p1.score, -15);
 });
 
 run("zone multiplier applies only to successful P side", () => {
@@ -62,9 +74,9 @@ run("zone multiplier applies only to successful P side", () => {
     players(["A"]),
     { p1: { uuid: "p1", boardFloor: 1, exitFloor: 5, predictions: {} } }
   );
-  assert.strictEqual(result.players.p1.successPoint, 60);
-  assert.strictEqual(result.players.p1.penalty, 12);
-  assert.strictEqual(result.players.p1.score, 48);
+  assert.strictEqual(result.players.p1.successPoint, 80);
+  assert.strictEqual(result.players.p1.penalty, 15);
+  assert.strictEqual(result.players.p1.score, 65);
 });
 
 run("prediction no answer and correct answer scoring are applied", () => {

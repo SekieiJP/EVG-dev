@@ -309,7 +309,7 @@
         playerMap[player.uuid] = base;
         return;
       }
-      base.chargedDistance = ticket.exitFloor - ticket.boardFloor;
+      base.chargedDistance = calculateTicketFloorUnits(ticket);
       const forbidden = findForbiddenUse(forbiddenEvents, ticket);
       if (forbidden) {
         base.status = "invalid";
@@ -363,6 +363,11 @@
           result.status = "success";
           result.boardedAt = result.boardedAt || item.boardFloor;
         }
+        if (!result.forcedOff) {
+          result.successfulIntervals.push({ from: floor, to: floor, sameFloor: true, floorUnit: true, occupancy: passengers.length });
+          occupancyIntervals[item.uuid] = occupancyIntervals[item.uuid] || [];
+          occupancyIntervals[item.uuid].push({ from: floor, to: floor, sameFloor: true, floorUnit: true, occupancy: passengers.length });
+        }
       });
 
       const exiting = passengers.filter((item) => item.exitFloor === floor);
@@ -371,27 +376,10 @@
         if (!result.forcedOff) {
           result.exitedAt = floor;
           result.status = "success";
-          if (item.exitFloor === item.boardFloor) {
-            result.actualRise = Math.max(result.actualRise, 1);
-            result.successfulIntervals.push({ from: floor, to: floor, sameFloor: true, occupancy: passengers.length });
-          } else {
-            result.actualRise = Math.max(result.actualRise, item.exitFloor - item.boardFloor);
-          }
         }
       });
       step.exiting = exiting.map((item) => item.uuid);
       passengers = passengers.filter((item) => item.exitFloor !== floor);
-
-      if (floor < params.N) {
-        passengers.forEach((item) => {
-          const result = playerMap[item.uuid];
-          if (!result.forcedOff) {
-            result.successfulIntervals.push({ from: floor, to: floor + 1, occupancy: passengers.length });
-            occupancyIntervals[item.uuid] = occupancyIntervals[item.uuid] || [];
-            occupancyIntervals[item.uuid].push({ from: floor, to: floor + 1, occupancy: passengers.length });
-          }
-        });
-      }
       timeline.push(step);
     }
 
@@ -403,7 +391,7 @@
         result.actualRise = 0;
         result.successfulIntervals = [];
       }
-      if (result.status === "forced_off") {
+      if (["success", "forced_off"].includes(result.status)) {
         result.actualRise = calculateRiseFromIntervals(result.successfulIntervals);
       }
       if (!result.ticket || result.ticket.abstained || result.status === "absent" || result.status === "abstained") {
@@ -547,7 +535,7 @@
       if (event.type === "E4_special_floor" && successFloors.includes(Number(event.floor))) {
         items.push({ label: "特別階", value: `${event.floor}階 +${event.bonus || event.score || 0}` });
       }
-      if (event.type === "E6_view_bonus" && result.actualRise > 0) {
+      if (event.type === "E6_view_bonus" && result.status === "success") {
         items.push({ label: "眺望", value: `降車階${result.ticket.exitFloor} x${event.bonusPerExitFloor || event.multiplier || 0}` });
       }
     });
@@ -591,6 +579,10 @@
     return (intervals || []).reduce((sum, interval) => {
       return sum + (interval.sameFloor ? 1 : Math.max(0, Number(interval.to) - Number(interval.from)));
     }, 0);
+  }
+
+  function calculateTicketFloorUnits(ticket) {
+    return Math.max(0, Number(ticket.exitFloor) - Number(ticket.boardFloor) + 1);
   }
 
   function rankPlayers(playerResults, cumulativeScores) {
