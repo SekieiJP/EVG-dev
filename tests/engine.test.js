@@ -33,15 +33,17 @@ run("same-floor success counts as one floor", () => {
   assert.strictEqual(result.players.p1.score, 10);
 });
 
-run("capacity overflow forces current passengers and new boarders to zero climb", () => {
+run("capacity overflow keeps climbed distance for existing passengers", () => {
   const result = Engine.calculateStage(stage({ params: { X: 1 } }), players(["A", "B"]), {
     p1: { uuid: "p1", boardFloor: 1, exitFloor: 10, predictions: {} },
     p2: { uuid: "p2", boardFloor: 3, exitFloor: 8, predictions: {} },
   });
   assert.strictEqual(result.players.p1.status, "forced_off");
   assert.strictEqual(result.players.p2.status, "forced_off");
-  assert.strictEqual(result.players.p1.actualRise, 0);
-  assert.strictEqual(result.players.p1.score, -27);
+  assert.strictEqual(result.players.p1.actualRise, 2);
+  assert.strictEqual(result.players.p2.actualRise, 0);
+  assert.strictEqual(result.players.p1.score, -7);
+  assert.strictEqual(result.players.p2.score, -15);
 });
 
 run("forbidden floor accepts ticket but charges penalty only", () => {

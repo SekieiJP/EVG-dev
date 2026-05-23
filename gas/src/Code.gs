@@ -105,13 +105,15 @@ function mutateRoute_(path, payload) {
     if (path === '/api/player/join') result = registerPlayer_(room, payload.name, payload.uuid);
     else if (path === '/api/player/restore') result = restorePlayer_(room, payload.uuid);
     else if (path === '/api/player/rename') result = renamePlayer_(room, payload.uuid, payload.name);
-    else if (path === '/api/player/proceed-next') result = { room, ok: true, state: publicRoom_(room, payload.uuid) };
+    else if (path === '/api/player/proceed-next') result = advancePhase_(room, 'next-stage', payload.uuid || 'player');
     else if (path === '/api/ticket/submit') result = submitTicket_(room, payload.uuid, payload.ticket || payload);
     else if (path === '/api/ticket/abstain') result = abstain_(room, payload.uuid);
     else if (path === '/api/host/auth') return authHost_(payload.password);
     else if (path === '/api/host/start-stage') result = advancePhase_(room, 'start-stage', payload.hostName || 'host');
+    else if (path === '/api/host/open-voting') result = advancePhase_(room, 'open-voting', payload.hostName || 'host');
     else if (path === '/api/host/close-voting') result = advancePhase_(room, 'close-voting', payload.hostName || 'host');
     else if (path === '/api/host/reveal-result') result = tallyCurrentStage_(room, payload.hostName || 'host');
+    else if (path === '/api/host/show-ranking') result = advancePhase_(room, 'show-ranking', payload.hostName || 'host');
     else if (path === '/api/host/skip-animation') result = advancePhase_(room, 'skip-animation', payload.hostName || 'host');
     else if (path === '/api/host/advance') result = advancePhase_(room, 'next-stage', payload.hostName || 'host');
     else if (path === '/api/host/recalculate') result = recalculate_(room);
@@ -142,6 +144,7 @@ function createInitialRoom_(config) {
     scores: {},
     operations: [],
     countdownEndsAt: null,
+    tallyingEndsAt: null,
     animationStartedAt: null,
     animationSkippedAt: null,
     volume: 0.8,
@@ -283,6 +286,9 @@ function advancePhase_(room, action, actor) {
   else if (action === 'close-voting') {
     room.phase = EVG_PHASES.COUNTDOWN;
     room.countdownEndsAt = new Date(Date.now() + 15000).toISOString();
+    room.tallyingEndsAt = new Date(Date.now() + 18000).toISOString();
+  } else if (action === 'show-ranking') {
+    room.phase = EVG_PHASES.RANKING;
   } else if (action === 'skip-animation') {
     room.animationSkippedAt = new Date().toISOString();
     room.phase = EVG_PHASES.RANKING;
@@ -291,6 +297,7 @@ function advancePhase_(room, action, actor) {
       room.currentStageIndex += 1;
       room.phase = EVG_PHASES.STAGE_INTRO;
       room.countdownEndsAt = null;
+      room.tallyingEndsAt = null;
       room.animationStartedAt = null;
       room.animationSkippedAt = null;
       applyPendingNames_(room);
@@ -367,8 +374,7 @@ function calculateStage_(stage, players, ticketsByUuid) {
       beforeCheck.forEach(function(item) {
         playerMap[item.uuid].status = 'forced_off';
         playerMap[item.uuid].forcedOff = true;
-        playerMap[item.uuid].actualRise = 0;
-        playerMap[item.uuid].successfulIntervals = [];
+        playerMap[item.uuid].actualRise = calculateRiseFromIntervals_(playerMap[item.uuid].successfulIntervals);
       });
       step.forcedOff = beforeCheck.map(prop_('uuid'));
       forcedEvents.push(step);
@@ -405,9 +411,12 @@ function calculateStage_(stage, players, ticketsByUuid) {
   Object.keys(playerMap).forEach(function(uuid) {
     const result = playerMap[uuid];
     if (result.status === 'pending') result.status = 'not_boarded';
-    if (['invalid', 'not_boarded', 'forced_off'].indexOf(result.status) >= 0) {
+    if (['invalid', 'not_boarded'].indexOf(result.status) >= 0) {
       result.actualRise = 0;
       result.successfulIntervals = [];
+    }
+    if (result.status === 'forced_off') {
+      result.actualRise = calculateRiseFromIntervals_(result.successfulIntervals);
     }
     if (!result.ticket || result.ticket.abstained || result.status === 'absent' || result.status === 'abstained') return;
     result.penalty = result.chargedDistance * params.Q;
@@ -450,7 +459,7 @@ function calculateEventBonus_(stage, result, playerMap, forcedEvents) {
   if (result.actualRise <= 0 && !(result.ticket && result.ticket.predictions)) return 0;
   let total = 0;
   (stage.events || []).forEach(function(event, eventIndex) {
-    if (event.type === 'E6_view_bonus' && result.actualRise > 0) {
+    if (event.type === 'E6_view_bonus' && result.status === 'success') {
       total += Number(result.ticket.exitFloor) * Number(event.bonusPerExitFloor || event.multiplier || 0);
     }
     if (event.type === 'E1_prediction') {
@@ -505,6 +514,12 @@ function currentSkill_(history) {
   const sorted = (history || []).slice().sort(function(a, b) { return b - a; });
   while (sorted.length < 5) sorted.push(0);
   return round_(sorted.slice(1, 5).reduce(function(sum, value) { return sum + value; }, 0));
+}
+
+function calculateRiseFromIntervals_(intervals) {
+  return (intervals || []).reduce(function(sum, interval) {
+    return sum + (interval.sameFloor ? 1 : Math.max(0, Number(interval.to) - Number(interval.from)));
+  }, 0);
 }
 
 function recalculate_(room) {

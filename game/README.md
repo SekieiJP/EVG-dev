@@ -20,6 +20,13 @@ python3 -m http.server 8000 -d game
 
 ## 実装状況
 
-- 現在はローカルストレージを使う単一ブラウザ検証モードです。
+- 既定ではローカルストレージを使う単一ブラウザ検証モードです。
 - ゲームロジックは `assets/js/engine.js` に集約しています。
-- GAS APIの実装は `../gas/src/Code.gs` にありますが、この画面からのfetch接続は次段階です。
+- GAS APIの実装は `../gas/src/Code.gs` にあります。
+- GAS通信前に必要な接続情報は `assets/js/config.js` のビルド時定数で管理します。`USE_GAS_API` を `true` にし、`GAS_API_BASE_URL` にGAS Web App URLを設定すると、参加・投票・ホスト進行・状態ポーリングをGASへ送信します。
+
+## 同梱ライブラリ
+
+- `assets/vendor/qrcode-generator/qrcode.js`
+  - Screenの参加URL QRコード生成に使用します。
+  - 詳細は `assets/vendor/qrcode-generator/README.md` を参照してください。

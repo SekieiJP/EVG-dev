@@ -1,5 +1,14 @@
 (() => {
   const Engine = window.ElevatorGameEngine;
+  const BUILD_CONFIG = Object.assign(
+    {
+      GAS_API_BASE_URL: "",
+      GAS_API_KEY: "",
+      USE_GAS_API: false,
+      POLL_INTERVAL_MS: 3000,
+    },
+    window.EVG_BUILD_CONFIG || {}
+  );
   const STORAGE_KEYS = {
     room: "evg.room.v1",
     playerUuid: "evg.playerUuid.v1",
@@ -16,6 +25,7 @@
     logs: loadJson(STORAGE_KEYS.logs, []),
     toast: "",
     selectedHistoryUuid: "",
+    syncing: false,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -25,8 +35,13 @@
     bindGlobalEvents();
     render();
     setInterval(tick, 1000);
+    if (isRemoteMode()) {
+      restoreRemotePlayer();
+      refreshRemoteState();
+      setInterval(refreshRemoteState, Math.max(1500, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 3000));
+    }
     window.addEventListener("storage", (event) => {
-      if (event.key === STORAGE_KEYS.room) {
+      if (!isRemoteMode() && event.key === STORAGE_KEYS.room) {
         state.room = loadRoom();
         render();
       }
@@ -50,7 +65,7 @@
   function tick() {
     if (!state.room) return;
     let changed = false;
-    if (state.room.phase === Engine.PHASES.COUNTDOWN && state.room.countdownEndsAt) {
+    if (!isRemoteMode() && state.room.phase === Engine.PHASES.COUNTDOWN && state.room.countdownEndsAt) {
       const remaining = new Date(state.room.countdownEndsAt).getTime() - Date.now();
       if (remaining <= 0) {
         state.room = Engine.deepClone(state.room);
@@ -61,7 +76,7 @@
         changed = true;
       }
     }
-    if (state.room.phase === Engine.PHASES.TALLYING && state.room.tallyingEndsAt) {
+    if (!isRemoteMode() && state.room.phase === Engine.PHASES.TALLYING && state.room.tallyingEndsAt) {
       const remaining = new Date(state.room.tallyingEndsAt).getTime() - Date.now();
       if (remaining <= 0) {
         const tallied = Engine.tallyCurrentStage(state.room);
@@ -80,13 +95,17 @@
     if (changed || needsCountdownRefresh || needsRevealRefresh) render();
   }
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
     const form = event.target;
     if (form.id === "joinForm") {
       const name = form.elements.name.value;
       const carryUuid = form.elements.restoreUuid.value.trim();
-      const result = Engine.registerPlayer(state.room, name, carryUuid || undefined);
+      const result = await runMutation(
+        () => Engine.registerPlayer(state.room, name, carryUuid || undefined),
+        "/api/player/join",
+        { name, uuid: carryUuid || undefined }
+      );
       if (!result.ok) return showToast(result.error);
       state.room = result.room;
       state.playerUuid = result.player.uuid;
@@ -110,7 +129,11 @@
       };
       const warnings = Engine.warningsForTicket(stage, ticket);
       if (warnings.length && !confirm(`${warnings.join("\n")}\n\n送信しますか？`)) return;
-      const result = Engine.submitTicket(state.room, state.playerUuid, ticket);
+      const result = await runMutation(
+        () => Engine.submitTicket(state.room, state.playerUuid, ticket),
+        "/api/ticket/submit",
+        { uuid: state.playerUuid, ticket }
+      );
       if (!result.ok) return showToast(result.error);
       state.room = result.room;
       saveRoom("ticket.submit", state.playerUuid);
@@ -119,14 +142,24 @@
     }
     if (form.id === "hostAuthForm") {
       const password = form.elements.password.value;
-      const configured = getHostPassword(state.room);
-      if (password !== configured) return showToast("パスワードが違います。");
+      if (isRemoteMode()) {
+        const result = await apiPost("/api/host/auth", { password });
+        if (!result.ok) return showToast(result.error || "パスワードが違います。");
+      } else {
+        const configured = getHostPassword(state.room);
+        if (password !== configured) return showToast("パスワードが違います。");
+      }
       state.hostAuthed = true;
       localStorage.setItem(STORAGE_KEYS.hostAuthed, "true");
       render();
     }
     if (form.id === "renameForm") {
-      const result = Engine.renamePlayer(state.room, state.playerUuid, form.elements.nextName.value);
+      const nextName = form.elements.nextName.value;
+      const result = await runMutation(
+        () => Engine.renamePlayer(state.room, state.playerUuid, nextName),
+        "/api/player/rename",
+        { uuid: state.playerUuid, name: nextName }
+      );
       if (!result.ok) return showToast(result.error);
       state.room = result.room;
       saveRoom("player.rename", state.playerUuid);
@@ -136,6 +169,15 @@
     if (form.id === "uuidImportForm") {
       const uuid = form.elements.importUuid.value.trim();
       if (!uuid) return showToast("UUIDを入力してください。");
+      if (isRemoteMode()) {
+        const result = await runMutation(
+          () => ({ ok: true, room: state.room, player: getCurrentPlayer() }),
+          "/api/player/restore",
+          { uuid }
+        );
+        if (!result.ok) return showToast(result.error || "UUIDが見つかりません。");
+        state.room = result.room;
+      }
       state.playerUuid = uuid;
       localStorage.setItem(STORAGE_KEYS.playerUuid, uuid);
       showToast("UUIDを設定しました。");
@@ -143,20 +185,29 @@
     }
   }
 
-  function handleClick(event) {
+  async function handleClick(event) {
     const button = event.target.closest("[data-action]");
     if (!button) return;
     const action = button.dataset.action;
     if (button.disabled) return;
     if (action === "host-action") {
-      const result = Engine.advancePhase(state.room, button.dataset.hostAction, "host");
+      const hostAction = button.dataset.hostAction;
+      const result = await runMutation(
+        () => Engine.advancePhase(state.room, hostAction, "host"),
+        remoteHostPath(hostAction),
+        { hostName: "host" }
+      );
       if (!result.ok) return showToast(result.error || "操作できません。");
       state.room = result.room;
-      saveRoom(`host.${button.dataset.hostAction}`, "host");
+      saveRoom(`host.${hostAction}`, "host");
       render();
     }
     if (action === "abstain") {
-      const result = Engine.abstain(state.room, state.playerUuid);
+      const result = await runMutation(
+        () => Engine.abstain(state.room, state.playerUuid),
+        "/api/ticket/abstain",
+        { uuid: state.playerUuid }
+      );
       if (!result.ok) return showToast(result.error);
       state.room = result.room;
       saveRoom("ticket.abstain", state.playerUuid);
@@ -165,7 +216,11 @@
     }
     if (action === "player-next") {
       if (state.room.phase !== Engine.PHASES.RANKING) return showToast("ホストの操作待ちです。");
-      const result = Engine.advancePhase(state.room, "next-stage", "player");
+      const result = await runMutation(
+        () => Engine.advancePhase(state.room, "next-stage", "player"),
+        "/api/player/proceed-next",
+        { uuid: state.playerUuid }
+      );
       if (!result.ok) return showToast(result.error || "進行できません。");
       state.room = result.room;
       saveRoom("player.proceed-next", state.playerUuid);
@@ -188,7 +243,17 @@
       const textarea = $("#configJson");
       try {
         const config = Engine.normalizeConfig(JSON.parse(textarea.value));
-        state.room = Engine.createInitialRoom(config);
+        if (isRemoteMode()) {
+          const result = await runMutation(
+            () => ({ ok: true, room: Engine.createInitialRoom(config) }),
+            "/api/host/import-config",
+            { config }
+          );
+          if (!result.ok) return showToast(result.error);
+          state.room = result.room;
+        } else {
+          state.room = Engine.createInitialRoom(config);
+        }
         saveRoom("host.config.import", "host");
         showToast("設定を読み込みました。");
         render();
@@ -202,7 +267,17 @@
         const stage = JSON.parse(textarea.value);
         const next = Engine.deepClone(state.room);
         next.config.stages.push(Engine.normalizeConfig({ stages: [stage] }).stages[0]);
-        state.room = next;
+        if (isRemoteMode()) {
+          const result = await runMutation(
+            () => ({ ok: true, room: next }),
+            "/api/host/import-config",
+            { config: next.config }
+          );
+          if (!result.ok) return showToast(result.error);
+          state.room = result.room;
+        } else {
+          state.room = next;
+        }
         saveRoom("host.stage.import", "host");
         showToast("ステージを追加しました。");
         render();
@@ -427,7 +502,7 @@
               ${hostButton("start-stage", "説明", state.room.phase === Engine.PHASES.LOBBY || state.room.phase === Engine.PHASES.RANKING)}
               ${hostButton("open-voting", "受付", state.room.phase === Engine.PHASES.STAGE_INTRO)}
               ${hostButton("close-voting", "締切", state.room.phase === Engine.PHASES.VOTING)}
-              ${hostButton("tally", "集計", state.room.phase === Engine.PHASES.TALLYING && movingSeconds() <= 0)}
+              ${hostButton("tally", "集計", canTally())}
               ${hostButton("show-ranking", "順位", state.room.phase === Engine.PHASES.REVEAL)}
               ${hostButton("skip-animation", "Skip", state.room.phase === Engine.PHASES.REVEAL)}
               ${hostButton("next-stage", "次", state.room.phase === Engine.PHASES.RANKING)}
@@ -483,13 +558,20 @@
 
   function renderScreenMain(stage, result) {
     if (state.room.phase === Engine.PHASES.LOBBY) {
+      const joinUrl = location.origin + location.pathname + "?view=player";
       return `
         <div class="screen-lobby">
           <h1>参加受付中</h1>
-          <div class="join-url">${escapeHtml(location.origin + location.pathname + "?view=player")}</div>
+          <div class="join-panel">
+            <div class="join-qr">${renderQrCode(joinUrl)}</div>
+            <div class="join-url">${escapeHtml(joinUrl)}</div>
+          </div>
           <div class="screen-players">${state.room.players.map((player) => `<span>${escapeHtml(player.name)}</span>`).join("")}</div>
         </div>
       `;
+    }
+    if (state.room.phase === Engine.PHASES.COUNTDOWN && isRemoteMoving()) {
+      return `<div class="moving-screen"><span></span><h1>移動中…</h1></div>`;
     }
     if (state.room.phase === Engine.PHASES.COUNTDOWN) {
       return `<div class="countdown-number">${countdownSeconds()}</div>`;
@@ -589,6 +671,21 @@
     `;
   }
 
+  function renderQrCode(text) {
+    if (typeof qrcode !== "function") {
+      return `<span class="qr-fallback">QR</span>`;
+    }
+    try {
+      const qr = qrcode(0, "M");
+      qr.addData(text);
+      qr.make();
+      return qr.createSvgTag(5, 2);
+    } catch (error) {
+      logClient("qr.error", error.message);
+      return `<span class="qr-fallback">QR</span>`;
+    }
+  }
+
   function getRevealDuration(stage) {
     return Math.max(12, stage.params.N * 1.6);
   }
@@ -634,7 +731,7 @@
           reason = "特別階";
         }
       }
-      if (event.type === "E6_view_bonus" && playerResult.actualRise > 0 && currentFloor >= Number(playerResult.ticket.exitFloor)) {
+      if (event.type === "E6_view_bonus" && playerResult.status === "success" && currentFloor >= Number(playerResult.ticket.exitFloor)) {
         const bonus = Number(playerResult.ticket.exitFloor) * Number(event.bonusPerExitFloor || event.multiplier || 0);
         score += bonus;
         if (currentFloor === Number(playerResult.ticket.exitFloor)) {
@@ -766,7 +863,8 @@
     return `
       <div class="phase-banner">
         <span>${phaseLabel(state.room.phase)}</span>
-        ${state.room.phase === Engine.PHASES.COUNTDOWN ? `<strong>${countdownSeconds()}秒</strong>` : ""}
+        ${state.room.phase === Engine.PHASES.COUNTDOWN && !isRemoteMoving() ? `<strong>${countdownSeconds()}秒</strong>` : ""}
+        ${isRemoteMoving() ? `<strong>移動中… ${movingSeconds()}秒</strong>` : ""}
         ${state.room.phase === Engine.PHASES.TALLYING ? `<strong>移動中… ${movingSeconds()}秒</strong>` : ""}
       </div>
     `;
@@ -876,14 +974,30 @@
     return (room.config.settings && room.config.settings.hostPassword) || "host";
   }
 
+  function canTally() {
+    if (state.room.phase === Engine.PHASES.TALLYING) return movingSeconds() <= 0;
+    return isRemoteMode() && state.room.phase === Engine.PHASES.COUNTDOWN && isRemoteMoving() && movingSeconds() <= 0;
+  }
+
   function countdownSeconds() {
     if (!state.room.countdownEndsAt) return 0;
     return Math.max(0, Math.ceil((new Date(state.room.countdownEndsAt).getTime() - Date.now()) / 1000));
   }
 
   function movingSeconds() {
-    if (!state.room.tallyingEndsAt) return 0;
-    return Math.max(0, Math.ceil((new Date(state.room.tallyingEndsAt).getTime() - Date.now()) / 1000));
+    const endAt = state.room.tallyingEndsAt ||
+      (isRemoteMode() && state.room.countdownEndsAt
+        ? new Date(new Date(state.room.countdownEndsAt).getTime() + 3000).toISOString()
+        : "");
+    if (!endAt) return 0;
+    return Math.max(0, Math.ceil((new Date(endAt).getTime() - Date.now()) / 1000));
+  }
+
+  function isRemoteMoving() {
+    return isRemoteMode() &&
+      state.room.phase === Engine.PHASES.COUNTDOWN &&
+      state.room.countdownEndsAt &&
+      new Date(state.room.countdownEndsAt).getTime() <= Date.now();
   }
 
   function eventLabel(event) {
@@ -928,9 +1042,119 @@
   }
 
   function saveRoom(kind, actor) {
-    state.room.updatedAt = new Date().toISOString();
+    if (!isRemoteMode()) state.room.updatedAt = new Date().toISOString();
     localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
     if (kind) logClient(kind, actor || "");
+  }
+
+  function isRemoteMode() {
+    return Boolean(BUILD_CONFIG.USE_GAS_API && BUILD_CONFIG.GAS_API_BASE_URL);
+  }
+
+  async function runMutation(localMutation, remotePath, payload) {
+    if (!isRemoteMode()) return localMutation();
+    try {
+      const response = await apiPost(remotePath, payload);
+      return normalizeMutationResponse(response);
+    } catch (error) {
+      logClient("api.error", error.message);
+      return { ok: false, room: state.room, error: "通信に失敗しました。" };
+    }
+  }
+
+  async function refreshRemoteState() {
+    if (!isRemoteMode() || state.syncing) return;
+    try {
+      state.syncing = true;
+      const response = await apiGet("/api/room/state", { uuid: state.playerUuid });
+      if (response.ok && response.room) {
+        state.room = response.room;
+        localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
+        render();
+      } else if (!response.ok) {
+        logClient("api.state", response.error || response.message || "状態取得に失敗しました。");
+      }
+    } catch (error) {
+      logClient("api.state", error.message);
+    } finally {
+      state.syncing = false;
+    }
+  }
+
+  async function restoreRemotePlayer() {
+    if (!state.playerUuid) return;
+    const response = await runMutation(
+      () => ({ ok: true, room: state.room, player: getCurrentPlayer() }),
+      "/api/player/restore",
+      { uuid: state.playerUuid }
+    );
+    if (response.ok && response.room) {
+      state.room = response.room;
+      localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
+      render();
+    }
+  }
+
+  async function apiGet(path, payload) {
+    const url = apiUrl(path, payload);
+    const response = await fetch(url.toString(), { method: "GET", cache: "no-store" });
+    return normalizePublicResponse(await response.json());
+  }
+
+  async function apiPost(path, payload) {
+    const response = await fetch(apiUrl(path).toString(), {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(withApiMeta(payload || {})),
+    });
+    return normalizePublicResponse(await response.json());
+  }
+
+  function apiUrl(path, payload) {
+    const url = new URL(BUILD_CONFIG.GAS_API_BASE_URL);
+    url.searchParams.set("path", path);
+    Object.entries(withApiMeta(payload || {})).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && typeof value !== "object") {
+        url.searchParams.set(key, String(value));
+      }
+    });
+    return url;
+  }
+
+  function withApiMeta(payload) {
+    return Object.assign({}, payload, BUILD_CONFIG.GAS_API_KEY ? { apiKey: BUILD_CONFIG.GAS_API_KEY } : {});
+  }
+
+  function normalizePublicResponse(response) {
+    if (response && response.room && response.room.room) {
+      return Object.assign({}, response, response.room, {
+        player: response.player || response.room.me || response.player,
+      });
+    }
+    return response || { ok: false, error: "空のレスポンスです。" };
+  }
+
+  function normalizeMutationResponse(response) {
+    const normalized = normalizePublicResponse(response);
+    return {
+      ok: normalized.ok !== false,
+      room: normalized.room || state.room,
+      player: normalized.player || normalized.me,
+      ticket: normalized.ticket,
+      error: normalized.error || normalized.message,
+    };
+  }
+
+  function remoteHostPath(action) {
+    return {
+      "start-stage": "/api/host/start-stage",
+      "open-voting": "/api/host/open-voting",
+      "close-voting": "/api/host/close-voting",
+      tally: "/api/host/reveal-result",
+      "show-ranking": "/api/host/show-ranking",
+      "skip-animation": "/api/host/skip-animation",
+      "next-stage": "/api/host/advance",
+    }[action] || "/api/room/state";
   }
 
   function loadJson(key, fallback) {

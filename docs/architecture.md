@@ -6,8 +6,10 @@
 game/
   index.html              # プレイヤー・ホスト・スクリーン共通SPA
   assets/css/styles.css   # レスポンシブUIとスクリーン演出
+  assets/js/config.js     # GAS接続先などのビルド時定数
   assets/js/engine.js     # ルール計算・Skill計算・状態遷移
   assets/js/app.js        # ローカル検証用UI制御
+  assets/vendor/          # QRコード生成などの同梱ライブラリ
 gas/
   src/Code.gs             # GAS Web App API
 tests/
@@ -17,9 +19,11 @@ tests/
 ## 状態管理
 
 - 確定状態はGASの `current_game` シートにJSONスナップショットとして保存する。
-- ブラウザ版は未デプロイ環境の検証用に `localStorage` へ同じ形のルーム状態を保存する。
+- ブラウザ版は既定では未デプロイ環境の検証用に `localStorage` へ同じ形のルーム状態を保存する。`assets/js/config.js` でGAS通信を有効化した場合は、参加・投票・ホスト進行・状態ポーリングをGAS Web Appへ送る。
 - ルール計算は `engine.js` の純粋関数に集約し、ブラウザUIから直接呼び出す。
 - GAS版は Apps Script 単体で動くよう、主要ロジックを `Code.gs` に移植している。
+- GAS接続前に必要な情報は `assets/js/config.js` のビルド時定数で管理する。GASへのPOSTはApps ScriptのCORSプリフライトを避けるため、JSON文字列を `text/plain` で送る。
+- Screenの参加URL QRコードは `assets/vendor/qrcode-generator` の同梱ライブラリで生成する。
 
 ## 主要データ
 

@@ -84,8 +84,9 @@
       stageResults: {},
       scores: {},
       operations: [],
-      countdownEndsAt: null,
-      animationStartedAt: null,
+    countdownEndsAt: null,
+    tallyingEndsAt: null,
+    animationStartedAt: null,
       animationSkippedAt: null,
       volume: 0.8,
       muted: false,
@@ -343,8 +344,7 @@
           const result = playerMap[item.uuid];
           result.status = "forced_off";
           result.forcedOff = true;
-          result.actualRise = 0;
-          result.successfulIntervals = [];
+          result.actualRise = calculateRiseFromIntervals(result.successfulIntervals);
         });
         step.forcedOff = beforeCheck.map((item) => item.uuid);
         forcedEvents.push({ floor, uuids: step.forcedOff });
@@ -399,9 +399,12 @@
       if (result.status === "pending") {
         result.status = "not_boarded";
       }
-      if (["invalid", "not_boarded", "forced_off"].includes(result.status)) {
+      if (["invalid", "not_boarded"].includes(result.status)) {
         result.actualRise = 0;
         result.successfulIntervals = [];
+      }
+      if (result.status === "forced_off") {
+        result.actualRise = calculateRiseFromIntervals(result.successfulIntervals);
       }
       if (!result.ticket || result.ticket.abstained || result.status === "absent" || result.status === "abstained") {
         result.score = 0;
@@ -479,7 +482,7 @@
       if (event.type === "E4_special_floor" && successFloors.includes(Number(event.floor))) {
         total += Number(event.bonus || event.score || 0);
       }
-      if (event.type === "E6_view_bonus") {
+      if (event.type === "E6_view_bonus" && result.status === "success") {
         total += Number(result.ticket.exitFloor) * Number(event.bonusPerExitFloor || event.multiplier || 0);
       }
     });
@@ -584,6 +587,12 @@
     return roundScore(sorted.slice(1, 5).reduce((sum, value) => sum + value, 0));
   }
 
+  function calculateRiseFromIntervals(intervals) {
+    return (intervals || []).reduce((sum, interval) => {
+      return sum + (interval.sameFloor ? 1 : Math.max(0, Number(interval.to) - Number(interval.from)));
+    }, 0);
+  }
+
   function rankPlayers(playerResults, cumulativeScores) {
     const sorted = playerResults
       .map((item) => ({
@@ -636,6 +645,7 @@
     } else if (action === "close-voting") {
       next.phase = PHASES.COUNTDOWN;
       next.countdownEndsAt = new Date(Date.now() + 15000).toISOString();
+      next.tallyingEndsAt = new Date(Date.now() + 18000).toISOString();
     } else if (action === "tally") {
       return tallyCurrentStage(next);
     } else if (action === "show-ranking") {
@@ -648,6 +658,7 @@
         next.currentStageIndex += 1;
         next.phase = PHASES.STAGE_INTRO;
         next.countdownEndsAt = null;
+        next.tallyingEndsAt = null;
         next.animationStartedAt = null;
         next.animationSkippedAt = null;
         applyPendingNames(next);
