@@ -433,10 +433,47 @@
         </label>
       `;
     }
+    if (event.answerFormat === "range" || event.answerFormat === "select") {
+      const options = getPredictionSelectOptions(event);
+      return `
+        <label>${escapeHtml(event.question)}
+          <select name="prediction_${index}">
+            <option value="" ${value === "" ? "selected" : ""}>回答しない</option>
+            ${options.map((option) => `<option value="${escapeAttr(option.value)}" ${String(value) === String(option.value) ? "selected" : ""}>${escapeHtml(option.label)}</option>`).join("")}
+          </select>
+        </label>
+      `;
+    }
+    if (event.answerFormat === "player" || event.answerFormat === "player_uuid") {
+      return `
+        <label>${escapeHtml(event.question)}
+          <select name="prediction_${index}">
+            <option value="" ${value === "" ? "selected" : ""}>回答しない</option>
+            ${state.room.players.map((player) => `<option value="${escapeAttr(player.uuid)}" ${value === player.uuid ? "selected" : ""}>${escapeHtml(player.name)}</option>`).join("")}
+          </select>
+        </label>
+      `;
+    }
     if (event.answerFormat === "integer") {
       return `<label>${escapeHtml(event.question)}<input name="prediction_${index}" type="number" value="${escapeAttr(value)}"></label>`;
     }
     return `<label>${escapeHtml(event.question)}<input name="prediction_${index}" value="${escapeAttr(value)}"></label>`;
+  }
+
+  function getPredictionSelectOptions(event) {
+    return (event.options || event.choices || event.ranges || []).map((option, index) => ({
+      value: option.value !== undefined ? String(option.value) : String(index),
+      label: option.label || option.name || formatRangeLabel(option),
+    }));
+  }
+
+  function formatRangeLabel(option) {
+    const min = option.min ?? option.from ?? option.lower;
+    const max = option.max ?? option.to ?? option.upper;
+    if (min !== undefined && max !== undefined) return `${min}〜${max}`;
+    if (min !== undefined) return `${min}以上`;
+    if (max !== undefined) return `${max}以下`;
+    return "選択肢";
   }
 
   function renderTicketSummary(ticket) {

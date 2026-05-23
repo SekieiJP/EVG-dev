@@ -33,7 +33,7 @@
             type: "E1_prediction",
             question: "強制下車は何回発生する？",
             answerFormat: "integer",
-            correctAnswer: 1,
+            metric: "forcedOffCount",
             scoreOnCorrect: 30,
             scoreOnWrong: 0,
             scoreOnNoAnswer: -5,
@@ -51,8 +51,22 @@
             type: "E1_prediction",
             question: "全員が乗車成功する？",
             answerFormat: "yesno",
-            correctAnswer: "no",
+            metric: "allSucceeded",
             scoreOnCorrect: 25,
+            scoreOnWrong: 0,
+            scoreOnNoAnswer: -5,
+          },
+          {
+            type: "E1_prediction",
+            question: "乗車成功者数は？",
+            answerFormat: "range",
+            metric: "totalBoarded",
+            ranges: [
+              { value: "low", label: "0〜2人", min: 0, max: 2 },
+              { value: "mid", label: "3〜4人", min: 3, max: 4 },
+              { value: "high", label: "5人以上", min: 5 },
+            ],
+            scoreOnCorrect: 20,
             scoreOnWrong: 0,
             scoreOnNoAnswer: -5,
           },
@@ -65,6 +79,15 @@
         name: "ステージ3",
         params: { N: 20, X: 5, P: 7, Q: 2 },
         events: [
+          {
+            type: "E1_prediction",
+            question: "このステージの最高得点者は？",
+            answerFormat: "player",
+            metric: "topPlayer",
+            scoreOnCorrect: 30,
+            scoreOnWrong: 0,
+            scoreOnNoAnswer: -5,
+          },
           { type: "E3b_score_multiplier", fromFloor: 12, toFloor: 20, multiplier: 1.8 },
           { type: "E6_view_bonus", bonusPerExitFloor: 2 },
         ],
@@ -251,6 +274,8 @@
     if (raw === undefined || raw === null || raw === "") return "";
     if (event.answerFormat === "integer") return String(parseInt(raw, 10));
     if (event.answerFormat === "yesno") return String(raw).toLowerCase() === "yes" ? "yes" : "no";
+    if (event.answerFormat === "range" || event.answerFormat === "select") return String(raw).trim().slice(0, 64);
+    if (event.answerFormat === "player" || event.answerFormat === "player_uuid") return String(raw).trim().slice(0, 64);
     return String(raw).trim().slice(0, 64);
   }
 
@@ -401,14 +426,10 @@
       result.penalty = result.chargedDistance * params.Q;
       result.successPoint = calculateSuccessPoint(stage, result);
       result.eventBonus = calculateEventBonus(stage, result, specialSuccess[result.uuid] || [], occupancyIntervals[result.uuid] || []);
-      const predictionBonus = calculatePredictionBonus(predictionEvents, result, playerMap, forcedEvents);
-      result.predictionBreakdown = predictionBonus.breakdown;
-      result.eventBonus += predictionBonus.total;
       result.score = roundScore(result.successPoint + result.eventBonus - result.penalty);
       result.eventBreakdown = buildEventBreakdown(stage, result, specialSuccess[result.uuid] || [], occupancyIntervals[result.uuid] || []);
     });
 
-    const rankings = rankPlayers(Object.values(playerMap), {});
     const stats = {
       forcedOffCount: forcedEvents.length,
       allSucceeded: Object.values(playerMap).some((item) => item.ticket && !item.ticket.abstained)
@@ -416,6 +437,20 @@
         : false,
       totalBoarded: Object.values(playerMap).filter((item) => item.status === "success").length,
     };
+    const baseRankings = rankPlayers(Object.values(playerMap), {});
+    const predictionContext = Object.assign({}, stats, {
+      topPlayer: baseRankings[0] ? baseRankings[0].uuid : "",
+    });
+
+    Object.values(playerMap).forEach((result) => {
+      if (!result.ticket || result.ticket.abstained || result.status === "absent" || result.status === "abstained") return;
+      const predictionBonus = calculatePredictionBonus(predictionEvents, result, predictionContext);
+      result.predictionBreakdown = predictionBonus.breakdown;
+      result.eventBonus += predictionBonus.total;
+      result.score = roundScore(result.successPoint + result.eventBonus - result.penalty);
+    });
+
+    const rankings = rankPlayers(Object.values(playerMap), {});
 
     return {
       stageId: stage.stageId,
@@ -477,14 +512,14 @@
     return roundScore(total);
   }
 
-  function calculatePredictionBonus(events, result, playerMap, forcedEvents) {
+  function calculatePredictionBonus(events, result, context) {
     if (!result.ticket || result.ticket.abstained) return { total: 0, breakdown: [] };
     let total = 0;
     const breakdown = events.map((event, index) => {
       const answer = result.ticket.predictions ? result.ticket.predictions[index] : "";
-      const correct = resolveCorrectAnswer(event, playerMap, forcedEvents);
+      const correct = resolveCorrectAnswer(event, context);
       const noAnswer = answer === undefined || answer === null || answer === "";
-      const matched = !noAnswer && String(answer).toLowerCase() === String(correct).toLowerCase();
+      const matched = !noAnswer && predictionMatches(event, answer, correct);
       const score = noAnswer
         ? Number(event.scoreOnNoAnswer || 0)
         : matched
@@ -504,19 +539,39 @@
     return { total, breakdown };
   }
 
-  function resolveCorrectAnswer(event, playerMap, forcedEvents) {
+  function resolveCorrectAnswer(event, context) {
     if (event.correctAnswer !== undefined) return event.correctAnswer;
     const metric = event.metric || event.answerMetric;
-    if (metric === "forcedOffCount") return forcedEvents.length;
-    if (metric === "allSucceeded") {
-      const active = Object.values(playerMap).filter((item) => item.ticket && !item.ticket.abstained);
-      return active.length > 0 && active.every((item) => item.status === "success") ? "yes" : "no";
-    }
-    if (metric === "topPlayer") {
-      const top = rankPlayers(Object.values(playerMap), {})[0];
-      return top ? top.uuid : "";
-    }
+    if (metric === "forcedOffCount") return context.forcedOffCount;
+    if (metric === "allSucceeded") return context.allSucceeded ? "yes" : "no";
+    if (metric === "totalBoarded") return context.totalBoarded;
+    if (metric === "topPlayer") return context.topPlayer || "";
     return "";
+  }
+
+  function predictionMatches(event, answer, correct) {
+    if (event.answerFormat === "range") {
+      const range = findPredictionRange(event, answer);
+      const numericCorrect = Number(correct);
+      if (range && Number.isFinite(numericCorrect)) {
+        const min = Number(range.min ?? range.from ?? range.lower ?? -Infinity);
+        const max = Number(range.max ?? range.to ?? range.upper ?? Infinity);
+        return numericCorrect >= min && numericCorrect <= max;
+      }
+    }
+    return String(answer).toLowerCase() === String(correct).toLowerCase();
+  }
+
+  function getPredictionOptions(event) {
+    return event.options || event.choices || event.ranges || [];
+  }
+
+  function findPredictionRange(event, answer) {
+    const target = String(answer);
+    return getPredictionOptions(event).find((option, index) => {
+      const value = option.value !== undefined ? option.value : String(index);
+      return String(value) === target || String(option.label || "") === target;
+    });
   }
 
   function buildEventBreakdown(stage, result, successFloors) {

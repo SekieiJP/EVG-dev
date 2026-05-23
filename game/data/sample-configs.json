@@ -16,7 +16,7 @@
             "type": "E1_prediction",
             "question": "強制下車は何回発生する？",
             "answerFormat": "integer",
-            "correctAnswer": 1,
+            "metric": "forcedOffCount",
             "scoreOnCorrect": 30,
             "scoreOnWrong": 0,
             "scoreOnNoAnswer": -5
@@ -34,8 +34,22 @@
             "type": "E1_prediction",
             "question": "全員が乗車成功する？",
             "answerFormat": "yesno",
-            "correctAnswer": "no",
+            "metric": "allSucceeded",
             "scoreOnCorrect": 25,
+            "scoreOnWrong": 0,
+            "scoreOnNoAnswer": -5
+          },
+          {
+            "type": "E1_prediction",
+            "question": "乗車成功者数は？",
+            "answerFormat": "range",
+            "metric": "totalBoarded",
+            "ranges": [
+              { "value": "low", "label": "0〜2人", "min": 0, "max": 2 },
+              { "value": "mid", "label": "3〜4人", "min": 3, "max": 4 },
+              { "value": "high", "label": "5人以上", "min": 5 }
+            ],
+            "scoreOnCorrect": 20,
             "scoreOnWrong": 0,
             "scoreOnNoAnswer": -5
           },
@@ -48,6 +62,15 @@
         "name": "ラストライド",
         "params": { "N": 20, "X": 5, "P": 7, "Q": 2 },
         "events": [
+          {
+            "type": "E1_prediction",
+            "question": "このステージの最高得点者は？",
+            "answerFormat": "player",
+            "metric": "topPlayer",
+            "scoreOnCorrect": 30,
+            "scoreOnWrong": 0,
+            "scoreOnNoAnswer": -5
+          },
           { "type": "E3b_score_multiplier", "fromFloor": 12, "toFloor": 20, "multiplier": 1.8 },
           { "type": "E6_view_bonus", "bonusPerExitFloor": 2 }
         ]

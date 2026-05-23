@@ -117,6 +117,64 @@ run("prediction no answer and correct answer scoring are applied", () => {
   assert.strictEqual(result.players.p2.eventBonus, -2);
 });
 
+run("range prediction matches metric value inside selected range", () => {
+  const result = Engine.calculateStage(
+    stage({
+      events: [
+        {
+          type: "E1_prediction",
+          question: "乗車成功者数は？",
+          answerFormat: "range",
+          metric: "totalBoarded",
+          ranges: [
+            { value: "low", label: "0〜1人", min: 0, max: 1 },
+            { value: "high", label: "2〜3人", min: 2, max: 3 },
+          ],
+          scoreOnCorrect: 12,
+          scoreOnWrong: -4,
+          scoreOnNoAnswer: -1,
+        },
+      ],
+    }),
+    players(["A", "B"]),
+    {
+      p1: { uuid: "p1", boardFloor: 1, exitFloor: 2, predictions: { 0: "high" } },
+      p2: { uuid: "p2", boardFloor: 2, exitFloor: 2, predictions: { 0: "low" } },
+    }
+  );
+  assert.strictEqual(result.stats.totalBoarded, 2);
+  assert.strictEqual(result.players.p1.predictionBreakdown[0].matched, true);
+  assert.strictEqual(result.players.p1.eventBonus, 12);
+  assert.strictEqual(result.players.p2.predictionBreakdown[0].matched, false);
+  assert.strictEqual(result.players.p2.eventBonus, -4);
+});
+
+run("player prediction can target top pre-prediction scorer", () => {
+  const result = Engine.calculateStage(
+    stage({
+      events: [
+        {
+          type: "E1_prediction",
+          question: "最高得点者は？",
+          answerFormat: "player",
+          metric: "topPlayer",
+          scoreOnCorrect: 15,
+          scoreOnWrong: 0,
+          scoreOnNoAnswer: 0,
+        },
+      ],
+    }),
+    players(["A", "B"]),
+    {
+      p1: { uuid: "p1", boardFloor: 1, exitFloor: 2, predictions: { 0: "p2" } },
+      p2: { uuid: "p2", boardFloor: 1, exitFloor: 10, predictions: { 0: "p2" } },
+    }
+  );
+  assert.strictEqual(result.players.p1.predictionBreakdown[0].correctAnswer, "p2");
+  assert.strictEqual(result.players.p1.predictionBreakdown[0].matched, true);
+  assert.strictEqual(result.players.p2.predictionBreakdown[0].matched, true);
+});
+
 run("current skill skips best stage and sums second through fifth", () => {
   assert.strictEqual(Engine.calculateCurrentSkill([10, 20, 30, 40, 50]), 100);
   assert.strictEqual(Engine.calculateCurrentSkill([90, 10]), 10);
