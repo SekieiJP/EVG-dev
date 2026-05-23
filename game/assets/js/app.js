@@ -76,7 +76,8 @@
     const needsCountdownRefresh =
       [Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase) &&
       (state.role === "screen" || state.role === "player");
-    if (changed || needsCountdownRefresh) render();
+    const needsRevealRefresh = state.room.phase === Engine.PHASES.REVEAL && state.role === "screen";
+    if (changed || needsCountdownRefresh || needsRevealRefresh) render();
   }
 
   function handleSubmit(event) {
@@ -516,23 +517,34 @@
     const forcedFloors = new Set(result.timeline.filter((step) => step.forcedOff.length).map((step) => step.floor));
     const timelineByFloor = new Map(result.timeline.map((step) => [step.floor, step]));
     const tickets = state.room.tickets[result.stageId] || {};
-    const duration = Math.max(12, stage.params.N * 1.6);
+    const duration = getRevealDuration(stage);
+    const currentFloor = getRevealFloor(stage, duration);
+    const scoreRows = buildRevealScoreRows(stage, result, currentFloor);
     return `
       <div class="elevator-board">
         <div class="elevator-camera" style="--floor-count:${stage.params.N}; --travel-duration:${duration}s">
           <div class="shaft-track">
-            ${floors.map((floor) => renderFloorEvent(floor, timelineByFloor.get(floor), result, tickets, forcedFloors.has(floor))).join("")}
+            ${floors.map((floor) => renderFloorEvent(floor, timelineByFloor.get(floor), result, tickets, forcedFloors.has(floor), currentFloor)).join("")}
           </div>
           <div class="car"><span>EV</span></div>
         </div>
         <div class="screen-result-list">
           ${result.rankings.slice(0, 8).map((row) => `<div><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatScore(row.score)}</strong></div>`).join("")}
         </div>
+        <div class="reveal-scoreboard">
+          ${scoreRows.map((row) => `
+            <div class="score-tile ${row.delta > 0 ? "gain" : row.delta < 0 ? "loss" : ""}">
+              <span>${escapeHtml(shortName(row.name))}</span>
+              <strong>${formatScore(row.score)}</strong>
+              <em>${row.reason}</em>
+            </div>
+          `).join("")}
+        </div>
       </div>
     `;
   }
 
-  function renderFloorEvent(floor, step, result, tickets, danger) {
+  function renderFloorEvent(floor, step, result, tickets, danger, currentFloor) {
     const waiting = Object.values(tickets)
       .filter((ticket) => !ticket.abstained && ticket.boardFloor === floor)
       .map((ticket) => ticket.uuid);
@@ -540,15 +552,16 @@
     const exiting = step ? step.exiting : [];
     const forced = step ? step.forcedOff : [];
     const passengers = step ? step.passengersAfterCheck : [];
+    const visible = floor <= currentFloor;
     return `
-      <div class="floor ${danger ? "danger" : ""}">
+      <div class="floor ${danger ? "danger" : ""} ${visible ? "is-revealed" : "is-future"}">
         <span class="floor-label">${floor}F</span>
         <div class="floor-activity">
-          ${renderChipGroup("待機", waiting, result, "waiting")}
-          ${renderChipGroup("乗車", boarding, result, "boarding")}
-          ${renderChipGroup("乗車中", passengers, result, "riding")}
-          ${renderChipGroup("下車", exiting, result, "exiting")}
-          ${renderChipGroup("強制下車", forced, result, "forced")}
+          ${visible ? renderChipGroup("待機", waiting, result, "waiting") : ""}
+          ${visible ? renderChipGroup("乗車", boarding, result, "boarding") : ""}
+          ${visible ? renderChipGroup("乗車中", passengers, result, "riding") : ""}
+          ${visible ? renderChipGroup("下車", exiting, result, "exiting") : ""}
+          ${visible ? renderChipGroup("強制下車", forced, result, "forced") : ""}
         </div>
       </div>
     `;
@@ -574,6 +587,109 @@
         <span>購入</span>
       </div>
     `;
+  }
+
+  function getRevealDuration(stage) {
+    return Math.max(12, stage.params.N * 1.6);
+  }
+
+  function getRevealFloor(stage, duration) {
+    if (state.room.animationSkippedAt) return stage.params.N;
+    const started = state.room.animationStartedAt ? new Date(state.room.animationStartedAt).getTime() : Date.now();
+    const elapsedSeconds = Math.max(0, (Date.now() - started) / 1000);
+    const floor = Math.floor(elapsedSeconds / (duration / stage.params.N)) + 1;
+    return Math.max(1, Math.min(stage.params.N, floor));
+  }
+
+  function buildRevealScoreRows(stage, result, currentFloor) {
+    return Object.values(result.players)
+      .map((playerResult) => calculateRevealScore(stage, result, playerResult, currentFloor))
+      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, "ja"));
+  }
+
+  function calculateRevealScore(stage, result, playerResult, currentFloor) {
+    if (!playerResult.ticket || playerResult.ticket.abstained) {
+      return { uuid: playerResult.uuid, name: playerResult.name, score: 0, delta: 0, reason: "未参加" };
+    }
+    let score = -Number(playerResult.penalty || 0);
+    let delta = score;
+    let reason = "運賃";
+    const e3bMultiplier = getScoreMultiplier(stage, playerResult.ticket);
+    (playerResult.successfulIntervals || []).forEach((interval) => {
+      const floor = interval.sameFloor ? interval.from : interval.to;
+      if (floor > currentFloor) return;
+      const gained = intervalScore(stage, interval, e3bMultiplier);
+      score += gained;
+      if (floor === currentFloor && gained) {
+        delta += gained;
+        reason = "上昇報酬";
+      }
+    });
+    (stage.events || []).forEach((event) => {
+      if (event.type === "E4_special_floor" && currentFloor >= Number(event.floor) && result.timeline.some((step) => step.floor === Number(event.floor) && step.passengersAfterCheck.includes(playerResult.uuid))) {
+        const bonus = Number(event.bonus || event.score || 0);
+        score += bonus;
+        if (currentFloor === Number(event.floor)) {
+          delta += bonus;
+          reason = "特別階";
+        }
+      }
+      if (event.type === "E6_view_bonus" && playerResult.actualRise > 0 && currentFloor >= Number(playerResult.ticket.exitFloor)) {
+        const bonus = Number(playerResult.ticket.exitFloor) * Number(event.bonusPerExitFloor || event.multiplier || 0);
+        score += bonus;
+        if (currentFloor === Number(playerResult.ticket.exitFloor)) {
+          delta += bonus;
+          reason = "眺望";
+        }
+      }
+    });
+    if (currentFloor >= stage.params.N) {
+      const predictionBonus = (playerResult.predictionBreakdown || []).reduce((sum, item) => sum + Number(item.score || 0), 0);
+      score += predictionBonus;
+      if (predictionBonus) {
+        delta += predictionBonus;
+        reason = "予想";
+      }
+    }
+    return { uuid: playerResult.uuid, name: playerResult.name, score, delta, reason };
+  }
+
+  function intervalScore(stage, interval, e3bMultiplier) {
+    const distance = interval.sameFloor ? 1 : interval.to - interval.from;
+    let multiplier = e3bMultiplier;
+    (stage.events || []).forEach((event) => {
+      if (event.type === "E3a_zone_multiplier" && intervalTouchesZone(interval, event)) {
+        multiplier *= Number(event.multiplier || 1);
+      }
+      if (event.type === "E5_occupancy_multiplier" && interval.occupancy >= Number(event.threshold || Infinity)) {
+        multiplier *= Number(event.multiplier || 1);
+      }
+    });
+    return distance * Number(stage.params.P || 0) * multiplier;
+  }
+
+  function getScoreMultiplier(stage, ticket) {
+    return (stage.events || []).reduce((multiplier, event) => {
+      if (event.type === "E3b_score_multiplier" && routeTouchesZone(ticket, event)) {
+        return multiplier * Number(event.multiplier || 1);
+      }
+      return multiplier;
+    }, 1);
+  }
+
+  function intervalTouchesZone(interval, event) {
+    const from = Number(event.fromFloor);
+    const to = Number(event.toFloor);
+    if (interval.sameFloor) return interval.from >= from && interval.from <= to;
+    return interval.from >= from && interval.to <= to;
+  }
+
+  function routeTouchesZone(ticket, event) {
+    if (!ticket) return false;
+    for (let floor = ticket.boardFloor; floor <= ticket.exitFloor; floor += 1) {
+      if (floor >= Number(event.fromFloor) && floor <= Number(event.toFloor)) return true;
+    }
+    return false;
   }
 
   function renderHistoryView() {
@@ -682,16 +798,32 @@
 
   function renderRankingBoard() {
     const rankings = Engine.cumulativeRankings(state.room);
+    const result = getCurrentStageResult();
     return `
       <div class="ranking-board">
         <h1>${state.room.phase === Engine.PHASES.FINAL ? "最終結果" : "中間ランキング"}</h1>
-        ${rankings.map((row) => `
-          <div class="screen-rank">
-            <span>${row.rank}</span>
-            <strong>${escapeHtml(row.name)}</strong>
-            <em>${formatScore(row.score)}</em>
+        ${state.room.phase === Engine.PHASES.RANKING && result && state.room.currentStageIndex > 0 ? `
+          <div class="dual-ranking">
+            <section>
+              <h2>今ステージ</h2>
+              ${result.rankings.map((row) => renderRankRow(row)).join("")}
+            </section>
+            <section>
+              <h2>総合</h2>
+              ${rankings.map((row) => renderRankRow(row)).join("")}
+            </section>
           </div>
-        `).join("")}
+        ` : rankings.map((row) => renderRankRow(row)).join("")}
+      </div>
+    `;
+  }
+
+  function renderRankRow(row) {
+    return `
+      <div class="screen-rank">
+        <span>${row.rank}</span>
+        <strong>${escapeHtml(row.name)}</strong>
+        <em>${formatScore(row.score)}</em>
       </div>
     `;
   }
