@@ -339,7 +339,7 @@ function calculateStage_(stage, players, ticketsByUuid) {
       ticket: ticket || null,
       status: ticket ? 'pending' : 'absent',
       actualRise: 0,
-      chargedDistance: ticket && !ticket.abstained ? ticket.exitFloor - ticket.boardFloor : 0,
+      chargedDistance: ticket && !ticket.abstained ? calculateTicketFloorUnits_(ticket) : 0,
       successPoint: 0,
       eventBonus: 0,
       penalty: 0,
@@ -385,26 +385,19 @@ function calculateStage_(stage, players, ticketsByUuid) {
     passengers = beforeCheck;
     step.passengersAfterCheck = passengers.map(prop_('uuid'));
     passengers.forEach(function(item) {
-      if (playerMap[item.uuid].status === 'pending') playerMap[item.uuid].status = 'success';
+      const result = playerMap[item.uuid];
+      if (result.status === 'pending') result.status = 'success';
+      if (!result.forcedOff) {
+        result.successfulIntervals.push({ from: floor, to: floor, sameFloor: true, floorUnit: true, occupancy: passengers.length });
+      }
     });
     const exiting = passengers.filter(function(item) { return item.exitFloor === floor; });
     exiting.forEach(function(item) {
       const result = playerMap[item.uuid];
       result.status = 'success';
-      if (item.exitFloor === item.boardFloor) {
-        result.actualRise = Math.max(result.actualRise, 1);
-        result.successfulIntervals.push({ from: floor, to: floor, sameFloor: true, occupancy: passengers.length });
-      } else {
-        result.actualRise = Math.max(result.actualRise, item.exitFloor - item.boardFloor);
-      }
     });
     step.exiting = exiting.map(prop_('uuid'));
     passengers = passengers.filter(function(item) { return item.exitFloor !== floor; });
-    if (floor < params.N) {
-      passengers.forEach(function(item) {
-        playerMap[item.uuid].successfulIntervals.push({ from: floor, to: floor + 1, occupancy: passengers.length });
-      });
-    }
     timeline.push(step);
   }
 
@@ -415,7 +408,7 @@ function calculateStage_(stage, players, ticketsByUuid) {
       result.actualRise = 0;
       result.successfulIntervals = [];
     }
-    if (result.status === 'forced_off') {
+    if (result.status === 'success' || result.status === 'forced_off') {
       result.actualRise = calculateRiseFromIntervals_(result.successfulIntervals);
     }
     if (!result.ticket || result.ticket.abstained || result.status === 'absent' || result.status === 'abstained') return;
@@ -453,6 +446,10 @@ function calculateSuccessPoint_(stage, result) {
     if (event.type === 'E3b_score_multiplier' && routeTouchesZone_(result.ticket, event)) point *= Number(event.multiplier || 1);
   });
   return round_(point);
+}
+
+function calculateTicketFloorUnits_(ticket) {
+  return Math.max(0, Number(ticket.exitFloor) - Number(ticket.boardFloor) + 1);
 }
 
 function calculateEventBonus_(stage, result, playerMap, forcedEvents) {
