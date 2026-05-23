@@ -390,7 +390,7 @@
       <div class="panel split">
         <div>
           <h2>チケット</h2>
-          <p class="muted">${ticket ? `${ticket.boardFloor}階 → ${ticket.exitFloor}階` : "未購入"}</p>
+          <p class="muted">${renderTicketSummary(ticket)}</p>
         </div>
         <button data-action="player-next" ${state.room.phase === Engine.PHASES.RANKING ? "" : "disabled"}>次へ</button>
       </div>
@@ -402,10 +402,10 @@
     return `
       <form id="ticketForm" class="panel ticket-grid">
         <label>乗車階
-          <input name="boardFloor" type="number" min="1" max="${stage.params.N}" value="${ticket ? ticket.boardFloor : 1}" required>
+          <input name="boardFloor" type="number" min="1" max="${stage.params.N}" value="${ticket && !ticket.abstained ? ticket.boardFloor : 1}" required>
         </label>
         <label>降車階
-          <input name="exitFloor" type="number" min="1" max="${stage.params.N}" value="${ticket ? ticket.exitFloor : stage.params.N}" required>
+          <input name="exitFloor" type="number" min="1" max="${stage.params.N}" value="${ticket && !ticket.abstained ? ticket.exitFloor : stage.params.N}" required>
         </label>
         ${predictionEvents.map((event, index) => renderPredictionInput(event, index, ticket)).join("")}
         <div class="form-actions">
@@ -422,7 +422,7 @@
       return `
         <label>${escapeHtml(event.question)}
           <select name="prediction_${index}">
-            <option value=""></option>
+            <option value="" ${value === "" ? "selected" : ""}>回答しない</option>
             <option value="yes" ${value === "yes" ? "selected" : ""}>Yes</option>
             <option value="no" ${value === "no" ? "selected" : ""}>No</option>
           </select>
@@ -433,6 +433,12 @@
       return `<label>${escapeHtml(event.question)}<input name="prediction_${index}" type="number" value="${escapeAttr(value)}"></label>`;
     }
     return `<label>${escapeHtml(event.question)}<input name="prediction_${index}" value="${escapeAttr(value)}"></label>`;
+  }
+
+  function renderTicketSummary(ticket) {
+    if (!ticket) return "未購入";
+    if (ticket.abstained) return "棄権";
+    return `${ticket.boardFloor}階 → ${ticket.exitFloor}階`;
   }
 
   function renderPlayerResult(result) {
