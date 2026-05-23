@@ -62,7 +62,9 @@
         }
       }
     }
-    if (changed || state.role === "screen" || state.role === "player") render();
+    const needsCountdownRefresh =
+      state.room.phase === Engine.PHASES.COUNTDOWN && (state.role === "screen" || state.role === "player");
+    if (changed || needsCountdownRefresh) render();
   }
 
   function handleSubmit(event) {
@@ -491,13 +493,15 @@
   }
 
   function renderElevatorAnimation(stage, result) {
-    const floors = Array.from({ length: stage.params.N }, (_, index) => stage.params.N - index);
+    const floors = Array.from({ length: stage.params.N }, (_, index) => index + 1);
     const forcedFloors = new Set(result.timeline.filter((step) => step.forcedOff.length).map((step) => step.floor));
     return `
       <div class="elevator-board">
-        <div class="shaft">
-          ${floors.map((floor) => `<div class="floor ${forcedFloors.has(floor) ? "danger" : ""}"><span>${floor}F</span></div>`).join("")}
-          <div class="car" style="--floor-count:${stage.params.N}"></div>
+        <div class="elevator-camera" style="--floor-count:${stage.params.N}">
+          <div class="shaft-track">
+            ${floors.map((floor) => `<div class="floor ${forcedFloors.has(floor) ? "danger" : ""}"><span>${floor}F</span></div>`).join("")}
+          </div>
+          <div class="car"></div>
         </div>
         <div class="screen-result-list">
           ${result.rankings.slice(0, 8).map((row) => `<div><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatNumber(row.score)}</strong></div>`).join("")}

@@ -443,6 +443,21 @@ code {
   color: #eff7f5;
 }
 
+.screen-shell .stage-summary > div,
+.screen-shell .event-list span {
+  border-color: var(--screen-line);
+  background: #152527;
+  color: #eff7f5;
+}
+
+.screen-shell .stage-summary span {
+  color: #9fb6b8;
+}
+
+.screen-shell .stage-summary strong {
+  color: #ffffff;
+}
+
 .countdown-number {
   display: grid;
   min-height: calc(100vh - 145px);
@@ -466,27 +481,39 @@ code {
 
 .elevator-board {
   display: grid;
-  grid-template-columns: minmax(240px, 420px) 1fr;
+  grid-template-columns: minmax(420px, 56vw) 1fr;
   gap: 28px;
   min-height: calc(100vh - 145px);
   align-items: stretch;
 }
 
-.shaft {
+.elevator-camera {
   position: relative;
-  display: grid;
+  min-height: calc(100vh - 145px);
   border: 1px solid var(--screen-line);
   border-radius: 8px;
   overflow: hidden;
+  background: #0a1213;
+}
+
+.shaft-track {
+  position: absolute;
+  inset: auto 0 0;
+  display: flex;
+  flex-direction: column-reverse;
+  min-height: 100%;
+  height: max(100%, calc(var(--floor-count) * 84px));
+  animation: cameraClimb 12s linear forwards;
 }
 
 .floor {
   display: flex;
   align-items: center;
-  min-height: 22px;
+  min-height: 84px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding-left: 12px;
+  padding-left: 18px;
   color: #9fb6b8;
+  font-size: clamp(18px, 2.2vw, 32px);
   font-weight: 800;
 }
 
@@ -497,22 +524,23 @@ code {
 
 .car {
   position: absolute;
-  left: 38%;
-  bottom: 0;
-  width: 86px;
-  height: max(38px, calc(100% / var(--floor-count)));
+  left: 50%;
+  bottom: 34%;
+  width: min(180px, 28%);
+  height: 96px;
   border: 3px solid #eff7f5;
   border-radius: 6px;
   background: rgba(45, 212, 191, 0.36);
-  animation: lift 12s linear forwards;
+  box-shadow: 0 0 0 999px rgba(10, 18, 19, 0.08);
+  transform: translateX(-50%);
 }
 
-@keyframes lift {
+@keyframes cameraClimb {
   from {
     transform: translateY(0);
   }
   to {
-    transform: translateY(calc(-100% * (var(--floor-count) - 1)));
+    transform: translateY(calc(-1 * (100% - (100vh - 145px))));
   }
 }
 
