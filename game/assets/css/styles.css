@@ -488,14 +488,50 @@ code {
 
 .progress-ring {
   display: grid;
+  grid-template-rows: 1fr 1fr;
   width: 180px;
   aspect-ratio: 1;
   place-items: center;
-  border: 16px solid #2dd4bf;
   border-radius: 50%;
+  background:
+    radial-gradient(circle at center, var(--screen) 0 54%, transparent 55%),
+    conic-gradient(#2dd4bf 0 var(--progress, 0deg), #203436 var(--progress, 0deg) 360deg);
   color: #fff;
-  font-size: 38px;
   font-weight: 900;
+}
+
+.progress-ring strong {
+  align-self: end;
+  font-size: 38px;
+}
+
+.progress-ring span {
+  align-self: start;
+  color: #9fb6b8;
+  font-size: 14px;
+}
+
+.moving-screen {
+  display: grid;
+  min-height: calc(100vh - 145px);
+  place-items: center;
+  align-content: center;
+  gap: 22px;
+  color: #fff;
+}
+
+.moving-screen span {
+  width: min(360px, 60vw);
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2dd4bf, #eff7f5, #2dd4bf);
+  background-size: 200% 100%;
+  animation: movingPulse 1s linear infinite;
+}
+
+.moving-screen h1 {
+  margin: 0;
+  font-size: clamp(48px, 8vw, 120px);
 }
 
 .elevator-board {
@@ -519,18 +555,20 @@ code {
   position: absolute;
   inset: auto 0 0;
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   min-height: 100%;
   height: max(100%, calc(var(--floor-count) * 84px));
-  animation: cameraClimb 12s linear forwards;
+  animation: cameraClimb var(--travel-duration, 12s) steps(var(--floor-count), end) forwards;
 }
 
 .floor {
-  display: flex;
+  display: grid;
+  grid-template-columns: 86px 1fr;
   align-items: center;
+  gap: 12px;
   min-height: 84px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding-left: 18px;
+  padding: 10px 18px;
   color: #9fb6b8;
   font-size: clamp(18px, 2.2vw, 32px);
   font-weight: 800;
@@ -552,6 +590,11 @@ code {
   background: rgba(45, 212, 191, 0.36);
   box-shadow: 0 0 0 999px rgba(10, 18, 19, 0.08);
   transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 28px;
+  font-weight: 950;
 }
 
 @keyframes cameraClimb {
@@ -559,8 +602,72 @@ code {
     transform: translateY(0);
   }
   to {
-    transform: translateY(calc(-1 * (100% - (100vh - 145px))));
+    transform: translateY(calc(100% - (100vh - 145px)));
   }
+}
+
+@keyframes movingPulse {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+.floor-activity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.chip-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.chip-group em {
+  color: #9fb6b8;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.player-chip {
+  display: inline-grid;
+  min-width: 44px;
+  min-height: 28px;
+  place-items: center;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: #081112;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.player-chip.waiting {
+  background: #f8e08e;
+}
+
+.player-chip.boarding {
+  background: #7dd3fc;
+}
+
+.player-chip.riding {
+  background: #5eead4;
+}
+
+.player-chip.exiting {
+  background: #c4b5fd;
+}
+
+.player-chip.forced {
+  background: #fda4af;
 }
 
 .screen-result-list {

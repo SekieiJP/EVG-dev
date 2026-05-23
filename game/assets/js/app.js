@@ -53,17 +53,29 @@
     if (state.room.phase === Engine.PHASES.COUNTDOWN && state.room.countdownEndsAt) {
       const remaining = new Date(state.room.countdownEndsAt).getTime() - Date.now();
       if (remaining <= 0) {
+        state.room = Engine.deepClone(state.room);
+        state.room.phase = Engine.PHASES.TALLYING;
+        state.room.tallyingEndsAt = new Date(Date.now() + 3000).toISOString();
+        logClient("state", "締切後の移動中フェーズに入りました。");
+        saveRoom();
+        changed = true;
+      }
+    }
+    if (state.room.phase === Engine.PHASES.TALLYING && state.room.tallyingEndsAt) {
+      const remaining = new Date(state.room.tallyingEndsAt).getTime() - Date.now();
+      if (remaining <= 0) {
         const tallied = Engine.tallyCurrentStage(state.room);
         if (tallied.ok) {
           state.room = tallied.room;
-          logClient("state", "締切後に自動集計しました。");
+          logClient("state", "移動中フェーズ後に自動集計しました。");
           saveRoom();
           changed = true;
         }
       }
     }
     const needsCountdownRefresh =
-      state.room.phase === Engine.PHASES.COUNTDOWN && (state.role === "screen" || state.role === "player");
+      [Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase) &&
+      (state.role === "screen" || state.role === "player");
     if (changed || needsCountdownRefresh) render();
   }
 
@@ -258,8 +270,8 @@
             <h1>${escapeHtml(player.name)}</h1>
           </div>
           <div class="stat-strip">
-            <span>合計 ${formatNumber(state.room.scores[player.uuid] || 0)}</span>
-            <span>Skill ${formatNumber(player.skill || 0)}</span>
+            <span>合計 ${formatScore(state.room.scores[player.uuid] || 0)}</span>
+            <span>Skill ${formatSkill(player.skill || 0)}</span>
           </div>
         </header>
         ${renderPhaseBanner()}
@@ -354,17 +366,17 @@
       <div class="result-layout">
         <section class="panel score-card">
           <p class="eyebrow">Stage Score</p>
-          <strong>${formatNumber(myResult.score)}</strong>
+          <strong>${formatScore(myResult.score)}</strong>
           <span>${statusLabel(myResult.status)}</span>
         </section>
         <section class="panel breakdown">
           <h2>内訳</h2>
           <dl>
-            <div><dt>乗車成功点</dt><dd>${formatNumber(myResult.successPoint)}</dd></div>
-            <div><dt>イベント補正</dt><dd>${formatNumber(myResult.eventBonus)}</dd></div>
-            <div><dt>チケット代</dt><dd>-${formatNumber(myResult.penalty)}</dd></div>
-            <div><dt>実上昇</dt><dd>${formatNumber(myResult.actualRise)}階</dd></div>
-            <div><dt>StageSkill</dt><dd>${myResult.stageSkill === null ? "-" : formatNumber(myResult.stageSkill)}</dd></div>
+            <div><dt>乗車成功点</dt><dd>${formatScore(myResult.successPoint)}</dd></div>
+            <div><dt>イベント補正</dt><dd>${formatScore(myResult.eventBonus)}</dd></div>
+            <div><dt>チケット代</dt><dd>-${formatScore(myResult.penalty)}</dd></div>
+            <div><dt>実上昇</dt><dd>${formatScore(myResult.actualRise)}階</dd></div>
+            <div><dt>StageSkill</dt><dd>${myResult.stageSkill === null ? "-" : formatSkill(myResult.stageSkill)}</dd></div>
           </dl>
         </section>
         <section class="panel">
@@ -372,7 +384,7 @@
           ${myResult.predictionBreakdown.length ? myResult.predictionBreakdown.map((item) => `
             <div class="mini-row">
               <span>${escapeHtml(item.question)}</span>
-              <strong>${formatNumber(item.score)}</strong>
+              <strong>${formatScore(item.score)}</strong>
             </div>
           `).join("") : `<p class="muted">なし</p>`}
         </section>
@@ -402,6 +414,7 @@
             <h1>${escapeHtml(state.room.config.gameMeta.title)}</h1>
           </div>
           <div class="stat-strip">
+            <span>${stage ? `${state.room.currentStageIndex + 1}/${state.room.config.stages.length}, ${escapeHtml(stage.name)}` : "-"}</span>
             <span>${phaseLabel(state.room.phase)}</span>
             <span>${state.room.players.length}人</span>
           </div>
@@ -413,7 +426,7 @@
               ${hostButton("start-stage", "説明", state.room.phase === Engine.PHASES.LOBBY || state.room.phase === Engine.PHASES.RANKING)}
               ${hostButton("open-voting", "受付", state.room.phase === Engine.PHASES.STAGE_INTRO)}
               ${hostButton("close-voting", "締切", state.room.phase === Engine.PHASES.VOTING)}
-              ${hostButton("tally", "集計", state.room.phase === Engine.PHASES.COUNTDOWN || state.room.phase === Engine.PHASES.TALLYING)}
+              ${hostButton("tally", "集計", state.room.phase === Engine.PHASES.TALLYING && movingSeconds() <= 0)}
               ${hostButton("show-ranking", "順位", state.room.phase === Engine.PHASES.REVEAL)}
               ${hostButton("skip-animation", "Skip", state.room.phase === Engine.PHASES.REVEAL)}
               ${hostButton("next-stage", "次", state.room.phase === Engine.PHASES.RANKING)}
@@ -480,6 +493,9 @@
     if (state.room.phase === Engine.PHASES.COUNTDOWN) {
       return `<div class="countdown-number">${countdownSeconds()}</div>`;
     }
+    if (state.room.phase === Engine.PHASES.TALLYING) {
+      return `<div class="moving-screen"><span></span><h1>移動中…</h1></div>`;
+    }
     if (state.room.phase === Engine.PHASES.REVEAL && result) {
       return renderElevatorAnimation(stage, result);
     }
@@ -490,25 +506,72 @@
       <div class="screen-stage">
         <h1>${escapeHtml(stage.name)}</h1>
         ${renderStageSummary(stage)}
-        <div class="progress-ring">${Object.keys(getStageTickets()).length}/${state.room.players.length}</div>
+        ${renderTicketProgress()}
       </div>
     `;
   }
 
   function renderElevatorAnimation(stage, result) {
-    const floors = Array.from({ length: stage.params.N }, (_, index) => index + 1);
+    const floors = Array.from({ length: stage.params.N }, (_, index) => stage.params.N - index);
     const forcedFloors = new Set(result.timeline.filter((step) => step.forcedOff.length).map((step) => step.floor));
+    const timelineByFloor = new Map(result.timeline.map((step) => [step.floor, step]));
+    const tickets = state.room.tickets[result.stageId] || {};
+    const duration = Math.max(12, stage.params.N * 1.6);
     return `
       <div class="elevator-board">
-        <div class="elevator-camera" style="--floor-count:${stage.params.N}">
+        <div class="elevator-camera" style="--floor-count:${stage.params.N}; --travel-duration:${duration}s">
           <div class="shaft-track">
-            ${floors.map((floor) => `<div class="floor ${forcedFloors.has(floor) ? "danger" : ""}"><span>${floor}F</span></div>`).join("")}
+            ${floors.map((floor) => renderFloorEvent(floor, timelineByFloor.get(floor), result, tickets, forcedFloors.has(floor))).join("")}
           </div>
-          <div class="car"></div>
+          <div class="car"><span>EV</span></div>
         </div>
         <div class="screen-result-list">
-          ${result.rankings.slice(0, 8).map((row) => `<div><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatNumber(row.score)}</strong></div>`).join("")}
+          ${result.rankings.slice(0, 8).map((row) => `<div><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatScore(row.score)}</strong></div>`).join("")}
         </div>
+      </div>
+    `;
+  }
+
+  function renderFloorEvent(floor, step, result, tickets, danger) {
+    const waiting = Object.values(tickets)
+      .filter((ticket) => !ticket.abstained && ticket.boardFloor === floor)
+      .map((ticket) => ticket.uuid);
+    const boarding = step ? step.boarding : [];
+    const exiting = step ? step.exiting : [];
+    const forced = step ? step.forcedOff : [];
+    const passengers = step ? step.passengersAfterCheck : [];
+    return `
+      <div class="floor ${danger ? "danger" : ""}">
+        <span class="floor-label">${floor}F</span>
+        <div class="floor-activity">
+          ${renderChipGroup("待機", waiting, result, "waiting")}
+          ${renderChipGroup("乗車", boarding, result, "boarding")}
+          ${renderChipGroup("乗車中", passengers, result, "riding")}
+          ${renderChipGroup("下車", exiting, result, "exiting")}
+          ${renderChipGroup("強制下車", forced, result, "forced")}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderChipGroup(label, uuids, result, kind) {
+    if (!uuids || uuids.length === 0) return "";
+    const chips = uuids.map((uuid) => {
+      const name = result.players[uuid] ? result.players[uuid].name : uuid;
+      return `<b class="player-chip ${kind}">${escapeHtml(shortName(name))}</b>`;
+    }).join("");
+    return `<div class="chip-group ${kind}"><em>${label}</em>${chips}</div>`;
+  }
+
+  function renderTicketProgress() {
+    const tickets = Object.values(getStageTickets());
+    const purchased = tickets.filter((ticket) => ticket && !ticket.abstained).length;
+    const total = state.room.players.length;
+    const degrees = total > 0 ? Math.round((purchased / total) * 360) : 0;
+    return `
+      <div class="progress-ring" style="--progress:${degrees}deg">
+        <strong>${purchased}/${total}</strong>
+        <span>購入</span>
       </div>
     `;
   }
@@ -525,7 +588,7 @@
             <h2>ランキング</h2>
             ${rankings.map((row) => `
               <button class="ranking-row" data-action="select-history" data-uuid="${escapeAttr(row.uuid)}">
-                <span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatNumber(row.score)}</strong>
+                <span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatScore(row.score)}</strong>
               </button>
             `).join("") || `<p class="muted">なし</p>`}
           </section>
@@ -572,10 +635,10 @@
   function renderStageSummary(stage) {
     return `
       <div class="stage-summary">
-        <div><span>N</span><strong>${stage.params.N}</strong></div>
-        <div><span>X</span><strong>${stage.params.X}</strong></div>
-        <div><span>P</span><strong>${stage.params.P}</strong></div>
-        <div><span>Q</span><strong>${stage.params.Q}</strong></div>
+        <div><span>総階数</span><strong>${stage.params.N}</strong></div>
+        <div><span>定員</span><strong>${stage.params.X}</strong></div>
+        <div><span>上昇報酬</span><strong>${stage.params.P}</strong></div>
+        <div><span>運賃</span><strong>${stage.params.Q}</strong></div>
         <div class="event-list">
           ${(stage.events || []).map((event) => `<span>${eventLabel(event)}</span>`).join("") || `<span>イベントなし</span>`}
         </div>
@@ -588,6 +651,7 @@
       <div class="phase-banner">
         <span>${phaseLabel(state.room.phase)}</span>
         ${state.room.phase === Engine.PHASES.COUNTDOWN ? `<strong>${countdownSeconds()}秒</strong>` : ""}
+        ${state.room.phase === Engine.PHASES.TALLYING ? `<strong>移動中… ${movingSeconds()}秒</strong>` : ""}
       </div>
     `;
   }
@@ -601,8 +665,8 @@
           <td>${escapeHtml(player.name)}${player.pendingName ? `<small>→${escapeHtml(player.pendingName)}</small>` : ""}</td>
           <td><code>${escapeHtml(player.uuid)}</code></td>
           <td>${ticket ? ticket.abstained ? "棄権" : `${ticket.boardFloor}→${ticket.exitFloor}` : "未投票"}</td>
-          <td>${formatNumber(state.room.scores[player.uuid] || 0)}</td>
-          <td>${formatNumber(player.skill || 0)}</td>
+          <td>${formatScore(state.room.scores[player.uuid] || 0)}</td>
+          <td>${formatSkill(player.skill || 0)}</td>
         </tr>
       `;
     });
@@ -625,7 +689,7 @@
           <div class="screen-rank">
             <span>${row.rank}</span>
             <strong>${escapeHtml(row.name)}</strong>
-            <em>${formatNumber(row.score)}</em>
+            <em>${formatScore(row.score)}</em>
           </div>
         `).join("")}
       </div>
@@ -642,16 +706,16 @@
     const correct = answered.filter((item) => item.matched).length;
     return `
       <dl class="stats-list">
-        <div><dt>現在Skill値</dt><dd>${formatNumber(player.skill || 0)}</dd></div>
-        <div><dt>平均Skill値</dt><dd>${formatNumber(average(player.stageSkillHistory || []))}</dd></div>
-        <div><dt>合計Skill値</dt><dd>${formatNumber((player.stageSkillHistory || []).reduce((a, b) => a + b, 0))}</dd></div>
-        <div><dt>累積得点</dt><dd>${formatNumber(state.room.scores[player.uuid] || 0)}</dd></div>
-        <div><dt>平均得点</dt><dd>${formatNumber(average(scores))}</dd></div>
-        <div><dt>最高得点</dt><dd>${scores.length ? formatNumber(Math.max(...scores)) : "0.00"}</dd></div>
+        <div><dt>現在Skill値</dt><dd>${formatSkill(player.skill || 0)}</dd></div>
+        <div><dt>平均Skill値</dt><dd>${formatSkill(average(player.stageSkillHistory || []))}</dd></div>
+        <div><dt>合計Skill値</dt><dd>${formatSkill((player.stageSkillHistory || []).reduce((a, b) => a + b, 0))}</dd></div>
+        <div><dt>累積得点</dt><dd>${formatScore(state.room.scores[player.uuid] || 0)}</dd></div>
+        <div><dt>平均得点</dt><dd>${formatScore(average(scores))}</dd></div>
+        <div><dt>最高得点</dt><dd>${scores.length ? formatScore(Math.max(...scores)) : "0"}</dd></div>
         <div><dt>参加ゲーム数</dt><dd>${stageResults.length ? 1 : 0}</dd></div>
         <div><dt>参加ステージ数</dt><dd>${stageResults.length}</dd></div>
         <div><dt>強制下車回数</dt><dd>${forced}</dd></div>
-        <div><dt>予想イベント正解率</dt><dd>${answered.length ? formatNumber((correct / answered.length) * 100) + "%" : "-"}</dd></div>
+        <div><dt>予想イベント正解率</dt><dd>${answered.length ? formatSkill((correct / answered.length) * 100) + "%" : "-"}</dd></div>
         <div><dt>優勝回数</dt><dd>${isCurrentWinner(player.uuid) ? 1 : 0}</dd></div>
         <div><dt>表彰台回数</dt><dd>${isCurrentPodium(player.uuid) ? 1 : 0}</dd></div>
       </dl>
@@ -685,15 +749,20 @@
     return Math.max(0, Math.ceil((new Date(state.room.countdownEndsAt).getTime() - Date.now()) / 1000));
   }
 
+  function movingSeconds() {
+    if (!state.room.tallyingEndsAt) return 0;
+    return Math.max(0, Math.ceil((new Date(state.room.tallyingEndsAt).getTime() - Date.now()) / 1000));
+  }
+
   function eventLabel(event) {
     const labels = {
       E1_prediction: `予想: ${event.question || ""}`,
       E2_forbidden: `禁止 ${event.fromFloor}-${event.toFloor}F`,
-      E3a_zone_multiplier: `区間倍率 ${event.fromFloor}-${event.toFloor}F x${event.multiplier}`,
-      E3b_score_multiplier: `得点倍率 ${event.fromFloor}-${event.toFloor}F x${event.multiplier}`,
+      E3a_zone_multiplier: `区間ボーナス倍率 ${event.fromFloor}-${event.toFloor}F x${event.multiplier}`,
+      E3b_score_multiplier: `得点ボーナス倍率 ${event.fromFloor}-${event.toFloor}F x${event.multiplier}`,
       E4_special_floor: `特別階 ${event.floor}F +${event.bonus || event.score || 0}`,
-      E5_occupancy_multiplier: `${event.threshold}人以上 x${event.multiplier}`,
-      E6_view_bonus: `眺望 x${event.bonusPerExitFloor || event.multiplier || 0}`,
+      E5_occupancy_multiplier: `${event.threshold}人以上でボーナス倍率 x${event.multiplier}`,
+      E6_view_bonus: `眺望: 乗車成功時、降車階で得点+階数x${event.bonusPerExitFloor || event.multiplier || 0}`,
     };
     return labels[event.type] || event.type;
   }
@@ -704,7 +773,7 @@
       stage_intro: "ステージ説明",
       voting: "チケット購入受付中",
       countdown: "締切カウントダウン",
-      tallying: "集計中",
+      tallying: "移動中…",
       reveal: "結果発表",
       ranking: "ランキング",
       final: "最終結果",
@@ -790,8 +859,16 @@
     return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
   }
 
-  function formatNumber(value) {
+  function formatScore(value) {
+    return String(Math.round(Number(value) || 0));
+  }
+
+  function formatSkill(value) {
     return Engine.roundScore(value).toFixed(2);
+  }
+
+  function shortName(name) {
+    return Array.from(String(name || "")).slice(0, 5).join("");
   }
 
   function formatTime(iso) {
