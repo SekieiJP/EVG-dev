@@ -72,7 +72,7 @@
     const form = event.target;
     if (form.id === "joinForm") {
       const name = form.elements.name.value;
-      const carryUuid = form.elements.restoreUuid.value.trim() || state.playerUuid;
+      const carryUuid = form.elements.restoreUuid.value.trim();
       const result = Engine.registerPlayer(state.room, name, carryUuid || undefined);
       if (!result.ok) return showToast(result.error);
       state.room = result.room;
@@ -280,7 +280,10 @@
         </header>
         <form id="joinForm" class="panel form-grid">
           <label>名前<input name="name" maxlength="24" autocomplete="name" required></label>
-          <label>UUID<input name="restoreUuid" value="${escapeAttr(state.playerUuid)}" autocomplete="off"></label>
+          <details class="carry-over">
+            <summary>データを引き継いではじめる</summary>
+            <label>過去のUUID<input name="restoreUuid" autocomplete="off" placeholder="UUIDを貼り付け"></label>
+          </details>
           <button class="primary" type="submit">参加</button>
         </form>
       </section>
