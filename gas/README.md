@@ -12,17 +12,17 @@ Google Apps Script のコード・設定を格納します。
 1. Google Spreadsheetを作成します。
 2. Apps Scriptプロジェクトへ `src/Code.gs` の内容を `Code.gs` として配置します。
 3. スプレッドシートに紐づいた状態で `setupElevatorGameSheets()` を一度実行します。
-4. `config` シートの `hostPassword` を運用値へ変更します。`apiKey` は自動生成されます。
+4. `config` シートの `hostPassword` を運用値へ変更します。`apiKey` はデプロイIDが既定値です。
 5. Web Appとしてデプロイします。
    - Execute as: `USER_DEPLOYING`
    - Access: `ANYONE`
-6. Apps Scriptで `getClientConfigSnippet()` を実行し、返された内容を静的クライアントの `game/assets/js/config.js` に反映します。
+6. Apps Scriptで `getClientConfigSnippet()` を実行すると、デプロイURLとデプロイID入りの `game/assets/js/config.js` 内容を確認できます。
 
 ## config シート
 
 | key | 用途 |
 | --- | --- |
-| `apiKey` | 静的クライアントとGASで共有するAPIキー。`setupElevatorGameSheets()` 実行時に自動生成します。 |
+| `apiKey` | 静的クライアントとGASで共有する識別子。既定値はデプロイIDです。秘匿値ではなく、最低限の誤接続防止に使います。 |
 | `hostPassword` | Host画面の認証パスワード。 |
 | `hostSessionMinutes` | `/api/host/auth` が返す `hostToken` の有効時間。 |
 | `pollCacheSeconds` | ポーリングキャッシュ用の設定値。現状は設定作成までで、細かいキャッシュ制御は今後の負荷試験で調整します。 |

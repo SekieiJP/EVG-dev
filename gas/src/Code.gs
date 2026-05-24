@@ -11,7 +11,8 @@ const EVG_SHEETS = {
 const EVG_CURRENT_GAME_CHUNK_SIZE = 45000;
 const EVG_HOST_TOKEN_PREFIX = 'host-token:';
 const EVG_DEFAULT_HOST_SESSION_MINUTES = 240;
-const EVG_DEPLOYED_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO/exec';
+const EVG_DEPLOYMENT_ID = 'AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO';
+const EVG_DEPLOYED_WEB_APP_URL = 'https://script.google.com/macros/s/' + EVG_DEPLOYMENT_ID + '/exec';
 
 const EVG_PHASES = {
   LOBBY: 'lobby',
@@ -943,7 +944,7 @@ function ensureSheet_(ss, name, headers) {
 
 function ensureConfigDefaults_(sheet) {
   const defaults = {
-    apiKey: 'evg-' + createUuid_(),
+    apiKey: EVG_DEPLOYMENT_ID,
     hostPassword: 'host',
     hostSessionMinutes: String(EVG_DEFAULT_HOST_SESSION_MINUTES),
     pollCacheSeconds: '2',

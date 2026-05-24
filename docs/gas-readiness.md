@@ -6,7 +6,7 @@
 
 - `apiKey` と期限付き `hostToken` によるホストmutation認証を実装した。
 - `config` シートに `apiKey`, `hostPassword`, `hostSessionMinutes`, `pollCacheSeconds`, `webAppUrl` を作成する。
-- `apiKey` は `setupElevatorGameSheets()` 実行時に自動生成し、空欄のまま公開されないようにする。
+- `apiKey` はデプロイIDを既定値にする。秘匿値ではなく、最低限の誤接続防止に使う。
 - `current_game` は1セルJSONではなく複数行チャンクで保存する。旧1セル形式も読み取り可能。
 - `players` は既存UUIDを保持し、現在ゲーム参加者をマージする。
 - `save_data` にゲーム単位の12指標、`stage_results` にStageSkill込みのステージ別結果を保存する。
@@ -22,7 +22,7 @@
 - Apps Scriptプロジェクトへ `gas/src/Code.gs` の内容を `Code.gs` として配置する。`appsscript.json` はエディタへ直接貼り付けない。
 - スプレッドシートに紐づいた状態で `setupElevatorGameSheets()` を一度実行する。
 - `config` シートの `hostPassword` を本番値へ変更する。
-- Apps Scriptで `getClientConfigSnippet()` を実行し、返された内容を `game/assets/js/config.js` に反映する。
+- Apps Scriptで `getClientConfigSnippet()` を実行し、`game/assets/js/config.js` と同じデプロイURL/デプロイIDになっていることを確認する。
 - Web Appは `executeAs: USER_DEPLOYING`, `access: ANYONE` でデプロイする。
 
 ## API URL受領後の手動検証

@@ -102,7 +102,7 @@
           <li>2026-05-24追記: GAS参加/復元時に、現在ルームにいないUUIDを<code>players</code>または履歴シートから復元できるようにした。</li>
           <li>2026-05-24追記: GASレスポンスをrole別に調整し、Playerには他人のチケットを返さず、結果発表完了前は現在ステージ結果を隠すようにした。</li>
           <li>2026-05-24追記: 静的クライアントはGAS応答の<code>serverTime</code>から時刻差分を保持し、カウントダウンと結果発表の時刻計算に使うようにした。</li>
-          <li>2026-05-24追記: GASのデプロイURLを<code>game/assets/js/config.js</code>へ反映し、APIキーは<code>setupElevatorGameSheets()</code>で自動生成して<code>getClientConfigSnippet()</code>から取得する方式にした。</li>
+          <li>2026-05-24追記: GASのデプロイURLとデプロイIDを<code>game/assets/js/config.js</code>へ反映し、<code>apiKey</code>は秘匿値ではなく最低限の誤接続防止用識別子として扱う方式にした。</li>
         </ul>
       </section>
 

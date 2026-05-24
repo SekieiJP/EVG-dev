@@ -22,7 +22,7 @@ tests/
 - ブラウザ版は既定では未デプロイ環境の検証用に `localStorage` へ同じ形のルーム状態を保存する。`assets/js/config.js` でGAS通信を有効化した場合は、参加・投票・ホスト進行・状態ポーリングをGAS Web Appへ送る。
 - ルール計算は `engine.js` の純粋関数に集約し、ブラウザUIから直接呼び出す。
 - GAS版は Apps Script 単体で動くよう、主要ロジックを `Code.gs` に移植している。
-- GAS接続前に必要な情報は `assets/js/config.js` のビルド時定数で管理する。`apiKey` はGASセットアップ時に自動生成し、`getClientConfigSnippet()` からクライアント設定を取得する。GASへのPOSTはApps ScriptのCORSプリフライトを避けるため、JSON文字列を `text/plain` で送る。ホスト操作は `apiKey` と `/api/host/auth` で取得する期限付き `hostToken` を要求する。
+- GAS接続前に必要な情報は `assets/js/config.js` のビルド時定数で管理する。`apiKey` はデプロイIDを既定値とし、`getClientConfigSnippet()` でクライアント設定を確認できる。GASへのPOSTはApps ScriptのCORSプリフライトを避けるため、JSON文字列を `text/plain` で送る。ホスト操作は `apiKey` と `/api/host/auth` で取得する期限付き `hostToken` を要求する。
 - Screenの参加URL QRコードは `assets/vendor/qrcode-generator` の同梱ライブラリで生成する。
 
 ## 主要データ

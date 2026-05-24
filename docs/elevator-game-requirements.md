@@ -150,7 +150,7 @@
 - 実行時にプレイヤーやホストがGAS URLを手入力する運用にはしない。
 - ローカル検証モードでは、ビルド時定数でGAS通信を無効化し、ローカルストレージを使用できる。
 - GAS通信有効時は、静的クライアントに埋め込む `apiKey` を各リクエストへ付与する。本番運用では `config` シートにも同じ `apiKey` を設定する。
-- `apiKey` はGASセットアップ時に自動生成し、`getClientConfigSnippet()` で静的クライアントへ貼り付ける設定片を取得する。
+- `apiKey` はデプロイIDを既定値とし、秘匿値ではなく最低限の誤接続防止に使う。`getClientConfigSnippet()` で静的クライアント設定片を確認できる。
 - GAS通信有効時、静的クライアントは参加、復元、名前変更、チケット送信、棄権、ホスト進行、設定インポート、状態ポーリングをGAS APIへ送信する。
 - Apps ScriptのCORSプリフライトを避けるため、POSTボディはJSON文字列を `text/plain` として送信できる設計にする。
 
@@ -638,7 +638,7 @@ StageSkill = (上昇成功階数 / (ステージ階数 × 定員 / 参加人数)
 
 | シート名 | 内容 | 主キー |
 |----------|------|--------|
-| `config` | 自動生成`apiKey`、ホストパスワード、hostToken有効時間、Web App URL、運用設定 | - |
+| `config` | デプロイIDを既定値とする`apiKey`、ホストパスワード、hostToken有効時間、Web App URL、運用設定 | - |
 | `save_data` | プレイヤー単位×ゲーム単位の戦績データ（参加時点の表示名スナップショット含む、事前集計指標含む） | (UUID, gameId) |
 | `stage_results` | プレイヤー単位×ステージ単位の結果（StageSkill値含む、Skill再計算用） | (UUID, gameId, stageId) |
 | `players` | プレイヤーマスタ（UUID、現在の表示名） | UUID |

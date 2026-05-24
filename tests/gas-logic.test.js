@@ -296,10 +296,11 @@ run("GAS save data summary contains required player metrics", () => {
   });
 });
 
-run("GAS client config snippet contains deployed URL and generated API key", () => {
+run("GAS client config snippet contains deployed URL and deployment id", () => {
   const gas = loadGas();
-  const snippet = gas.buildClientConfigSnippet_("https://script.google.com/macros/s/AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO/exec", "evg-test-key");
+  const deploymentId = "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO";
+  const snippet = gas.buildClientConfigSnippet_(`https://script.google.com/macros/s/${deploymentId}/exec`, deploymentId);
   assert.match(snippet, /AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO/);
-  assert.match(snippet, /GAS_API_KEY: "evg-test-key"/);
+  assert.match(snippet, /GAS_API_KEY: "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO"/);
   assert.match(snippet, /USE_GAS_API: true/);
 });

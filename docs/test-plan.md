@@ -66,9 +66,9 @@ python3 -m http.server 8000
 
 Apps Script上で以下を確認する。
 
-1. `setupElevatorGameSheets()` が必要なシートとヘッダーを作成し、`apiKey` を自動生成する。
+1. `setupElevatorGameSheets()` が必要なシートとヘッダーを作成し、`apiKey` にデプロイIDを設定する。
 2. `config` シートの `hostPassword` を本番値へ変更する。
-3. `getClientConfigSnippet()` が、デプロイURLと生成済み `apiKey` を含む `config.js` 内容を返す。
+3. `getClientConfigSnippet()` が、デプロイURLとデプロイIDを含む `config.js` 内容を返す。
 4. `/api/host/auth` で `hostToken` を取得でき、`hostToken` なしの `/api/host/*` が拒否される。
 5. `doPost` に `/api/player/join` 相当のpayloadを渡して参加登録できる。
 6. `doPost` に `/api/ticket/submit` 相当のpayloadを渡して投票できる。
