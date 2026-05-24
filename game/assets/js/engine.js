@@ -106,16 +106,54 @@
       tickets: {},
       stageResults: {},
       scores: {},
+      completedGames: [],
       operations: [],
-    countdownEndsAt: null,
-    tallyingEndsAt: null,
-    animationStartedAt: null,
+      countdownEndsAt: null,
+      tallyingEndsAt: null,
+      animationStartedAt: null,
       animationSkippedAt: null,
       volume: 0.8,
       muted: false,
       hostLock: null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
+    };
+  }
+
+  function createNextGameRoom(room, config) {
+    const next = createInitialRoom(config);
+    const archived = archiveCurrentGame(room);
+    next.completedGames = archived ? (room.completedGames || []).concat(archived) : deepClone(room.completedGames || []);
+    next.players = (room.players || []).map((player) => ({
+      uuid: player.uuid,
+      name: player.pendingName || player.name,
+      joinedAt: player.joinedAt || nowIso(),
+      connected: player.connected !== false,
+      lastSeenAt: nowIso(),
+      skill: Number(player.skill || 0),
+      stageSkillHistory: deepClone(player.stageSkillHistory || []),
+      pendingName: null,
+    }));
+    next.players.forEach((player) => {
+      next.scores[player.uuid] = 0;
+    });
+    next.volume = room.volume !== undefined ? room.volume : next.volume;
+    next.muted = Boolean(room.muted);
+    next.operations.unshift({ at: nowIso(), actor: "host", action: "next-game" });
+    next.updatedAt = nowIso();
+    return next;
+  }
+
+  function archiveCurrentGame(room) {
+    if (!room || !room.stageResults || Object.keys(room.stageResults).length === 0) return null;
+    if ((room.completedGames || []).some((game) => game.gameId === room.gameId)) return null;
+    return {
+      gameId: room.gameId,
+      title: room.config && room.config.gameMeta ? room.config.gameMeta.title : "game",
+      finishedAt: nowIso(),
+      scores: deepClone(room.scores || {}),
+      rankings: cumulativeRankings(room),
+      stageResults: deepClone(room.stageResults || {}),
     };
   }
 
@@ -836,6 +874,7 @@
     PHASES,
     DEFAULT_CONFIG,
     createInitialRoom,
+    createNextGameRoom,
     normalizeConfig,
     getCurrentStage,
     registerPlayer,

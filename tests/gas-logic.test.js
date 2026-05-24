@@ -30,6 +30,8 @@ function loadGas() {
   advancePhase_,
   tallyCurrentStage_,
   calculateStage_,
+  importConfig_,
+  updateConfig_,
 });
 `, sandbox);
 }
@@ -175,4 +177,33 @@ run("GAS prediction metric takes precedence over explicit correct answer", () =>
   assert.strictEqual(result.players.alice.predictionBreakdown[0].correctAnswer, 0);
   assert.strictEqual(result.players.alice.predictionBreakdown[0].matched, true);
   assert.strictEqual(result.players.bob.predictionBreakdown[0].matched, false);
+});
+
+run("GAS import config can preserve players for the next game", () => {
+  const gas = loadGas();
+  let room = gas.createInitialRoom_(config());
+  room = addPlayer(gas, room, "Alice", "alice");
+  room = addPlayer(gas, room, "Bob", "bob");
+  room = advance(gas, room, "start-stage");
+  room = advance(gas, room, "open-voting");
+  let submitted = gas.submitTicket_(room, "alice", { boardFloor: 1, exitFloor: 3, predictions: { 0: "yes" } });
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  room = submitted.room;
+  submitted = gas.submitTicket_(room, "bob", { boardFloor: 2, exitFloor: 2, predictions: { 0: "yes" } });
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  room = submitted.room;
+  room = advance(gas, room, "close-voting");
+  const tallied = gas.tallyCurrentStage_(room, "test-host");
+  assert.strictEqual(tallied.ok, true, tallied.message);
+  room = tallied.room;
+
+  const nextConfig = config();
+  nextConfig.gameMeta.title = "next-gas-game";
+  const imported = gas.importConfig_(room, nextConfig, true);
+  assert.strictEqual(imported.ok, true, imported.message);
+  assert.deepStrictEqual(Array.from(imported.room.players, (player) => player.uuid), ["alice", "bob"]);
+  assert.strictEqual(imported.room.scores.alice, 0);
+  assert.strictEqual(imported.room.stageResults["stage-001"], undefined);
+  assert.strictEqual(imported.room.completedGames.length, 1);
+  assert.strictEqual(imported.room.completedGames[0].scores.alice, 32);
 });

@@ -582,12 +582,12 @@ code {
 
 .shaft-track {
   position: absolute;
-  inset: auto 0 0;
+  inset: auto 0 calc(34% + 6px);
   display: flex;
   flex-direction: column;
-  min-height: 100%;
-  height: max(100%, calc(var(--floor-count) * 84px));
-  animation: cameraClimb var(--travel-duration, 12s) steps(var(--floor-count), end) forwards;
+  height: var(--track-height, 840px);
+  animation: cameraClimb var(--travel-duration, 12s) steps(var(--floor-count), end) both;
+  animation-delay: var(--reveal-delay, 0s);
 }
 
 .floor {
@@ -639,7 +639,7 @@ code {
     transform: translateY(0);
   }
   to {
-    transform: translateY(calc(100% - (100vh - 145px)));
+    transform: translateY(var(--travel-shift, 0px));
   }
 }
 
@@ -687,12 +687,12 @@ code {
   font-weight: 900;
 }
 
-.player-chip.waiting {
-  background: #f8e08e;
-}
-
 .player-chip.boarding {
   background: #7dd3fc;
+}
+
+.player-chip.blocked {
+  background: #facc15;
 }
 
 .player-chip.riding {

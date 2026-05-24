@@ -167,7 +167,8 @@ function mutateRoute_(path, payload) {
     else if (path === '/api/host/skip-animation') result = advancePhase_(room, 'skip-animation', payload.hostName || 'host');
     else if (path === '/api/host/advance') result = advancePhase_(room, 'next-stage', payload.hostName || 'host');
     else if (path === '/api/host/recalculate') result = recalculate_(room);
-    else if (path === '/api/host/import-config') result = importConfig_(payload.config);
+    else if (path === '/api/host/import-config') result = importConfig_(room, payload.config, payload.preservePlayers !== false);
+    else if (path === '/api/host/update-config') result = updateConfig_(room, payload.config);
     else return error_('not_found', 'Unknown endpoint: ' + path, 404);
     if (result && result.room) {
       saveRoom_(result.room);
@@ -192,6 +193,7 @@ function createInitialRoom_(config) {
     tickets: {},
     stageResults: {},
     scores: {},
+    completedGames: [],
     operations: [],
     countdownEndsAt: null,
     tallyingEndsAt: null,
@@ -201,6 +203,45 @@ function createInitialRoom_(config) {
     muted: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function createNextGameRoom_(room, config) {
+  const next = createInitialRoom_(config);
+  const archived = archiveCurrentGame_(room);
+  next.completedGames = archived ? (room.completedGames || []).concat([archived]) : clone_(room.completedGames || []);
+  next.players = (room.players || []).map(function(player) {
+    return {
+      uuid: player.uuid,
+      name: player.pendingName || player.name,
+      joinedAt: player.joinedAt || new Date().toISOString(),
+      connected: player.connected !== false,
+      lastSeenAt: new Date().toISOString(),
+      skill: Number(player.skill || 0),
+      stageSkillHistory: clone_(player.stageSkillHistory || []),
+      pendingName: null,
+    };
+  });
+  next.players.forEach(function(player) {
+    next.scores[player.uuid] = 0;
+  });
+  next.volume = room.volume !== undefined ? room.volume : next.volume;
+  next.muted = Boolean(room.muted);
+  addOperation_(next, 'host', 'next-game');
+  touchRoom_(next);
+  return next;
+}
+
+function archiveCurrentGame_(room) {
+  if (!room || !room.stageResults || Object.keys(room.stageResults).length === 0) return null;
+  if ((room.completedGames || []).some(function(game) { return game.gameId === room.gameId; })) return null;
+  return {
+    gameId: room.gameId,
+    title: room.config && room.config.gameMeta ? room.config.gameMeta.title : 'game',
+    finishedAt: new Date().toISOString(),
+    scores: clone_(room.scores || {}),
+    rankings: rankCumulative_(room),
+    stageResults: clone_(room.stageResults || {}),
   };
 }
 
@@ -701,8 +742,14 @@ function recalculate_(room) {
   return { ok: true, room };
 }
 
-function importConfig_(config) {
-  return { ok: true, room: createInitialRoom_(config) };
+function importConfig_(room, config, preservePlayers) {
+  return { ok: true, room: preservePlayers && room.players && room.players.length ? createNextGameRoom_(room, config) : createInitialRoom_(config) };
+}
+
+function updateConfig_(room, config) {
+  room.config = normalizeConfig_(config);
+  touchRoom_(room);
+  return { ok: true, room };
 }
 
 function authHost_(password) {
@@ -795,6 +842,10 @@ function rowsAsObjects_(sheet) {
     headers.forEach(function(header, index) { object[header] = row[index]; });
     return object;
   });
+}
+
+function clone_(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function getConfigValue_(key, fallback) {

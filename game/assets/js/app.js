@@ -249,19 +249,20 @@
       const textarea = $("#configJson");
       try {
         const config = Engine.normalizeConfig(JSON.parse(textarea.value));
+        const nextRoom = state.room.players.length ? Engine.createNextGameRoom(state.room, config) : Engine.createInitialRoom(config);
         if (isRemoteMode()) {
           const result = await runMutation(
-            () => ({ ok: true, room: Engine.createInitialRoom(config) }),
+            () => ({ ok: true, room: nextRoom }),
             "/api/host/import-config",
-            { config }
+            { config, preservePlayers: true }
           );
           if (!result.ok) return showToast(result.error);
           state.room = result.room;
         } else {
-          state.room = Engine.createInitialRoom(config);
+          state.room = nextRoom;
         }
         saveRoom("host.config.import", "host");
-        showToast("設定を読み込みました。");
+        showToast(state.room.players.length ? "参加者を保持して次のゲームを読み込みました。" : "設定を読み込みました。");
         render();
       } catch (error) {
         showToast(`JSONを読み込めません: ${error.message}`);
@@ -276,7 +277,7 @@
         if (isRemoteMode()) {
           const result = await runMutation(
             () => ({ ok: true, room: next }),
-            "/api/host/import-config",
+            "/api/host/update-config",
             { config: next.config }
           );
           if (!result.ok) return showToast(result.error);
@@ -649,11 +650,12 @@
     const timelineByFloor = new Map(result.timeline.map((step) => [step.floor, step]));
     const tickets = state.room.tickets[result.stageId] || {};
     const duration = getRevealDuration(stage);
+    const elapsed = getRevealElapsedSeconds();
     const currentFloor = getRevealFloor(stage, duration);
     const scoreRows = buildRevealScoreRows(stage, result, currentFloor);
     return `
       <div class="elevator-board">
-        <div class="elevator-camera" style="--floor-count:${stage.params.N}; --travel-duration:${duration}s">
+        <div class="elevator-camera" style="--floor-count:${stage.params.N}; --track-height:${stage.params.N * 84}px; --travel-shift:${Math.max(0, stage.params.N - 1) * 84}px; --travel-duration:${duration}s; --reveal-delay:-${Math.min(elapsed, duration)}s">
           <div class="shaft-track">
             ${floors.map((floor) => renderFloorEvent(floor, timelineByFloor.get(floor), result, tickets, forcedFloors.has(floor), currentFloor)).join("")}
           </div>
@@ -676,20 +678,21 @@
   }
 
   function renderFloorEvent(floor, step, result, tickets, danger, currentFloor) {
-    const waiting = Object.values(tickets)
+    const blocked = Object.values(tickets)
       .filter((ticket) => !ticket.abstained && ticket.boardFloor === floor)
-      .map((ticket) => ticket.uuid);
-    const boarding = step ? step.boarding : [];
-    const exiting = step ? step.exiting : [];
+      .map((ticket) => ticket.uuid)
+      .filter((uuid) => ["invalid", "not_boarded"].includes(result.players[uuid] ? result.players[uuid].status : ""));
     const forced = step ? step.forcedOff : [];
-    const passengers = step ? step.passengersAfterCheck : [];
+    const boarding = step ? step.boarding.filter((uuid) => !forced.includes(uuid)) : [];
+    const exiting = step ? step.exiting : [];
+    const passengers = step ? step.passengersAfterCheck.filter((uuid) => !boarding.includes(uuid) && !exiting.includes(uuid)) : [];
     const visible = floor <= currentFloor;
     return `
       <div class="floor ${danger ? "danger" : ""} ${visible ? "is-revealed" : "is-future"}">
         <span class="floor-label">${floor}F</span>
         <div class="floor-activity">
-          ${visible ? renderChipGroup("待機", waiting, result, "waiting") : ""}
           ${visible ? renderChipGroup("乗車", boarding, result, "boarding") : ""}
+          ${visible ? renderChipGroup("乗車不可", blocked, result, "blocked") : ""}
           ${visible ? renderChipGroup("乗車中", passengers, result, "riding") : ""}
           ${visible ? renderChipGroup("下車", exiting, result, "exiting") : ""}
           ${visible ? renderChipGroup("強制下車", forced, result, "forced") : ""}
@@ -739,10 +742,15 @@
     return Math.max(12, stage.params.N * 1.6);
   }
 
+  function getRevealElapsedSeconds() {
+    if (state.room.animationSkippedAt) return Infinity;
+    const started = state.room.animationStartedAt ? new Date(state.room.animationStartedAt).getTime() : Date.now();
+    return Math.max(0, (Date.now() - started) / 1000);
+  }
+
   function getRevealFloor(stage, duration) {
     if (state.room.animationSkippedAt) return stage.params.N;
-    const started = state.room.animationStartedAt ? new Date(state.room.animationStartedAt).getTime() : Date.now();
-    const elapsedSeconds = Math.max(0, (Date.now() - started) / 1000);
+    const elapsedSeconds = getRevealElapsedSeconds();
     const floor = Math.floor(elapsedSeconds / (duration / stage.params.N)) + 1;
     return Math.max(1, Math.min(stage.params.N, floor));
   }
@@ -839,7 +847,7 @@
   }
 
   function renderHistoryView() {
-    const rankings = Engine.cumulativeRankings(state.room);
+    const rankings = buildHistoryRankings();
     const selectedUuid = state.selectedHistoryUuid || state.playerUuid || (rankings[0] && rankings[0].uuid);
     const selected = state.room.players.find((player) => player.uuid === selectedUuid);
     return `
@@ -976,27 +984,33 @@
   }
 
   function renderPlayerStats(player) {
-    const stageResults = Object.values(state.room.stageResults || {})
+    const games = getHistoryGames();
+    const stageResults = games
+      .flatMap((game) => Object.values(game.stageResults || {}))
       .map((stageResult) => stageResult.players[player.uuid])
       .filter(Boolean);
     const scores = stageResults.map((item) => item.score);
     const forced = stageResults.filter((item) => item.forcedOff).length;
     const answered = stageResults.flatMap((item) => item.predictionBreakdown || []).filter((item) => !item.noAnswer);
     const correct = answered.filter((item) => item.matched).length;
+    const playerGames = games.filter((game) => Object.values(game.stageResults || {}).some((stageResult) => stageResult.players[player.uuid]));
+    const totalScore = games.reduce((sum, game) => sum + Number((game.scores || {})[player.uuid] || 0), 0);
+    const wins = games.filter((game) => (game.rankings || []).some((row) => row.uuid === player.uuid && row.rank === 1)).length;
+    const podiums = games.filter((game) => (game.rankings || []).some((row) => row.uuid === player.uuid && row.rank <= 3)).length;
     return `
       <dl class="stats-list">
         <div><dt>現在Skill値</dt><dd>${formatSkill(player.skill || 0)}</dd></div>
         <div><dt>平均Skill値</dt><dd>${formatSkill(average(player.stageSkillHistory || []))}</dd></div>
         <div><dt>合計Skill値</dt><dd>${formatSkill((player.stageSkillHistory || []).reduce((a, b) => a + b, 0))}</dd></div>
-        <div><dt>累積得点</dt><dd>${formatScore(state.room.scores[player.uuid] || 0)}</dd></div>
+        <div><dt>累積得点</dt><dd>${formatScore(totalScore)}</dd></div>
         <div><dt>平均得点</dt><dd>${formatScore(average(scores))}</dd></div>
         <div><dt>最高得点</dt><dd>${scores.length ? formatScore(Math.max(...scores)) : "0"}</dd></div>
-        <div><dt>参加ゲーム数</dt><dd>${stageResults.length ? 1 : 0}</dd></div>
+        <div><dt>参加ゲーム数</dt><dd>${playerGames.length}</dd></div>
         <div><dt>参加ステージ数</dt><dd>${stageResults.length}</dd></div>
         <div><dt>強制下車回数</dt><dd>${forced}</dd></div>
         <div><dt>予想イベント正解率</dt><dd>${answered.length ? formatSkill((correct / answered.length) * 100) + "%" : "-"}</dd></div>
-        <div><dt>優勝回数</dt><dd>${isCurrentWinner(player.uuid) ? 1 : 0}</dd></div>
-        <div><dt>表彰台回数</dt><dd>${isCurrentPodium(player.uuid) ? 1 : 0}</dd></div>
+        <div><dt>優勝回数</dt><dd>${wins}</dd></div>
+        <div><dt>表彰台回数</dt><dd>${podiums}</dd></div>
       </dl>
     `;
   }
@@ -1301,13 +1315,38 @@
     }
   }
 
-  function isCurrentWinner(uuid) {
-    const top = Engine.cumulativeRankings(state.room)[0];
-    return top && top.uuid === uuid;
+  function getHistoryGames() {
+    const games = (state.room.completedGames || []).map((game) => Engine.deepClone(game));
+    if (Object.keys(state.room.stageResults || {}).length) {
+      games.push({
+        gameId: state.room.gameId,
+        title: state.room.config.gameMeta.title,
+        scores: Engine.deepClone(state.room.scores || {}),
+        rankings: Engine.cumulativeRankings(state.room),
+        stageResults: Engine.deepClone(state.room.stageResults || {}),
+      });
+    }
+    return games;
   }
 
-  function isCurrentPodium(uuid) {
-    return Engine.cumulativeRankings(state.room).slice(0, 3).some((row) => row.uuid === uuid);
+  function buildHistoryRankings() {
+    const games = getHistoryGames();
+    const rows = state.room.players
+      .map((player) => ({
+        uuid: player.uuid,
+        name: player.name,
+        score: games.reduce((sum, game) => sum + Number((game.scores || {})[player.uuid] || 0), 0),
+        skill: player.skill || 0,
+      }))
+      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, "ja"));
+    let previousScore = null;
+    let previousRank = 0;
+    return rows.map((row, index) => {
+      const rank = row.score === previousScore ? previousRank : index + 1;
+      previousScore = row.score;
+      previousRank = rank;
+      return Object.assign({ rank }, row);
+    });
   }
 
   function average(values) {
