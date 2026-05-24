@@ -20,6 +20,7 @@
     logs: "evg.logs.v1",
     screenReady: "evg.screenReady.v1",
     screenLocalSync: "evg.screenLocalSync.v1",
+    personalHistoryCache: "evg.personalHistoryCache.v1",
   };
   const LOCAL_SYNC_CHANNEL = "evg.local-room-sync.v1";
   const state = {
@@ -32,7 +33,12 @@
     screenLocalSync: localStorage.getItem(STORAGE_KEYS.screenLocalSync) === "true" || QUERY.get("screenSync") === "local",
     logs: loadJson(STORAGE_KEYS.logs, []),
     toast: "",
+    busyMessage: "",
+    busyCount: 0,
     selectedHistoryUuid: "",
+    personalHistoryCache: loadJson(STORAGE_KEYS.personalHistoryCache, {}),
+    historyLoadingUuid: "",
+    historyError: "",
     syncing: false,
     lastRevealPollAt: 0,
     revealCompletionCheckedFor: "",
@@ -53,6 +59,7 @@
     setInterval(tick, 1000);
     if (isRemoteMode()) {
       startRemoteSync();
+      ensureVisibleHistoryCache();
     }
     if (localSyncChannel) {
       localSyncChannel.addEventListener("message", (event) => {
@@ -79,6 +86,7 @@
       restorePlayerRankingHoldIfNeeded();
       history.replaceState(null, "", `?view=${state.role}`);
       render();
+      ensureVisibleHistoryCache();
     });
     $("#app").addEventListener("submit", handleSubmit);
     $("#app").addEventListener("click", handleClick);
@@ -133,6 +141,7 @@
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (state.busyMessage) return;
     const form = event.target;
     if (form.id === "joinForm") {
       const name = form.elements.name.value;
@@ -179,7 +188,7 @@
     if (form.id === "hostAuthForm") {
       const password = form.elements.password.value;
       if (isRemoteMode()) {
-        const result = await apiPost("/api/host/auth", { password });
+        const result = await withBusy("認証中…", () => apiPost("/api/host/auth", { password }));
         if (!result.ok) return showToast(result.error || "パスワードが違います。");
         state.hostToken = result.hostToken || "";
         localStorage.setItem(STORAGE_KEYS.hostToken, state.hostToken);
@@ -189,7 +198,7 @@
       }
       state.hostAuthed = true;
       localStorage.setItem(STORAGE_KEYS.hostAuthed, "true");
-      if (isRemoteMode()) await refreshRemoteState({ force: true, full: true });
+      if (isRemoteMode()) await refreshRemoteState({ force: true, full: true, showLoading: true });
       render();
     }
     if (form.id === "renameForm") {
@@ -229,17 +238,18 @@
     if (!button) return;
     const action = button.dataset.action;
     if (button.disabled) return;
+    if (state.busyMessage) return;
     if (action === "host-action") {
       const hostAction = button.dataset.hostAction;
       const baseVersion = Number(state.room.roomVersion || 0);
       if (isRemoteMode() && hostAction === "tally") {
         const localResult = Engine.advancePhase(state.room, "tally", "host");
         if (!localResult.ok) return showToast(localResult.error || "操作できません。");
-        const response = await apiPost("/api/host/commit-result", {
+        const response = await withBusy("結果を保存中…", () => apiPost("/api/host/commit-result", {
           hostName: "host",
           baseVersion,
           room: localResult.room,
-        });
+        }));
         const result = normalizeMutationResponse(response);
         if (!result.ok) return showToast(result.error || "操作できません。");
         state.room = result.room;
@@ -278,7 +288,7 @@
       state.playerRankingHold = null;
       const beforePhase = state.room.phase;
       const beforeVersion = state.room.roomVersion || 0;
-      if (isRemoteMode()) await refreshRemoteState({ force: true });
+      if (isRemoteMode()) await refreshRemoteState({ force: true, showLoading: true });
       else state.room = loadRoom();
       if (state.room.phase === beforePhase && (state.room.roomVersion || 0) === beforeVersion) showToast("ホストの操作待ちです。");
       render();
@@ -358,6 +368,7 @@
     if (action === "select-history") {
       state.selectedHistoryUuid = button.dataset.uuid;
       render();
+      ensureVisibleHistoryCache();
     }
   }
 
@@ -394,6 +405,7 @@
     app.innerHTML = `
       ${state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ""}
       ${views[state.role] ? views[state.role]() : renderPlayerView()}
+      ${state.busyMessage ? `<div class="loading-overlay" role="status" aria-live="polite"><div class="loading-box"><span></span><strong>${escapeHtml(state.busyMessage)}</strong></div></div>` : ""}
     `;
   }
 
@@ -960,6 +972,7 @@
     const rankings = buildHistoryRankings();
     const selectedUuid = state.selectedHistoryUuid || state.playerUuid || (rankings[0] && rankings[0].uuid);
     const selected = state.room.players.find((player) => player.uuid === selectedUuid);
+    const historyEntry = getPersonalHistoryCache(selectedUuid);
     return `
       <section class="shell">
         <header class="view-header"><div><p class="eyebrow">History</p><h1>戦歴</h1></div></header>
@@ -974,7 +987,10 @@
           </section>
           <section class="panel">
             <h2>個人</h2>
-            ${selected ? renderPlayerStats(selected) : `<p class="muted">なし</p>`}
+            ${selected && selectedUuid === state.playerUuid && state.historyLoadingUuid === selectedUuid ? `<p class="muted">戦績を読み込み中…</p>` : ""}
+            ${selected && historyEntry ? `<p class="muted">キャッシュ済み戦績 ${formatTime(historyEntry.fetchedAt)}</p>` : ""}
+            ${state.historyError && selectedUuid === state.playerUuid ? `<p class="muted">${escapeHtml(state.historyError)}</p>` : ""}
+            ${selected ? renderPlayerStats(selected, historyEntry ? historyEntry.data.summary : null) : `<p class="muted">なし</p>`}
           </section>
         </div>
       </section>
@@ -1093,7 +1109,7 @@
     `;
   }
 
-  function renderPlayerStats(player) {
+  function renderPlayerStats(player, remoteSummary) {
     const games = getHistoryGames();
     const stageResults = games
       .flatMap((game) => Object.values(game.stageResults || {}))
@@ -1107,20 +1123,24 @@
     const totalScore = games.reduce((sum, game) => sum + Number((game.scores || {})[player.uuid] || 0), 0);
     const wins = games.filter((game) => (game.rankings || []).some((row) => row.uuid === player.uuid && row.rank === 1)).length;
     const podiums = games.filter((game) => (game.rankings || []).some((row) => row.uuid === player.uuid && row.rank <= 3)).length;
+    const summary = remoteSummary || {};
+    const predictionAccuracy = summary.predictionAccuracy !== undefined && summary.predictionAccuracy !== null
+      ? Number(summary.predictionAccuracy) * 100
+      : (answered.length ? (correct / answered.length) * 100 : null);
     return `
       <dl class="stats-list">
-        <div><dt>現在Skill値</dt><dd>${formatSkill(player.skill || 0)}</dd></div>
-        <div><dt>平均Skill値</dt><dd>${formatSkill(average(player.stageSkillHistory || []))}</dd></div>
-        <div><dt>合計Skill値</dt><dd>${formatSkill((player.stageSkillHistory || []).reduce((a, b) => a + b, 0))}</dd></div>
-        <div><dt>累積得点</dt><dd>${formatScore(totalScore)}</dd></div>
-        <div><dt>平均得点</dt><dd>${formatScore(average(scores))}</dd></div>
-        <div><dt>最高得点</dt><dd>${scores.length ? formatScore(Math.max(...scores)) : "0"}</dd></div>
-        <div><dt>参加ゲーム数</dt><dd>${playerGames.length}</dd></div>
-        <div><dt>参加ステージ数</dt><dd>${stageResults.length}</dd></div>
-        <div><dt>強制下車回数</dt><dd>${forced}</dd></div>
-        <div><dt>予想イベント正解率</dt><dd>${answered.length ? formatSkill((correct / answered.length) * 100) + "%" : "-"}</dd></div>
-        <div><dt>優勝回数</dt><dd>${wins}</dd></div>
-        <div><dt>表彰台回数</dt><dd>${podiums}</dd></div>
+        <div><dt>現在Skill値</dt><dd>${formatSkill(summary.currentSkill ?? player.skill ?? 0)}</dd></div>
+        <div><dt>平均Skill値</dt><dd>${formatSkill(summary.averageSkill ?? average(player.stageSkillHistory || []))}</dd></div>
+        <div><dt>合計Skill値</dt><dd>${formatSkill(summary.totalSkill ?? (player.stageSkillHistory || []).reduce((a, b) => a + b, 0))}</dd></div>
+        <div><dt>累積得点</dt><dd>${formatScore(summary.totalScore ?? totalScore)}</dd></div>
+        <div><dt>平均得点</dt><dd>${formatScore(summary.averageScore ?? average(scores))}</dd></div>
+        <div><dt>最高得点</dt><dd>${formatScore(summary.bestScore ?? (scores.length ? Math.max(...scores) : 0))}</dd></div>
+        <div><dt>参加ゲーム数</dt><dd>${formatScore(summary.gameCount ?? playerGames.length)}</dd></div>
+        <div><dt>参加ステージ数</dt><dd>${formatScore(summary.stageCount ?? stageResults.length)}</dd></div>
+        <div><dt>強制下車回数</dt><dd>${formatScore(summary.forcedOffCount ?? forced)}</dd></div>
+        <div><dt>予想イベント正解率</dt><dd>${predictionAccuracy === null ? "-" : formatSkill(predictionAccuracy) + "%"}</dd></div>
+        <div><dt>優勝回数</dt><dd>${formatScore(summary.wins ?? wins)}</dd></div>
+        <div><dt>表彰台回数</dt><dd>${formatScore(summary.podiums ?? podiums)}</dd></div>
       </dl>
     `;
   }
@@ -1249,7 +1269,7 @@
   async function runMutation(localMutation, remotePath, payload) {
     if (!isRemoteMode()) return localMutation();
     try {
-      const response = await apiPost(remotePath, payload);
+      const response = await withBusy("読み込み中…", () => apiPost(remotePath, payload));
       return normalizeMutationResponse(response);
     } catch (error) {
       logClient("api.error", error.message);
@@ -1291,10 +1311,10 @@
     if (!options.force && isPlayerRankingHeld()) return;
     try {
       state.syncing = true;
-      const response = await apiGet("/api/status", {
+      const response = await maybeBusy(options.showLoading ? "読み込み中…" : "", () => apiGet("/api/status", {
         uuid: state.playerUuid,
         sinceVersion: options.full ? "" : (state.room ? state.room.roomVersion || 0 : 0),
-      });
+      }));
       if (response.ok && response.unchanged) return;
       if (response.ok && response.room) {
         if (options.revealOnly && !shouldApplyRevealRemoteRoom(state.room, response.room)) return;
@@ -1332,7 +1352,7 @@
   }
 
   async function startRemoteSync() {
-    await restoreRemotePlayer();
+    if (state.role === "player") await restoreRemotePlayer();
     if (shouldPollRemoteState()) await refreshRemoteState({ force: true, full: true });
     setInterval(pollRemoteState, Math.max(10000, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 10000));
   }
@@ -1365,6 +1385,52 @@
     if (response.ok && response.room) {
       state.room = response.room;
       localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
+      render();
+    }
+  }
+
+  function historyStageCacheKey(uuid) {
+    return [uuid || "", state.room.gameId || "", state.room.currentStageIndex || 0, Object.keys(state.room.stageResults || {}).length].join(":");
+  }
+
+  function getPersonalHistoryCache(uuid) {
+    if (!uuid) return null;
+    return state.personalHistoryCache[historyStageCacheKey(uuid)] || null;
+  }
+
+  function savePersonalHistoryCache(uuid, data) {
+    if (!uuid || !data) return;
+    state.personalHistoryCache[historyStageCacheKey(uuid)] = {
+      fetchedAt: new Date().toISOString(),
+      data,
+    };
+    localStorage.setItem(STORAGE_KEYS.personalHistoryCache, JSON.stringify(state.personalHistoryCache));
+  }
+
+  function ensureVisibleHistoryCache() {
+    if (state.role !== "history") return;
+    const uuid = state.selectedHistoryUuid || state.playerUuid;
+    ensurePersonalHistoryCache(uuid);
+  }
+
+  async function ensurePersonalHistoryCache(uuid) {
+    if (!isRemoteMode() || !uuid || uuid !== state.playerUuid) return;
+    if (getPersonalHistoryCache(uuid) || state.historyLoadingUuid === uuid) return;
+    state.historyLoadingUuid = uuid;
+    state.historyError = "";
+    render();
+    try {
+      const response = await withBusy("戦績を読み込み中…", () => apiGet(`/api/history/player/${encodeURIComponent(uuid)}`, { uuid }));
+      if (response.ok) {
+        savePersonalHistoryCache(uuid, response);
+      } else {
+        state.historyError = response.error || response.message || "戦績を取得できませんでした。";
+      }
+    } catch (error) {
+      state.historyError = "戦績の通信に失敗しました。";
+      logClient("history.error", error.message);
+    } finally {
+      state.historyLoadingUuid = "";
       render();
     }
   }
@@ -1403,6 +1469,24 @@
     if (BUILD_CONFIG.GAS_API_KEY) meta.apiKey = BUILD_CONFIG.GAS_API_KEY;
     if (state.hostToken) meta.hostToken = state.hostToken;
     return Object.assign({}, payload, meta);
+  }
+
+  async function maybeBusy(message, task) {
+    if (!message) return task();
+    return withBusy(message, task);
+  }
+
+  async function withBusy(message, task) {
+    state.busyCount += 1;
+    state.busyMessage = message || "読み込み中…";
+    render();
+    try {
+      return await task();
+    } finally {
+      state.busyCount = Math.max(0, state.busyCount - 1);
+      if (state.busyCount === 0) state.busyMessage = "";
+      render();
+    }
   }
 
   function updateServerTime(response) {

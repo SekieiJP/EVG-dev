@@ -81,6 +81,9 @@ Apps Script上で以下を確認する。
 13. `/api/status` に現在の `roomVersion` を渡すと `unchanged` が返り、フルルームが返らない。
 14. `/api/host/commit-result` がHostブラウザで計算した結果roomを保存し、バージョン不一致と二重集計を拒否する。
 15. 同一端末Screen同期モードで、Host操作後にGASポーリングなしでScreenが更新される。
+16. 参加登録、Host認証、投票、戦績取得中に読み込み表示が出て、通信中は追加操作できない。
+17. 同一ゲーム・同一ステージ・同一結果数では、Player本人の個人戦績がローカルキャッシュから表示される。
+18. Host/Screen画面の起動時に、Player UUIDが保存済みでも `/api/player/restore` が送られない。
 
 ## 残テスト
 

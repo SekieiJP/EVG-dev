@@ -21,6 +21,9 @@
 - `/api/status` は `roomVersion` が変わらない場合にフルルームを返さない。
 - Hostブラウザ集計結果を `/api/host/commit-result` で保存し、GAS側は保存前検証に寄せる。
 - 同一端末Screen同期モードでは、`BroadcastChannel` と `localStorage` でHostからroomを受け取りGASポーリングを止める。
+- GAS通信を伴う手動操作では読み込み表示を出し、通信中の追加操作を受け付けない。
+- Player本人の個人戦績は、同一ゲーム・同一ステージ・同一結果数ではローカルキャッシュを再利用する。
+- Host/Screen起動時には、保存済みPlayer UUIDがあってもPlayer復元APIを送らない。
 - GASロジックテストで、認証、チャンク保存、gameId連番、公開範囲、12指標保存を確認する。
 
 ## デプロイ前チェック
@@ -40,6 +43,9 @@
 - Playerが投票受付中だけ10秒間隔で状態取得し、ランキング後は「次へ」押下時のみ確認すること。
 - Hostが参加受付中と投票受付中だけ自動取得し、それ以外は操作レスポンスで状態更新すること。
 - 同一端末Screen同期モードでHost操作にScreenが追従し、GASへのScreenポーリングが止まること。
+- 参加登録、Host認証、投票、戦績取得で読み込み表示が出ること。
+- 同一ステージ内でHistoryを再表示しても、本人戦績APIが再取得されずキャッシュ表示になること。
+- Host/Screen表示で `/api/player/restore` が発生しないこと。
 - Apps Script実行ログに各API呼び出しのJSONログが残ること。
 - Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
 - 終了後に `save_data`, `stage_results`, `players`, `game_history`, `stage_settings` が更新されること。

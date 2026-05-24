@@ -25,6 +25,8 @@ tests/
 - GAS接続前に必要な情報は `assets/js/config.js` のビルド時定数で管理する。`apiKey` はデプロイIDを既定値とし、`getClientConfigSnippet()` でクライアント設定を確認できる。GASへのPOSTはApps ScriptのCORSプリフライトを避けるため、JSON文字列を `text/plain` で送る。ホスト操作は `apiKey` と `/api/host/auth` で取得する期限付き `hostToken` を要求する。
 - `roomVersion` はルーム更新ごとに増加し、変更なしの状態取得ではフルルームを返さない。Hostブラウザで計算した集計結果は `commit-result` としてGASへ保存し、GASは権限と競合だけを検証する。
 - HostとScreenが同一端末の別ウィンドウの場合、Screenは `BroadcastChannel` と `localStorage` でHostからroomを受け取り、GASポーリングを止められる。
+- GAS通信を伴う手動操作では読み込み表示を出し、通信中の追加操作を止める。定期ポーリングは画面をブロックしない。
+- Player本人のGAS個人戦績は、同一ゲーム・同一ステージ・同一結果数の間は `localStorage` キャッシュを使う。
 - Screenの参加URL QRコードは `assets/vendor/qrcode-generator` の同梱ライブラリで生成する。
 
 ## 主要データ
