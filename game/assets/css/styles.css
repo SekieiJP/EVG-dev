@@ -464,6 +464,11 @@ code {
   margin-bottom: 8px;
 }
 
+.ranking-row.is-self {
+  border-color: var(--primary);
+  background: #e9f8ee;
+}
+
 .screen-shell {
   min-height: calc(100vh - 65px);
   background: var(--screen);

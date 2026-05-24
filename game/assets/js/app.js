@@ -979,7 +979,7 @@
 
   function renderHistoryView() {
     const rankings = buildHistoryRankings();
-    const selectedUuid = state.selectedHistoryUuid || state.playerUuid || (rankings[0] && rankings[0].uuid);
+    const selectedUuid = state.playerUuid || "";
     const selected = state.room.players.find((player) => player.uuid === selectedUuid);
     const historyEntry = getPersonalHistoryCache(selectedUuid);
     return `
@@ -989,16 +989,17 @@
           <section class="panel">
             <h2>ランキング</h2>
             ${rankings.map((row) => `
-              <button class="ranking-row" data-action="select-history" data-uuid="${escapeAttr(row.uuid)}">
+              <button class="ranking-row ${row.uuid === state.playerUuid ? "is-self" : ""}" data-action="select-history" data-uuid="${escapeAttr(row.uuid)}" ${row.uuid === state.playerUuid ? "" : "disabled"}>
                 <span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatScore(row.score)}</strong>
               </button>
             `).join("") || `<p class="muted">なし</p>`}
           </section>
           <section class="panel">
             <h2>個人</h2>
-            ${selected && selectedUuid === state.playerUuid && state.historyLoadingUuid === selectedUuid ? `<p class="muted">戦績を読み込み中…</p>` : ""}
+            ${!state.playerUuid ? `<p class="muted">個人戦績は本人UUIDがある端末でのみ表示します。</p>` : ""}
+            ${selected && state.historyLoadingUuid === selectedUuid ? `<p class="muted">戦績を読み込み中…</p>` : ""}
             ${selected && historyEntry ? `<p class="muted">キャッシュ済み戦績 ${formatTime(historyEntry.fetchedAt)}</p>` : ""}
-            ${state.historyError && selectedUuid === state.playerUuid ? `<p class="muted">${escapeHtml(state.historyError)}</p>` : ""}
+            ${state.historyError ? `<p class="muted">${escapeHtml(state.historyError)}</p>` : ""}
             ${selected ? renderPlayerStats(selected, historyEntry ? historyEntry.data.summary : null) : `<p class="muted">なし</p>`}
           </section>
         </div>
@@ -1492,17 +1493,35 @@
 
   async function apiGet(path, payload) {
     const url = apiUrl(path, payload);
-    const response = await fetch(url.toString(), { method: "GET", cache: "no-store" });
-    return normalizePublicResponse(updateServerTime(await response.json()));
+    return fetchJsonWithRetry(url.toString(), { method: "GET", cache: "no-store" });
   }
 
   async function apiPost(path, payload) {
-    const response = await fetch(apiUrl(path).toString(), {
+    return fetchJsonWithRetry(apiUrl(path).toString(), {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(withApiMeta(payload || {})),
     });
-    return normalizePublicResponse(updateServerTime(await response.json()));
+  }
+
+  async function fetchJsonWithRetry(url, options, attempt = 0) {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok && response.status >= 500 && attempt < 2) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return normalizePublicResponse(updateServerTime(await response.json()));
+    } catch (error) {
+      if (attempt >= 2) throw error;
+      const delay = 400 * Math.pow(2, attempt);
+      logClient("api.retry", `${attempt + 1}/3 ${error.message}`);
+      await sleep(delay);
+      return fetchJsonWithRetry(url, options, attempt + 1);
+    }
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   function apiUrl(path, payload) {
