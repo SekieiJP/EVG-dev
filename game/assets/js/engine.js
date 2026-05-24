@@ -112,6 +112,7 @@
       tallyingEndsAt: null,
       animationStartedAt: null,
       animationSkippedAt: null,
+      roomVersion: 0,
       volume: 0.8,
       muted: false,
       hostLock: null,

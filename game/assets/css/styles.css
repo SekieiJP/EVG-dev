@@ -427,6 +427,16 @@ code {
   font-weight: 900;
 }
 
+.screen-sync-button {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 10;
+  border-color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--screen);
+}
+
 .screen-lobby,
 .screen-stage,
 .ranking-board {

@@ -78,6 +78,9 @@ Apps Script上で以下を確認する。
 10. UUID復元で、現在ゲーム外の過去UUIDから名前とSkill履歴を復元できる。
 11. 参加登録前Player画面と未認証Host画面で定期ポーリングが発生しない。
 12. Apps Script実行ログにpath、role、uuid、処理時間、エラー種別がJSONで残る。
+13. `/api/status` に現在の `roomVersion` を渡すと `unchanged` が返り、フルルームが返らない。
+14. `/api/host/commit-result` がHostブラウザで計算した結果roomを保存し、バージョン不一致と二重集計を拒否する。
+15. 同一端末Screen同期モードで、Host操作後にGASポーリングなしでScreenが更新される。
 
 ## 残テスト
 

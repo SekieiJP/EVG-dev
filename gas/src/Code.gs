@@ -9,6 +9,7 @@ const EVG_SHEETS = {
 };
 
 const EVG_CURRENT_GAME_CHUNK_SIZE = 45000;
+const EVG_ROOM_CACHE_KEY = 'evg-current-room-json';
 const EVG_HOST_TOKEN_PREFIX = 'host-token:';
 const EVG_DEFAULT_HOST_SESSION_MINUTES = 240;
 const EVG_DEPLOYMENT_ID = 'AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO';
@@ -169,6 +170,7 @@ function route_(e, method) {
       return json_(response);
     }
     if (method === 'GET' && path === '/api/time') response = { serverTime: new Date().toISOString() };
+    else if (method === 'GET' && path === '/api/status') response = publicStatus_(getRoom_() || createInitialRoom_(EVG_DEFAULT_CONFIG), payload);
     else if (method === 'GET' && (path === '/api/room/state' || path === '/api/screen/state')) response = publicRoom_(getRoom_() || createInitialRoom_(EVG_DEFAULT_CONFIG), payload);
     else if (method === 'GET' && path === '/api/history/games') response = getHistoryGames_();
     else if (method === 'GET' && path.indexOf('/api/history/player/') === 0) response = getPlayerHistory_(path.split('/').pop(), payload.uuid);
@@ -204,6 +206,7 @@ function mutateRoute_(path, payload) {
       else if (path === '/api/host/open-voting') result = advancePhase_(room, 'open-voting', payload.hostName || 'host');
       else if (path === '/api/host/close-voting') result = advancePhase_(room, 'close-voting', payload.hostName || 'host');
       else if (path === '/api/host/reveal-result') result = tallyCurrentStage_(room, payload.hostName || 'host');
+      else if (path === '/api/host/commit-result') result = commitHostResult_(room, payload.room, payload.baseVersion, payload.hostName || 'host');
       else if (path === '/api/host/show-ranking') result = advancePhase_(room, 'show-ranking', payload.hostName || 'host');
       else if (path === '/api/host/skip-animation') result = advancePhase_(room, 'skip-animation', payload.hostName || 'host');
       else if (path === '/api/host/advance') result = advancePhase_(room, 'next-stage', payload.hostName || 'host');
@@ -243,6 +246,7 @@ function createInitialRoom_(config) {
     tallyingEndsAt: null,
     animationStartedAt: null,
     animationSkippedAt: null,
+    roomVersion: 0,
     volume: 0.8,
     muted: false,
     createdAt: new Date().toISOString(),
@@ -528,6 +532,29 @@ function tallyCurrentStage_(room, actor) {
   addOperation_(room, actor, 'reveal-result');
   touchRoom_(room);
   return { ok: true, room, result };
+}
+
+function commitHostResult_(room, nextRoom, baseVersion, actor) {
+  if (!nextRoom || typeof nextRoom !== 'object') return error_('bad_request', '保存する結果がありません。', 400);
+  const stage = getCurrentStage_(room);
+  const nextStage = getCurrentStage_(nextRoom);
+  if (!stage || !nextStage || stage.stageId !== nextStage.stageId) return error_('stage_mismatch', 'ステージが一致しません。', 409);
+  if ([EVG_PHASES.COUNTDOWN, EVG_PHASES.TALLYING].indexOf(room.phase) < 0) return error_('phase', '現在は集計できません。', 409);
+  if (room.stageResults && room.stageResults[stage.stageId]) return error_('already_tallied', 'このステージはすでに集計済みです。', 409);
+  if (baseVersion !== undefined && String(baseVersion) !== String(room.roomVersion || 0)) return error_('version_conflict', 'ルーム状態が更新されています。再読み込みしてください。', 409);
+  if (nextRoom.phase !== EVG_PHASES.REVEAL || !nextRoom.stageResults || !nextRoom.stageResults[stage.stageId]) {
+    return error_('bad_result', '結果発表状態のルームを送信してください。', 400);
+  }
+  nextRoom.roomId = room.roomId;
+  nextRoom.gameId = room.gameId;
+  nextRoom.config = room.config;
+  nextRoom.players = room.players;
+  nextRoom.tickets = room.tickets;
+  nextRoom.completedGames = room.completedGames || [];
+  nextRoom.operations = room.operations || [];
+  addOperation_(nextRoom, actor, 'commit-result');
+  touchRoom_(nextRoom);
+  return { ok: true, room: nextRoom, result: nextRoom.stageResults[stage.stageId] };
 }
 
 function calculateStage_(stage, players, ticketsByUuid) {
@@ -840,6 +867,36 @@ function publicRoom_(room, payload) {
   };
 }
 
+function publicStatus_(room, payload) {
+  payload = payload || {};
+  const summary = compactRoomStatus_(room);
+  if (String(payload.sinceVersion || '') === String(room.roomVersion || 0)) {
+    return { ok: true, unchanged: true, serverTime: new Date().toISOString(), status: summary };
+  }
+  return Object.assign(publicRoom_(room, payload), { status: summary });
+}
+
+function compactRoomStatus_(room) {
+  const stage = getCurrentStage_(room);
+  const stageId = stage ? stage.stageId : '';
+  const tickets = stageId && room.tickets && room.tickets[stageId] ? room.tickets[stageId] : {};
+  const submitted = Object.keys(tickets).filter(function(uuid) { return tickets[uuid] && !tickets[uuid].abstained; }).length;
+  const abstained = Object.keys(tickets).filter(function(uuid) { return tickets[uuid] && tickets[uuid].abstained; }).length;
+  return {
+    roomVersion: Number(room.roomVersion || 0),
+    phase: room.phase,
+    currentStageIndex: room.currentStageIndex || 0,
+    stageId: stageId,
+    playerCount: (room.players || []).length,
+    ticketCount: submitted,
+    abstainCount: abstained,
+    countdownEndsAt: room.countdownEndsAt || null,
+    tallyingEndsAt: room.tallyingEndsAt || null,
+    animationStartedAt: room.animationStartedAt || null,
+    animationSkippedAt: room.animationSkippedAt || null,
+  };
+}
+
 function getHistoryGames_() {
   const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.gameHistory);
   const games = rowsAsObjects_(sheet).map(function(row) {
@@ -866,17 +923,29 @@ function getCurrentStage_(room) {
 }
 
 function getRoom_() {
+  try {
+    const cached = CacheService.getScriptCache().get(EVG_ROOM_CACHE_KEY);
+    if (cached) return JSON.parse(cached);
+  } catch (err) {
+    console.warn('room cache read failed: ' + err);
+  }
   const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.currentGame);
   if (!sheet || sheet.getLastRow() < 2) return null;
   const values = sheet.getDataRange().getValues();
   const chunks = [];
   for (let i = 1; i < values.length; i += 1) {
-    if (values[i][0] === 'state' && String(values[i][1] || '').charAt(0) === '{') return JSON.parse(values[i][1]);
+    if (values[i][0] === 'state' && String(values[i][1] || '').charAt(0) === '{') {
+      const legacyRoom = JSON.parse(values[i][1]);
+      cacheRoom_(legacyRoom);
+      return legacyRoom;
+    }
     if (values[i][0] === 'state') chunks.push({ index: Number(values[i][1] || 0), json: values[i][2] || '' });
   }
   if (chunks.length) {
     chunks.sort(function(a, b) { return a.index - b.index; });
-    return JSON.parse(chunks.map(function(chunk) { return chunk.json; }).join(''));
+    const room = JSON.parse(chunks.map(function(chunk) { return chunk.json; }).join(''));
+    cacheRoom_(room);
+    return room;
   }
   return null;
 }
@@ -889,6 +958,16 @@ function saveRoom_(room) {
   sheet.getRange(2, 1, chunks.length, 4).setValues(chunks.map(function(chunk, index) {
     return ['state', index, chunk, new Date().toISOString()];
   }));
+  cacheRoom_(room);
+}
+
+function cacheRoom_(room) {
+  try {
+    const json = JSON.stringify(room);
+    if (json.length < 95000) CacheService.getScriptCache().put(EVG_ROOM_CACHE_KEY, json, 30);
+  } catch (err) {
+    console.warn('room cache write failed: ' + err);
+  }
 }
 
 function syncPlayersSheet_(room) {
@@ -1244,7 +1323,7 @@ function buildClientConfigSnippet_(url, apiKey) {
     '    GAS_API_BASE_URL: "' + url + '",',
     '    GAS_API_KEY: "' + apiKey + '",',
     '    USE_GAS_API: true,',
-    '    POLL_INTERVAL_MS: 15000,',
+    '    POLL_INTERVAL_MS: 10000,',
     '  };',
     '})(typeof self !== "undefined" ? self : this);',
   ].join('\n');
@@ -1275,6 +1354,7 @@ function error_(code, message, status) {
 }
 
 function touchRoom_(room) {
+  room.roomVersion = Number(room.roomVersion || 0) + 1;
   room.updatedAt = new Date().toISOString();
 }
 

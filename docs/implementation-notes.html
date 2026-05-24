@@ -106,7 +106,11 @@
           <li>2026-05-24追記: GAS通常リクエストでは<code>setupElevatorGameSheets()</code>を実行せず、未セットアップ時は明示エラーを返すようにした。Spreadsheet書き込みを伴う初期化がポーリングごとに走ることを避けるため。</li>
           <li>2026-05-24追記: GASの<code>doGet/doPost</code>は成功・認証失敗・例外のいずれでも、path、role、uuid、処理時間、エラー種別をJSONで<code>console.log</code>へ残すようにした。</li>
           <li>2026-05-24追記: GASの<code>hostPassword</code>はSpreadsheet上で数値として保存される可能性があるため、入力値と設定値をtrim済み文字列として比較するようにした。</li>
-          <li>2026-05-24追記: 未登録Playerと未認証Hostでは状態ポーリングを開始しないようにし、通常ポーリング間隔を15秒へ下げた。GAS実行時間上限を優先し、進行反映の即時性は落としている。</li>
+          <li>2026-05-24追記: 未登録Playerと未認証Hostでは状態ポーリングを開始しないようにし、必要フェーズだけ10秒間隔で取得するようにした。GAS実行時間上限を優先し、進行反映の即時性は落としている。</li>
+          <li>2026-05-24追記: ルーム更新ごとに<code>roomVersion</code>を増やし、通常の状態取得を<code>/api/status</code>へ切り替えた。変更なしの場合はフルルームを返さず、GAS側では短時間<code>CacheService</code>を使う。</li>
+          <li>2026-05-24追記: GAS版のステージ集計はHostブラウザの<code>engine.js</code>で計算し、<code>/api/host/commit-result</code>で保存する方式を追加した。GASはストレージ、認証、フェーズ/バージョン/二重集計検証に寄せる。</li>
+          <li>2026-05-24追記: Screenに同一端末同期モードを追加し、Hostと同じブラウザプロファイルの別ウィンドウなら<code>BroadcastChannel</code>と<code>localStorage</code>でGASを介さずroomを受け取れるようにした。</li>
+          <li>2026-05-24追記: Playerの自動ポーリングは投票受付中だけ10秒間隔に絞り、締切後は時刻到達時の確認フェッチと「次へ」押下時の取得に寄せた。「次へ」は押下後5秒間無効化する。</li>
         </ul>
       </section>
 
@@ -128,6 +132,7 @@
           <li>GASへのPOSTは<code>application/json</code>ではなく<code>text/plain</code>でJSON文字列を送る。Apps Script Web AppでCORSプリフライトに詰まりにくい運用を優先した。</li>
           <li>GASホスト認証は、静的クライアントに埋め込む<code>apiKey</code>と、運営者が入力する<code>hostPassword</code>の二段構成にした。認証後の<code>hostToken</code>は<code>CacheService</code>に保存するランダムトークンで、推測可能な自己記述トークンにはしない。</li>
           <li><code>apiKey</code>はデプロイIDと同値であることを正とし、過去セットアップで作られた<code>evg-</code>形式の値が<code>config</code>シートに残っていてもデプロイIDを受理する。再度<code>setupElevatorGameSheets()</code>を実行した場合は<code>evg-</code>形式をデプロイIDへ移行する。</li>
+          <li>Hostブラウザ集計commitは、運営用Hostを信頼する設計に寄せる判断をした。不正耐性よりGAS実行時間削減を優先し、最低限の防御として<code>hostToken</code>、<code>roomVersion</code>、ステージ一致、二重集計拒否を入れる。</li>
           <li>Apps Scriptエディタに直接配置するファイルは<code>Code.gs</code>だけにし、<code>appsscript.json</code>はclasp等で使う任意のmanifestとして扱う。</li>
           <li><code>topPlayer</code>予想の正解は、予想イベント得点を加える前のステージ得点1位にした。予想得点によって正解が変わる自己参照を避けるため。</li>
           <li>予想イベントで<code>metric</code>と<code>correctAnswer</code>が両方指定された場合は、ゲーム結果から得られる<code>metric</code>を正解にする。<code>correctAnswer</code>は固定正解や暫定設定用のフォールバックに限定した。</li>
@@ -176,6 +181,7 @@
           <li>GASシートを完全正規化する案もあったが、進行中状態はチャンク化JSONスナップショット方式にした。理由は、複雑なステージ設定・投票・演出状態を一括でロック更新でき、同時ホスト競合を扱いやすいため。履歴とマスタは<code>save_data</code>等へ分割保存する。</li>
           <li>クライアントでWebSocket相当のリアルタイム通信層まで作る案もあったが、GAS前提ではポーリングを選んだ。参加者100人規模では、要件通りフェーズ別ポーリング間隔の調整とサーバ側キャッシュが次の負荷対策になる。</li>
           <li>登録前トップ画面でもポーリングして即時にゲーム進行へ追従する案は、Apps Scriptの実行時間上限に対して費用が大きいため採用しない。参加済み端末、認証済みHost、表示開始済みScreenだけが低頻度で状態取得する。</li>
+          <li>快適度への影響として、Playerのフェーズ追従は自動即時ではなくなる。投票中の締切検知は最大10秒遅れ、ランキング後の次フェーズ追従は「次へ」押下時確認になる。一方、同一端末ScreenはGAS待ちがなくなり反応が良くなる。</li>
           <li>イベント仕様をすべて細かいGUIにする案もあったが、初版の設定GUIはJSON import/export中心にした。イベント種別が多く、先にスキーマ互換性を保つ方が安全なため。</li>
           <li>GAS側へブラウザ版エンジンを完全移植する案もあったが、サイズと検証時間を抑えるために主要ルール中心の実装にした。正式運用前には差分をなくす必要がある。</li>
           <li><code>topPlayer</code>を最終得点ベースにする案もあったが、予想イベント得点を含めると循環参照になるため、予想イベント加算前の基礎得点ベースを採用した。</li>

@@ -17,7 +17,10 @@
 - クライアントはGASの `serverTime` から時刻差分を保持し、カウントダウンと結果発表に使う。
 - 通常APIリクエストでは `setupElevatorGameSheets()` を実行せず、未セットアップ時は `setup_required` を返す。
 - `doGet`/`doPost` は、path、role、uuid、処理時間、成功/失敗をJSONで `console.log` に出力する。
-- クライアントは未登録Player・未認証Hostではポーリングせず、通常ポーリング間隔を15秒にする。
+- クライアントは未登録Player・未認証Hostではポーリングせず、必要フェーズだけ10秒間隔で状態取得する。
+- `/api/status` は `roomVersion` が変わらない場合にフルルームを返さない。
+- Hostブラウザ集計結果を `/api/host/commit-result` で保存し、GAS側は保存前検証に寄せる。
+- 同一端末Screen同期モードでは、`BroadcastChannel` と `localStorage` でHostからroomを受け取りGASポーリングを止める。
 - GASロジックテストで、認証、チャンク保存、gameId連番、公開範囲、12指標保存を確認する。
 
 ## デプロイ前チェック
@@ -34,6 +37,9 @@
 - Host認証後、`hostToken` なしのホストmutationが拒否され、認証済み操作だけ成功すること。
 - `config` シートの `hostPassword` が数値セルでもHost認証できること。
 - 参加登録前Player画面と未認証Host画面で定期ポーリングが発生しないこと。
+- Playerが投票受付中だけ10秒間隔で状態取得し、ランキング後は「次へ」押下時のみ確認すること。
+- Hostが参加受付中と投票受付中だけ自動取得し、それ以外は操作レスポンスで状態更新すること。
+- 同一端末Screen同期モードでHost操作にScreenが追従し、GASへのScreenポーリングが止まること。
 - Apps Script実行ログに各API呼び出しのJSONログが残ること。
 - Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
 - 終了後に `save_data`, `stage_results`, `players`, `game_history`, `stage_settings` が更新されること。

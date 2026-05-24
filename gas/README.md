@@ -46,6 +46,7 @@ Google Apps Script のコード・設定を格納します。
 `docs/elevator-game-requirements.md` の暫定API名に合わせ、以下を実装しています。
 
 - `GET /api/time`
+- `GET /api/status`
 - `GET /api/room/state`
 - `GET /api/screen/state`
 - `POST /api/player/join`
@@ -59,6 +60,7 @@ Google Apps Script のコード・設定を格納します。
 - `POST /api/host/open-voting`
 - `POST /api/host/close-voting`
 - `POST /api/host/reveal-result`
+- `POST /api/host/commit-result`
 - `POST /api/host/show-ranking`
 - `POST /api/host/skip-animation`
 - `POST /api/host/advance`
@@ -75,5 +77,8 @@ GASのWeb App環境で `pathInfo` が取れない場合は、`?path=/api/room/st
 ## ログとポーリング
 
 - `doGet`/`doPost` は、path、role、uuid、処理時間、成功/失敗をJSONで `console.log` に出力します。
-- 静的クライアントの通常ポーリング間隔は15秒です。
-- 未登録Playerと未認証Hostは状態ポーリングを行いません。参加済みPlayer、認証済みHost、表示開始済みScreenだけが状態取得します。
+- 静的クライアントの通常ポーリング間隔は10秒です。
+- 状態取得は `/api/status` を使い、`roomVersion` が変わっていなければフルルームを返しません。
+- 未登録Playerと未認証Hostは状態ポーリングを行いません。Playerは投票受付中だけ、Hostは参加受付中と投票受付中だけ自動取得します。
+- Hostブラウザで集計した結果は `/api/host/commit-result` で保存します。GAS側は `hostToken`、フェーズ、ステージ、`roomVersion`、二重集計だけを検証します。
+- ScreenとHostが同一端末の別ウィンドウなら、Screenの同一端末同期モードでGASポーリングを止められます。

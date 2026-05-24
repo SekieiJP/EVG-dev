@@ -5,7 +5,7 @@
       GAS_API_BASE_URL: "",
       GAS_API_KEY: "",
       USE_GAS_API: false,
-      POLL_INTERVAL_MS: 15000,
+      POLL_INTERVAL_MS: 10000,
     },
     window.EVG_BUILD_CONFIG || {}
   );
@@ -19,7 +19,9 @@
     hostToken: "evg.hostToken.v1",
     logs: "evg.logs.v1",
     screenReady: "evg.screenReady.v1",
+    screenLocalSync: "evg.screenLocalSync.v1",
   };
+  const LOCAL_SYNC_CHANNEL = "evg.local-room-sync.v1";
   const state = {
     role: QUERY.get("view") || "player",
     room: null,
@@ -27,6 +29,7 @@
     hostAuthed: localStorage.getItem(STORAGE_KEYS.hostAuthed) === "true",
     hostToken: localStorage.getItem(STORAGE_KEYS.hostToken) || "",
     screenReady: localStorage.getItem(STORAGE_KEYS.screenReady) === "true",
+    screenLocalSync: localStorage.getItem(STORAGE_KEYS.screenLocalSync) === "true" || QUERY.get("screenSync") === "local",
     logs: loadJson(STORAGE_KEYS.logs, []),
     toast: "",
     selectedHistoryUuid: "",
@@ -35,8 +38,11 @@
     revealCompletionCheckedFor: "",
     revealWasIncomplete: false,
     playerRankingHold: null,
+    nextRemoteFetchAt: 0,
+    playerNextDisabledUntil: 0,
     serverTimeOffsetMs: 0,
   };
+  const localSyncChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(LOCAL_SYNC_CHANNEL) : null;
 
   const $ = (selector) => document.querySelector(selector);
 
@@ -48,11 +54,19 @@
     if (isRemoteMode()) {
       startRemoteSync();
     }
+    if (localSyncChannel) {
+      localSyncChannel.addEventListener("message", (event) => {
+        if (event.data && event.data.type === "room") applyLocalScreenRoom(event.data.room);
+      });
+    }
     window.addEventListener("storage", (event) => {
       if (!isRemoteMode() && event.key === STORAGE_KEYS.room) {
         if (isPlayerRankingHeld()) return;
         state.room = loadRoom();
         render();
+      }
+      if (isRemoteMode() && event.key === STORAGE_KEYS.room) {
+        applyLocalScreenRoom(loadJson(STORAGE_KEYS.room, null));
       }
     });
   });
@@ -112,6 +126,7 @@
     const needsRevealRefresh =
       Boolean(revealPlaybackIncomplete) &&
       ((state.role === "screen" && state.room.phase === Engine.PHASES.REVEAL) || state.role === "player");
+    if (isRemoteMode()) maybeFetchRemoteAfterDeadline();
     if (needsRevealRefresh || revealJustCompleted) checkRevealCompletionRemoteState();
     if (changed || needsCountdownRefresh || needsRevealRefresh || revealJustCompleted) render();
   }
@@ -174,7 +189,7 @@
       }
       state.hostAuthed = true;
       localStorage.setItem(STORAGE_KEYS.hostAuthed, "true");
-      if (isRemoteMode()) await refreshRemoteState({ force: true });
+      if (isRemoteMode()) await refreshRemoteState({ force: true, full: true });
       render();
     }
     if (form.id === "renameForm") {
@@ -216,6 +231,22 @@
     if (button.disabled) return;
     if (action === "host-action") {
       const hostAction = button.dataset.hostAction;
+      const baseVersion = Number(state.room.roomVersion || 0);
+      if (isRemoteMode() && hostAction === "tally") {
+        const localResult = Engine.advancePhase(state.room, "tally", "host");
+        if (!localResult.ok) return showToast(localResult.error || "操作できません。");
+        const response = await apiPost("/api/host/commit-result", {
+          hostName: "host",
+          baseVersion,
+          room: localResult.room,
+        });
+        const result = normalizeMutationResponse(response);
+        if (!result.ok) return showToast(result.error || "操作できません。");
+        state.room = result.room;
+        saveRoom("host.commit-result", "host");
+        render();
+        return;
+      }
       const result = await runMutation(
         () => Engine.advancePhase(state.room, hostAction, "host"),
         remoteHostPath(hostAction),
@@ -239,16 +270,29 @@
       render();
     }
     if (action === "player-next") {
+      if (Date.now() < state.playerNextDisabledUntil) return;
+      state.playerNextDisabledUntil = Date.now() + 5000;
+      render();
+      setTimeout(render, 5000);
       if (state.room.phase !== Engine.PHASES.RANKING) return showToast("ホストの操作待ちです。");
       state.playerRankingHold = null;
+      const beforePhase = state.room.phase;
+      const beforeVersion = state.room.roomVersion || 0;
       if (isRemoteMode()) await refreshRemoteState({ force: true });
       else state.room = loadRoom();
+      if (state.room.phase === beforePhase && (state.room.roomVersion || 0) === beforeVersion) showToast("ホストの操作待ちです。");
       render();
     }
     if (action === "screen-ready") {
       state.screenReady = true;
       localStorage.setItem(STORAGE_KEYS.screenReady, "true");
       startAudioContext();
+      render();
+    }
+    if (action === "screen-local-sync") {
+      state.screenLocalSync = !state.screenLocalSync;
+      localStorage.setItem(STORAGE_KEYS.screenLocalSync, state.screenLocalSync ? "true" : "false");
+      applyLocalScreenRoom(loadJson(STORAGE_KEYS.room, null));
       render();
     }
     if (action === "copy-uuid") {
@@ -421,7 +465,7 @@
           <h2>チケット</h2>
           <p class="muted">${renderTicketSummary(ticket)}</p>
         </div>
-        <button data-action="player-next" ${state.room.phase === Engine.PHASES.RANKING ? "" : "disabled"}>次へ</button>
+        <button data-action="player-next" ${playerNextDisabledAttr()}>次へ</button>
       </div>
     `;
   }
@@ -536,7 +580,7 @@
             </div>
           `).join("") : `<p class="muted">なし</p>`}
         </section>
-        <button data-action="player-next" ${state.room.phase === Engine.PHASES.RANKING ? "" : "disabled"}>次へ</button>
+        <button data-action="player-next" ${playerNextDisabledAttr()}>次へ</button>
       </div>
     `;
   }
@@ -620,6 +664,7 @@
     return `
       <section class="screen-shell ${reviewMode ? "is-review" : ""}">
         ${!state.screenReady ? `<button class="ready-button" data-action="screen-ready">準備完了</button>` : ""}
+        ${isRemoteMode() && state.role === "screen" ? `<button class="screen-sync-button" data-action="screen-local-sync">${state.screenLocalSync ? "同一端末同期中" : "同一端末同期"}</button>` : ""}
         <div class="screen-top">
           <p>${escapeHtml(state.room.config.gameMeta.title)}</p>
           <span>${phaseLabel(state.room.phase)}</span>
@@ -1165,6 +1210,10 @@
     }[status] || status;
   }
 
+  function playerNextDisabledAttr() {
+    return Date.now() < state.playerNextDisabledUntil ? "disabled" : "";
+  }
+
   function loadRoom() {
     return loadJson(STORAGE_KEYS.room, null) || Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   }
@@ -1176,7 +1225,21 @@
   function saveRoom(kind, actor) {
     if (!isRemoteMode()) state.room.updatedAt = new Date().toISOString();
     localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
+    broadcastLocalRoom();
     if (kind) logClient(kind, actor || "");
+  }
+
+  function broadcastLocalRoom() {
+    if (localSyncChannel && state.room) {
+      localSyncChannel.postMessage({ type: "room", room: state.room });
+    }
+  }
+
+  function applyLocalScreenRoom(room) {
+    if (!isRemoteMode() || state.role !== "screen" || !state.screenLocalSync || !room) return;
+    if (state.room && Number(room.roomVersion || 0) < Number(state.room.roomVersion || 0)) return;
+    state.room = room;
+    render();
   }
 
   function isRemoteMode() {
@@ -1228,11 +1291,16 @@
     if (!options.force && isPlayerRankingHeld()) return;
     try {
       state.syncing = true;
-      const response = await apiGet("/api/room/state", { uuid: state.playerUuid });
+      const response = await apiGet("/api/status", {
+        uuid: state.playerUuid,
+        sinceVersion: options.full ? "" : (state.room ? state.room.roomVersion || 0 : 0),
+      });
+      if (response.ok && response.unchanged) return;
       if (response.ok && response.room) {
         if (options.revealOnly && !shouldApplyRevealRemoteRoom(state.room, response.room)) return;
         state.room = response.room;
         localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
+        broadcastLocalRoom();
         render();
       } else if (!response.ok) {
         logClient("api.state", response.error || response.message || "状態取得に失敗しました。");
@@ -1265,16 +1333,26 @@
 
   async function startRemoteSync() {
     await restoreRemotePlayer();
-    if (shouldPollRemoteState()) await refreshRemoteState({ force: true });
-    setInterval(pollRemoteState, Math.max(10000, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 15000));
+    if (shouldPollRemoteState()) await refreshRemoteState({ force: true, full: true });
+    setInterval(pollRemoteState, Math.max(10000, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 10000));
   }
 
   function shouldPollRemoteState() {
     if (!isRemoteMode() || !state.room) return false;
-    if (state.role === "player") return Boolean(state.playerUuid) && !isPlayerRankingHeld();
-    if (state.role === "host") return Boolean(state.hostAuthed && state.hostToken);
-    if (state.role === "screen") return Boolean(state.screenReady || state.room.phase !== Engine.PHASES.LOBBY);
+    if (state.role === "player") return Boolean(state.playerUuid) && state.room.phase === Engine.PHASES.VOTING && !isPlayerRankingHeld();
+    if (state.role === "host") return Boolean(state.hostAuthed && state.hostToken) && [Engine.PHASES.LOBBY, Engine.PHASES.VOTING].includes(state.room.phase);
+    if (state.role === "screen") return !state.screenLocalSync && Boolean(state.screenReady || state.room.phase !== Engine.PHASES.LOBBY);
     return false;
+  }
+
+  function maybeFetchRemoteAfterDeadline() {
+    if (state.role !== "player" || !state.playerUuid || state.syncing) return;
+    if (![Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase)) return;
+    const targetAt = state.room.tallyingEndsAt || state.room.countdownEndsAt;
+    if (!targetAt || serverNow() < new Date(targetAt).getTime()) return;
+    if (Date.now() < state.nextRemoteFetchAt) return;
+    state.nextRemoteFetchAt = Date.now() + 10000;
+    refreshRemoteState({ force: true });
   }
 
   async function restoreRemotePlayer() {

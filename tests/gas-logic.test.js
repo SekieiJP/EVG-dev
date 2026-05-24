@@ -44,6 +44,7 @@ function loadGas() {
   abstain_,
   advancePhase_,
   tallyCurrentStage_,
+  commitHostResult_,
   acknowledgePlayerNext_,
   calculateStage_,
   importConfig_,
@@ -54,6 +55,7 @@ function loadGas() {
   nextAvailableGameId_,
   chunkString_,
   sanitizeRoomForRole_,
+  publicStatus_,
   buildPlayerGameSummary_,
   buildClientConfigSnippet_,
 });
@@ -279,6 +281,30 @@ run("GAS public room hides other tickets and unrevealed player results", () => {
   assert.strictEqual(Boolean(screenRoom.tickets["stage-001"].bob), true);
 });
 
+run("GAS status supports unchanged responses and host result commits", () => {
+  const gas = loadGas();
+  let room = gas.createInitialRoom_(config());
+  room = addPlayer(gas, room, "Alice", "alice");
+  room = advance(gas, room, "start-stage");
+  room = advance(gas, room, "open-voting");
+  let submitted = gas.submitTicket_(room, "alice", { boardFloor: 1, exitFloor: 3, predictions: { 0: "yes" } });
+  room = submitted.room;
+  room = advance(gas, room, "close-voting");
+
+  const unchanged = gas.publicStatus_(room, { sinceVersion: room.roomVersion });
+  assert.strictEqual(unchanged.ok, true);
+  assert.strictEqual(unchanged.unchanged, true);
+  assert.strictEqual(unchanged.room, undefined);
+
+  const hostCalculated = gas.tallyCurrentStage_(JSON.parse(JSON.stringify(room)), "host").room;
+  const committed = gas.commitHostResult_(room, hostCalculated, room.roomVersion, "host");
+  assert.strictEqual(committed.ok, true, committed.message);
+  assert.strictEqual(committed.room.phase, gas.EVG_PHASES.REVEAL);
+  assert.strictEqual(Boolean(committed.room.stageResults["stage-001"]), true);
+  assert.strictEqual(gas.commitHostResult_(committed.room, hostCalculated, committed.room.roomVersion, "host").ok, false);
+  assert.strictEqual(gas.commitHostResult_(room, hostCalculated, Number(room.roomVersion || 0) + 99, "host").ok, false);
+});
+
 run("GAS save data summary contains required player metrics", () => {
   const gas = loadGas();
   let room = gas.createInitialRoom_(config());
@@ -305,5 +331,5 @@ run("GAS client config snippet contains deployed URL and deployment id", () => {
   assert.match(snippet, /AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO/);
   assert.match(snippet, /GAS_API_KEY: "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO"/);
   assert.match(snippet, /USE_GAS_API: true/);
-  assert.match(snippet, /POLL_INTERVAL_MS: 15000/);
+  assert.match(snippet, /POLL_INTERVAL_MS: 10000/);
 });
