@@ -24,6 +24,8 @@
 - GAS通信を伴う手動操作では読み込み表示を出し、通信中の追加操作を受け付けない。
 - Player本人の個人戦績は、同一ゲーム・同一ステージ・同一結果数ではローカルキャッシュを再利用する。
 - Host/Screen起動時には、保存済みPlayer UUIDがあってもPlayer復元APIを送らない。
+- 認証済みHost画面は、締切カウントダウンと移動中演出の終了後に自動で集計commitを開始する。
+- Player入口URLではHost/Screenタブを無効化し、Player入力中は状態ポーリングによる再描画を抑制する。
 - GASロジックテストで、認証、チャンク保存、gameId連番、公開範囲、12指標保存を確認する。
 
 ## デプロイ前チェック
@@ -46,6 +48,9 @@
 - 参加登録、Host認証、投票、戦績取得で読み込み表示が出ること。
 - 同一ステージ内でHistoryを再表示しても、本人戦績APIが再取得されずキャッシュ表示になること。
 - Host/Screen表示で `/api/player/restore` が発生しないこと。
+- 認証済みHost画面で自動集計commitが一度だけ実行されること。
+- Player入口URLからHost/Screenに遷移できないこと。
+- Player入力中にポーリング再描画で入力フォーカスや値が失われないこと。
 - Apps Script実行ログに各API呼び出しのJSONログが残ること。
 - Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
 - 終了後に `save_data`, `stage_results`, `players`, `game_history`, `stage_settings` が更新されること。

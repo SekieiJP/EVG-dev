@@ -10,6 +10,8 @@
     window.EVG_BUILD_CONFIG || {}
   );
   const QUERY = new URLSearchParams(location.search);
+  const REQUESTED_ROLE = QUERY.get("view") || QUERY.get("v") || "player";
+  const PLAYER_ENTRY_LOCKED = (!QUERY.has("view") && !QUERY.has("v")) || REQUESTED_ROLE === "player";
   const TEST_SLOT = String(QUERY.get("testSlot") || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
   const REMOTE_REVEAL_POLL_INTERVAL_MS = 15000;
   const STORAGE_KEYS = {
@@ -24,7 +26,7 @@
   };
   const LOCAL_SYNC_CHANNEL = "evg.local-room-sync.v1";
   const state = {
-    role: QUERY.get("view") || "player",
+    role: REQUESTED_ROLE,
     room: null,
     playerUuid: localStorage.getItem(playerUuidStorageKey()) || "",
     hostAuthed: localStorage.getItem(STORAGE_KEYS.hostAuthed) === "true",
@@ -44,6 +46,7 @@
     revealCompletionCheckedFor: "",
     revealWasIncomplete: false,
     playerRankingHold: null,
+    autoTallyKey: "",
     nextRemoteFetchAt: 0,
     playerNextDisabledUntil: 0,
     serverTimeOffsetMs: 0,
@@ -82,6 +85,7 @@
     $("#roleTabs").addEventListener("click", (event) => {
       const button = event.target.closest("[data-role]");
       if (!button) return;
+      if (isRoleBlocked(button.dataset.role)) return;
       state.role = button.dataset.role;
       restorePlayerRankingHoldIfNeeded();
       history.replaceState(null, "", `?view=${state.role}`);
@@ -122,7 +126,7 @@
     }
     const needsCountdownRefresh =
       [Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase) &&
-      (state.role === "screen" || state.role === "player");
+      (state.role === "screen" || (state.role === "player" && !isEditingPlayerText()));
     const stage = Engine.getCurrentStage(state.room);
     const revealPlaybackIncomplete =
       stage &&
@@ -135,6 +139,7 @@
       Boolean(revealPlaybackIncomplete) &&
       ((state.role === "screen" && state.room.phase === Engine.PHASES.REVEAL) || state.role === "player");
     if (isRemoteMode()) maybeFetchRemoteAfterDeadline();
+    maybeAutoHostTally();
     if (needsRevealRefresh || revealJustCompleted) checkRevealCompletionRemoteState();
     if (changed || needsCountdownRefresh || needsRevealRefresh || revealJustCompleted) render();
   }
@@ -241,20 +246,8 @@
     if (state.busyMessage) return;
     if (action === "host-action") {
       const hostAction = button.dataset.hostAction;
-      const baseVersion = Number(state.room.roomVersion || 0);
       if (isRemoteMode() && hostAction === "tally") {
-        const localResult = Engine.advancePhase(state.room, "tally", "host");
-        if (!localResult.ok) return showToast(localResult.error || "操作できません。");
-        const response = await withBusy("結果を保存中…", () => apiPost("/api/host/commit-result", {
-          hostName: "host",
-          baseVersion,
-          room: localResult.room,
-        }));
-        const result = normalizeMutationResponse(response);
-        if (!result.ok) return showToast(result.error || "操作できません。");
-        state.room = result.room;
-        saveRoom("host.commit-result", "host");
-        render();
+        await commitHostTally("結果を保存中…");
         return;
       }
       const result = await runMutation(
@@ -394,6 +387,7 @@
     document.body.dataset.role = state.role;
     [...document.querySelectorAll("[data-role]")].forEach((button) => {
       button.classList.toggle("is-active", button.dataset.role === state.role);
+      button.disabled = isRoleBlocked(button.dataset.role);
     });
     const views = {
       player: renderPlayerView,
@@ -407,6 +401,10 @@
       ${views[state.role] ? views[state.role]() : renderPlayerView()}
       ${state.busyMessage ? `<div class="loading-overlay" role="status" aria-live="polite"><div class="loading-box"><span></span><strong>${escapeHtml(state.busyMessage)}</strong></div></div>` : ""}
     `;
+  }
+
+  function isRoleBlocked(role) {
+    return PLAYER_ENTRY_LOCKED && (role === "host" || role === "screen");
   }
 
   function renderPlayerView() {
@@ -486,6 +484,7 @@
     const predictionEvents = Engine.getPredictionEvents(stage);
     return `
       <form id="ticketForm" class="panel ticket-grid">
+        ${renderPlayerInlineCountdown()}
         <label>乗車階
           <input name="boardFloor" type="number" min="1" max="${stage.params.N}" value="${ticket && !ticket.abstained ? ticket.boardFloor : 1}" required>
         </label>
@@ -499,6 +498,16 @@
         </div>
       </form>
     `;
+  }
+
+  function renderPlayerInlineCountdown() {
+    if (state.room.phase === Engine.PHASES.COUNTDOWN && !isRemoteMoving()) {
+      return `<div class="inline-countdown"><span>締切まで</span><strong>${countdownSeconds()}秒</strong></div>`;
+    }
+    if (isRemoteMoving() || state.room.phase === Engine.PHASES.TALLYING) {
+      return `<div class="inline-countdown"><span>移動中…</span><strong>${movingSeconds()}秒</strong></div>`;
+    }
+    return "";
   }
 
   function renderPredictionInput(event, index, ticket) {
@@ -1031,10 +1040,10 @@
   function renderStageSummary(stage) {
     return `
       <div class="stage-summary">
-        <div><span>総階数</span><strong>${stage.params.N}</strong></div>
-        <div><span>定員</span><strong>${stage.params.X}</strong></div>
-        <div><span>上昇報酬</span><strong>${stage.params.P}</strong></div>
-        <div><span>運賃</span><strong>${stage.params.Q}</strong></div>
+        <div class="param-n"><span>総階数</span><strong>${stage.params.N}</strong></div>
+        <div class="param-x"><span>定員</span><strong>${stage.params.X}</strong></div>
+        <div class="param-p"><span>上昇報酬</span><strong>${stage.params.P}</strong></div>
+        <div class="param-q"><span>運賃</span><strong>${stage.params.Q}</strong></div>
         <div class="event-list">
           ${(stage.events || []).map((event) => `<span>${eventLabel(event)}</span>`).join("") || `<span>イベントなし</span>`}
         </div>
@@ -1302,7 +1311,7 @@
     if (state.revealCompletionCheckedFor === checkKey) return;
     state.revealCompletionCheckedFor = checkKey;
     state.lastRevealPollAt = Date.now();
-    refreshRemoteState({ revealOnly: true });
+    refreshRemoteState({ revealOnly: true, full: true });
   }
 
   async function refreshRemoteState(options = {}) {
@@ -1359,7 +1368,7 @@
 
   function shouldPollRemoteState() {
     if (!isRemoteMode() || !state.room) return false;
-    if (state.role === "player") return Boolean(state.playerUuid) && state.room.phase === Engine.PHASES.VOTING && !isPlayerRankingHeld();
+    if (state.role === "player") return Boolean(state.playerUuid) && state.room.phase === Engine.PHASES.VOTING && !isPlayerRankingHeld() && !isEditingPlayerText();
     if (state.role === "host") return Boolean(state.hostAuthed && state.hostToken) && [Engine.PHASES.LOBBY, Engine.PHASES.VOTING].includes(state.room.phase);
     if (state.role === "screen") return !state.screenLocalSync && Boolean(state.screenReady || state.room.phase !== Engine.PHASES.LOBBY);
     return false;
@@ -1373,6 +1382,52 @@
     if (Date.now() < state.nextRemoteFetchAt) return;
     state.nextRemoteFetchAt = Date.now() + 10000;
     refreshRemoteState({ force: true });
+  }
+
+  async function maybeAutoHostTally() {
+    if (!isRemoteMode() || state.role !== "host" || !state.hostAuthed || !state.hostToken) return;
+    if (state.busyMessage || state.syncing || !canTally()) return;
+    const stage = Engine.getCurrentStage(state.room);
+    if (!stage) return;
+    const key = `${state.room.gameId}:${stage.stageId}:${state.room.countdownEndsAt || ""}:${state.room.tallyingEndsAt || ""}`;
+    if (state.autoTallyKey === key) return;
+    state.autoTallyKey = key;
+    await commitHostTally("自動集計中…");
+  }
+
+  async function commitHostTally(message) {
+    try {
+      const baseVersion = Number(state.room.roomVersion || 0);
+      const localResult = Engine.advancePhase(state.room, "tally", "host");
+      if (!localResult.ok) {
+        showToast(localResult.error || "操作できません。");
+        return false;
+      }
+      const response = await withBusy(message || "結果を保存中…", () => apiPost("/api/host/commit-result", {
+        hostName: "host",
+        baseVersion,
+        room: localResult.room,
+      }));
+      const result = normalizeMutationResponse(response);
+      if (!result.ok) {
+        showToast(result.error || "操作できません。");
+        return false;
+      }
+      state.room = result.room;
+      saveRoom("host.commit-result", "host");
+      render();
+      return true;
+    } catch (error) {
+      logClient("host.tally.error", error.message);
+      showToast("集計の通信に失敗しました。");
+      return false;
+    }
+  }
+
+  function isEditingPlayerText() {
+    if (state.role !== "player") return false;
+    const element = document.activeElement;
+    return Boolean(element && ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName));
   }
 
   async function restoreRemotePlayer() {

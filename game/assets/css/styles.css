@@ -181,6 +181,42 @@ code {
   padding: 9px 12px;
 }
 
+.stage-summary > .param-n {
+  background: #e8f1ff;
+  border-color: #b9d3ff;
+}
+
+.stage-summary > .param-x {
+  background: #ffecec;
+  border-color: #ffc7c7;
+}
+
+.stage-summary > .param-p {
+  background: #e9f8ee;
+  border-color: #bfe8cd;
+}
+
+.stage-summary > .param-q {
+  background: #fff7d6;
+  border-color: #f2dd8a;
+}
+
+.inline-countdown {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #f2dd8a;
+  border-radius: 8px;
+  background: #fff7d6;
+  padding: 12px 14px;
+  font-weight: 800;
+}
+
+.inline-countdown strong {
+  font-size: 22px;
+}
+
 .panel {
   border: 1px solid var(--line);
   border-radius: 8px;
