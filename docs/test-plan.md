@@ -70,11 +70,14 @@ Apps Script上で以下を確認する。
 2. `config` シートの `hostPassword` を本番値へ変更する。
 3. `getClientConfigSnippet()` が、デプロイURLとデプロイIDを含む `config.js` 内容を返す。
 4. `/api/host/auth` で `hostToken` を取得でき、`hostToken` なしの `/api/host/*` が拒否される。
-5. `doPost` に `/api/player/join` 相当のpayloadを渡して参加登録できる。
-6. `doPost` に `/api/ticket/submit` 相当のpayloadを渡して投票できる。
-7. ホスト進行APIで集計後、`current_game` のチャンクJSONと `players` シートが更新される。
-8. 最終結果後、`save_data`、`stage_results`、`stage_settings`、`game_history` が更新される。
-9. UUID復元で、現在ゲーム外の過去UUIDから名前とSkill履歴を復元できる。
+5. `hostPassword` がSpreadsheet上で数値セルになっていても、同じ数字の入力でHost認証できる。
+6. `doPost` に `/api/player/join` 相当のpayloadを渡して参加登録できる。
+7. `doPost` に `/api/ticket/submit` 相当のpayloadを渡して投票できる。
+8. ホスト進行APIで集計後、`current_game` のチャンクJSONと `players` シートが更新される。
+9. 最終結果後、`save_data`、`stage_results`、`stage_settings`、`game_history` が更新される。
+10. UUID復元で、現在ゲーム外の過去UUIDから名前とSkill履歴を復元できる。
+11. 参加登録前Player画面と未認証Host画面で定期ポーリングが発生しない。
+12. Apps Script実行ログにpath、role、uuid、処理時間、エラー種別がJSONで残る。
 
 ## 残テスト
 

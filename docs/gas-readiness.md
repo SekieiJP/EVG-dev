@@ -15,6 +15,9 @@
 - 参加/復元時に、現在ルーム外のUUIDを `players` または履歴シートから復元できる。
 - Player向け状態は他人のチケットと発表前結果を隠し、Screen向け状態は投影に必要な全体情報を返す。
 - クライアントはGASの `serverTime` から時刻差分を保持し、カウントダウンと結果発表に使う。
+- 通常APIリクエストでは `setupElevatorGameSheets()` を実行せず、未セットアップ時は `setup_required` を返す。
+- `doGet`/`doPost` は、path、role、uuid、処理時間、成功/失敗をJSONで `console.log` に出力する。
+- クライアントは未登録Player・未認証Hostではポーリングせず、通常ポーリング間隔を15秒にする。
 - GASロジックテストで、認証、チャンク保存、gameId連番、公開範囲、12指標保存を確認する。
 
 ## デプロイ前チェック
@@ -29,6 +32,9 @@
 
 - 実GAS Web App URLで `text/plain` POST と `?path=` ルーティングが通ること。
 - Host認証後、`hostToken` なしのホストmutationが拒否され、認証済み操作だけ成功すること。
+- `config` シートの `hostPassword` が数値セルでもHost認証できること。
+- 参加登録前Player画面と未認証Host画面で定期ポーリングが発生しないこと。
+- Apps Script実行ログに各API呼び出しのJSONログが残ること。
 - Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
 - 終了後に `save_data`, `stage_results`, `players`, `game_history`, `stage_settings` が更新されること。
 - UUID復元で過去SkillとStageSkill履歴が復元されること。

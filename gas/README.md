@@ -18,6 +18,8 @@ Google Apps Script のコード・設定を格納します。
    - Access: `ANYONE`
 6. Apps Scriptで `getClientConfigSnippet()` を実行すると、デプロイURLとデプロイID入りの `game/assets/js/config.js` 内容を確認できます。
 
+通常APIリクエストでは `setupElevatorGameSheets()` を自動実行しません。未セットアップ時は `setup_required` を返します。初期化処理をポーリングごとに走らせないため、セットアップは必ず手動で一度実行してください。
+
 ## config シート
 
 | key | 用途 |
@@ -27,6 +29,8 @@ Google Apps Script のコード・設定を格納します。
 | `hostSessionMinutes` | `/api/host/auth` が返す `hostToken` の有効時間。 |
 | `pollCacheSeconds` | ポーリングキャッシュ用の設定値。現状は設定作成までで、細かいキャッシュ制御は今後の負荷試験で調整します。 |
 | `webAppUrl` | デプロイ済みWeb App URL。既定値は `https://script.google.com/macros/s/AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO/exec`。 |
+
+`hostPassword` はSpreadsheet上で数値として保存されても認証できるよう、GAS側で文字列化して比較します。
 
 ## 保存方式
 
@@ -67,3 +71,9 @@ Google Apps Script のコード・設定を格納します。
 GASのWeb App環境で `pathInfo` が取れない場合は、`?path=/api/room/state` のように `path` パラメータでもルーティングできます。
 
 `/api/host/auth` 以外の `/api/host/*` は、`apiKey` と `hostToken` が必要です。`hostToken` は `/api/host/auth` のレスポンスで取得します。
+
+## ログとポーリング
+
+- `doGet`/`doPost` は、path、role、uuid、処理時間、成功/失敗をJSONで `console.log` に出力します。
+- 静的クライアントの通常ポーリング間隔は15秒です。
+- 未登録Playerと未認証Hostは状態ポーリングを行いません。参加済みPlayer、認証済みHost、表示開始済みScreenだけが状態取得します。

@@ -5,13 +5,13 @@
       GAS_API_BASE_URL: "",
       GAS_API_KEY: "",
       USE_GAS_API: false,
-      POLL_INTERVAL_MS: 3000,
+      POLL_INTERVAL_MS: 15000,
     },
     window.EVG_BUILD_CONFIG || {}
   );
   const QUERY = new URLSearchParams(location.search);
   const TEST_SLOT = String(QUERY.get("testSlot") || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
-  const REMOTE_REVEAL_POLL_INTERVAL_MS = 7000;
+  const REMOTE_REVEAL_POLL_INTERVAL_MS = 15000;
   const STORAGE_KEYS = {
     room: "evg.room.v1",
     playerUuid: "evg.playerUuid.v1",
@@ -46,9 +46,7 @@
     render();
     setInterval(tick, 1000);
     if (isRemoteMode()) {
-      restoreRemotePlayer();
-      refreshRemoteState();
-      setInterval(pollRemoteState, Math.max(1500, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 3000));
+      startRemoteSync();
     }
     window.addEventListener("storage", (event) => {
       if (!isRemoteMode() && event.key === STORAGE_KEYS.room) {
@@ -176,6 +174,7 @@
       }
       state.hostAuthed = true;
       localStorage.setItem(STORAGE_KEYS.hostAuthed, "true");
+      if (isRemoteMode()) await refreshRemoteState({ force: true });
       render();
     }
     if (form.id === "renameForm") {
@@ -1197,6 +1196,7 @@
 
   function pollRemoteState() {
     if (!isRemoteMode() || !state.room) return;
+    if (!shouldPollRemoteState()) return;
     if (isPlayerRankingHeld()) return;
     if (state.room.phase === Engine.PHASES.REVEAL) {
       if (state.role !== "screen" && state.role !== "player") return;
@@ -1224,6 +1224,7 @@
 
   async function refreshRemoteState(options = {}) {
     if (!isRemoteMode() || state.syncing) return;
+    if (!options.force && !shouldPollRemoteState()) return;
     if (!options.force && isPlayerRankingHeld()) return;
     try {
       state.syncing = true;
@@ -1260,6 +1261,20 @@
 
   function getRoomCurrentStage(room) {
     return room && room.config && room.config.stages ? room.config.stages[room.currentStageIndex] || null : null;
+  }
+
+  async function startRemoteSync() {
+    await restoreRemotePlayer();
+    if (shouldPollRemoteState()) await refreshRemoteState({ force: true });
+    setInterval(pollRemoteState, Math.max(10000, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 15000));
+  }
+
+  function shouldPollRemoteState() {
+    if (!isRemoteMode() || !state.room) return false;
+    if (state.role === "player") return Boolean(state.playerUuid) && !isPlayerRankingHeld();
+    if (state.role === "host") return Boolean(state.hostAuthed && state.hostToken);
+    if (state.role === "screen") return Boolean(state.screenReady || state.room.phase !== Engine.PHASES.LOBBY);
+    return false;
   }
 
   async function restoreRemotePlayer() {

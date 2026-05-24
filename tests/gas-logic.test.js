@@ -237,8 +237,10 @@ run("GAS import config can preserve players for the next game", () => {
 
 run("GAS auth helpers reject wrong API key and expired host token", () => {
   const gas = loadGas();
+  const deploymentId = "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO";
   assert.strictEqual(gas.verifyApiKeyValue_({ apiKey: "wrong" }, "secret").ok, false);
   assert.strictEqual(gas.verifyApiKeyValue_({ apiKey: "secret" }, "secret").ok, true);
+  assert.strictEqual(gas.verifyApiKeyValue_({ apiKey: deploymentId }, "old-sheet-value").ok, true);
   assert.strictEqual(gas.verifyApiKeyValue_({ apiKey: "wrong" }, "").ok, true);
   gas.storeHostTokenForTest_("host-token:expired", new Date(Date.now() - 1000).toISOString());
   assert.strictEqual(gas.verifyHostToken_("host-token:expired").ok, false);
@@ -303,4 +305,5 @@ run("GAS client config snippet contains deployed URL and deployment id", () => {
   assert.match(snippet, /AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO/);
   assert.match(snippet, /GAS_API_KEY: "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO"/);
   assert.match(snippet, /USE_GAS_API: true/);
+  assert.match(snippet, /POLL_INTERVAL_MS: 15000/);
 });

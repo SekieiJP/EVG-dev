@@ -127,30 +127,65 @@ function setupElevatorGameSheets() {
   }
 }
 
+function ensureRuntimeReady_() {
+  const ss = SpreadsheetApp.getActive();
+  const missing = Object.keys(EVG_SHEETS).map(function(key) { return EVG_SHEETS[key]; })
+    .filter(function(sheetName) { return !ss.getSheetByName(sheetName); });
+  if (missing.length) {
+    return error_('setup_required', 'setupElevatorGameSheets()を先に実行してください: ' + missing.join(', '), 500);
+  }
+  return { ok: true };
+}
+
+function logRequest_(startedAt, path, method, payload, response) {
+  const durationMs = Date.now() - startedAt.getTime();
+  const log = {
+    at: startedAt.toISOString(),
+    durationMs: durationMs,
+    path: path,
+    method: method,
+    role: payload && payload.role ? payload.role : '',
+    uuid: payload && payload.uuid ? payload.uuid : '',
+    ok: response ? response.ok !== false : false,
+    error: response && response.ok === false ? (response.code || response.error || response.message || '') : '',
+  };
+  console.log(JSON.stringify(log));
+}
+
 function route_(e, method) {
   const startedAt = new Date();
   const path = normalizePath_(e);
   const payload = parsePayload_(e);
+  let response = null;
   try {
-    setupElevatorGameSheets();
+    const runtime = ensureRuntimeReady_();
+    if (!runtime.ok) {
+      response = runtime;
+      return json_(response);
+    }
     const apiAuth = verifyApiKey_(payload);
-    if (!apiAuth.ok) return json_(apiAuth);
-    let response;
+    if (!apiAuth.ok) {
+      response = apiAuth;
+      return json_(response);
+    }
     if (method === 'GET' && path === '/api/time') response = { serverTime: new Date().toISOString() };
-    else if (method === 'GET' && (path === '/api/room/state' || path === '/api/screen/state')) response = publicRoom_(getRoom_(), payload);
+    else if (method === 'GET' && (path === '/api/room/state' || path === '/api/screen/state')) response = publicRoom_(getRoom_() || createInitialRoom_(EVG_DEFAULT_CONFIG), payload);
     else if (method === 'GET' && path === '/api/history/games') response = getHistoryGames_();
     else if (method === 'GET' && path.indexOf('/api/history/player/') === 0) response = getPlayerHistory_(path.split('/').pop(), payload.uuid);
     else if (method === 'POST') response = mutateRoute_(path, payload);
     else response = error_('not_found', 'Unknown endpoint: ' + path, 404);
-    console.log(JSON.stringify({ at: startedAt.toISOString(), path, method, uuid: payload.uuid || '', ok: response.ok !== false }));
     return json_(response);
   } catch (err) {
     console.error(err && err.stack ? err.stack : err);
-    return json_(error_('server_error', String(err), 500));
+    response = error_('server_error', String(err), 500);
+    return json_(response);
+  } finally {
+    logRequest_(startedAt, path, method, payload, response);
   }
 }
 
 function mutateRoute_(path, payload) {
+  if (path === '/api/host/auth') return authHost_(payload.password);
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
@@ -162,7 +197,6 @@ function mutateRoute_(path, payload) {
     else if (path === '/api/player/proceed-next') result = acknowledgePlayerNext_(room, payload.uuid);
     else if (path === '/api/ticket/submit') result = submitTicket_(room, payload.uuid, payload.ticket || payload);
     else if (path === '/api/ticket/abstain') result = abstain_(room, payload.uuid);
-    else if (path === '/api/host/auth') return authHost_(payload.password);
     else if (path.indexOf('/api/host/') === 0) {
       const hostAuth = verifyHostToken_(payload.hostToken);
       if (!hostAuth.ok) return hostAuth;
@@ -787,7 +821,7 @@ function updateConfig_(room, config) {
 }
 
 function authHost_(password) {
-  if (password !== getConfigValue_('hostPassword', 'host')) return error_('auth', 'パスワードが違います。', 403);
+  if (String(password || '').trim() !== String(getConfigValue_('hostPassword', 'host')).trim()) return error_('auth', 'パスワードが違います。', 403);
   const issued = issueHostToken_();
   return { ok: true, hostToken: issued.token, expiresAt: issued.expiresAt, serverTime: new Date().toISOString() };
 }
@@ -957,6 +991,8 @@ function ensureConfigDefaults_(sheet) {
   const apiKeyRow = rows.find(function(row) { return row.key === 'apiKey'; });
   if (apiKeyRow && !apiKeyRow.value) {
     setConfigValue_('apiKey', defaults.apiKey);
+  } else if (apiKeyRow && String(apiKeyRow.value).indexOf('evg-') === 0) {
+    setConfigValue_('apiKey', defaults.apiKey);
   }
 }
 
@@ -976,6 +1012,7 @@ function verifyApiKey_(payload) {
 }
 
 function verifyApiKeyValue_(payload, configured) {
+  if (String(payload.apiKey || '') === EVG_DEPLOYMENT_ID) return { ok: true };
   if (!configured) return { ok: true };
   if (String(payload.apiKey || '') === String(configured)) return { ok: true };
   return error_('auth', 'APIキーが一致しません。', 403);
@@ -1196,7 +1233,7 @@ function setConfigValue_(key, value) {
 function getClientConfigSnippet() {
   setupElevatorGameSheets();
   const url = getConfigValue_('webAppUrl', EVG_DEPLOYED_WEB_APP_URL);
-  const apiKey = getConfigValue_('apiKey', '');
+  const apiKey = EVG_DEPLOYMENT_ID;
   return buildClientConfigSnippet_(url, apiKey);
 }
 
@@ -1207,7 +1244,7 @@ function buildClientConfigSnippet_(url, apiKey) {
     '    GAS_API_BASE_URL: "' + url + '",',
     '    GAS_API_KEY: "' + apiKey + '",',
     '    USE_GAS_API: true,',
-    '    POLL_INTERVAL_MS: 3000,',
+    '    POLL_INTERVAL_MS: 15000,',
     '  };',
     '})(typeof self !== "undefined" ? self : this);',
   ].join('\n');
