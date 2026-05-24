@@ -23,6 +23,7 @@
     screenReady: "evg.screenReady.v1",
     screenLocalSync: "evg.screenLocalSync.v1",
     personalHistoryCache: "evg.personalHistoryCache.v1",
+    playerRankingHold: "evg.playerRankingHold.v1",
   };
   const LOCAL_SYNC_CHANNEL = "evg.local-room-sync.v1";
   const state = {
@@ -160,6 +161,7 @@
       state.room = result.room;
       state.playerUuid = result.player.uuid;
       localStorage.setItem(playerUuidStorageKey(), state.playerUuid);
+      clearPlayerRankingHold();
       saveRoom("join", result.player.uuid);
       showToast("参加しました。");
       render();
@@ -233,6 +235,7 @@
       }
       state.playerUuid = uuid;
       localStorage.setItem(playerUuidStorageKey(), uuid);
+      clearPlayerRankingHold();
       showToast("UUIDを設定しました。");
       render();
     }
@@ -278,12 +281,17 @@
       render();
       setTimeout(render, 5000);
       if (state.room.phase !== Engine.PHASES.RANKING) return showToast("ホストの操作待ちです。");
-      state.playerRankingHold = null;
+      const heldRoom = state.playerRankingHold ? Engine.deepClone(state.playerRankingHold.room) : null;
       const beforePhase = state.room.phase;
       const beforeVersion = state.room.roomVersion || 0;
       if (isRemoteMode()) await refreshRemoteState({ force: true, showLoading: true });
       else state.room = loadRoom();
-      if (state.room.phase === beforePhase && (state.room.roomVersion || 0) === beforeVersion) showToast("ホストの操作待ちです。");
+      if (state.room.phase === beforePhase && (state.room.roomVersion || 0) === beforeVersion) {
+        if (heldRoom) state.room = heldRoom;
+        showToast("ホストの操作待ちです。");
+      } else {
+        clearPlayerRankingHold();
+      }
       render();
     }
     if (action === "screen-ready") {
@@ -322,6 +330,7 @@
           state.room = nextRoom;
         }
         saveRoom("host.config.import", "host");
+        clearPlayerRankingHold();
         showToast(state.room.players.length ? "参加者を保持して次のゲームを読み込みました。" : "設定を読み込みました。");
         render();
       } catch (error) {
@@ -861,9 +870,18 @@
   function holdPlayerRanking() {
     if (state.role !== "player" || !state.room || state.room.phase !== Engine.PHASES.RANKING) return;
     const stage = Engine.getCurrentStage(state.room);
-    const key = `${state.room.gameId}:${stage ? stage.stageId : state.room.currentStageIndex}`;
+    const key = playerRankingHoldKey(state.room, stage);
     if (!state.playerRankingHold || state.playerRankingHold.key !== key) {
-      state.playerRankingHold = { key, room: Engine.deepClone(state.room) };
+      state.playerRankingHold = {
+        key,
+        uuid: state.playerUuid,
+        gameId: state.room.gameId,
+        stageId: stage ? stage.stageId : "",
+        currentStageIndex: state.room.currentStageIndex || 0,
+        savedAt: new Date().toISOString(),
+        room: Engine.deepClone(state.room),
+      };
+      persistPlayerRankingHold();
     }
   }
 
@@ -871,19 +889,56 @@
     return Boolean(
       state.playerRankingHold &&
         state.playerRankingHold.room &&
-        state.playerRankingHold.room.phase === Engine.PHASES.RANKING
+        state.playerRankingHold.room.phase === Engine.PHASES.RANKING &&
+        state.playerRankingHold.uuid === state.playerUuid
     );
   }
 
   function restorePlayerRankingHoldIfNeeded() {
+    loadPlayerRankingHold();
     if (state.role !== "player" || !hasPlayerRankingHold()) return;
-    if (!state.room || state.room.phase !== Engine.PHASES.RANKING) {
+    if (shouldDiscardPlayerRankingHold()) {
+      clearPlayerRankingHold();
+      return;
+    }
+    if (!state.room || state.room.phase !== Engine.PHASES.RANKING || state.room.gameId !== state.playerRankingHold.gameId) {
       state.room = Engine.deepClone(state.playerRankingHold.room);
     }
   }
 
   function isPlayerRankingHeld() {
     return state.role === "player" && hasPlayerRankingHold();
+  }
+
+  function playerRankingHoldKey(room, stage) {
+    return [state.playerUuid || "", room.gameId || "", stage ? stage.stageId : "", room.currentStageIndex || 0].join(":");
+  }
+
+  function persistPlayerRankingHold() {
+    if (!state.playerRankingHold) return;
+    localStorage.setItem(STORAGE_KEYS.playerRankingHold, JSON.stringify(state.playerRankingHold));
+  }
+
+  function loadPlayerRankingHold() {
+    if (state.playerRankingHold || state.role !== "player" || !state.playerUuid) return;
+    const saved = loadJson(STORAGE_KEYS.playerRankingHold, null);
+    if (saved && saved.uuid === state.playerUuid && saved.room && saved.room.phase === Engine.PHASES.RANKING) {
+      state.playerRankingHold = saved;
+    }
+  }
+
+  function shouldDiscardPlayerRankingHold() {
+    if (!state.playerRankingHold || !state.playerRankingHold.room) return true;
+    if (state.playerRankingHold.uuid !== state.playerUuid) return true;
+    if (state.playerRankingHold.room.phase === Engine.PHASES.FINAL) return true;
+    const heldStage = Engine.getCurrentStage(state.playerRankingHold.room);
+    const expectedKey = playerRankingHoldKey(state.playerRankingHold.room, heldStage);
+    return state.playerRankingHold.key !== expectedKey;
+  }
+
+  function clearPlayerRankingHold() {
+    state.playerRankingHold = null;
+    localStorage.removeItem(STORAGE_KEYS.playerRankingHold);
   }
 
   function buildRevealScoreRows(stage, result, currentFloor) {
@@ -1328,6 +1383,7 @@
       if (response.ok && response.unchanged) return;
       if (response.ok && response.room) {
         if (options.revealOnly && !shouldApplyRevealRemoteRoom(state.room, response.room)) return;
+        if (!options.force && isPlayerRankingHeld()) return;
         state.room = response.room;
         localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
         broadcastLocalRoom();
