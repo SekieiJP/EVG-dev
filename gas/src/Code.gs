@@ -8,6 +8,11 @@ const EVG_SHEETS = {
   gameHistory: 'game_history',
 };
 
+const EVG_CURRENT_GAME_CHUNK_SIZE = 45000;
+const EVG_HOST_TOKEN_PREFIX = 'host-token:';
+const EVG_DEFAULT_HOST_SESSION_MINUTES = 240;
+const EVG_DEPLOYED_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO/exec';
+
 const EVG_PHASES = {
   LOBBY: 'lobby',
   STAGE_INTRO: 'stage_intro',
@@ -110,16 +115,12 @@ function setupElevatorGameSheets() {
   const ss = SpreadsheetApp.getActive();
   ensureSheet_(ss, EVG_SHEETS.config, ['key', 'value']);
   ensureSheet_(ss, EVG_SHEETS.saveData, ['uuid', 'gameId', 'nameSnapshot', 'summaryJson', 'createdAt']);
-  ensureSheet_(ss, EVG_SHEETS.stageResults, ['uuid', 'gameId', 'stageId', 'resultJson', 'createdAt']);
+  ensureSheet_(ss, EVG_SHEETS.stageResults, ['uuid', 'gameId', 'stageId', 'stageSkill', 'score', 'status', 'resultJson', 'createdAt']);
   ensureSheet_(ss, EVG_SHEETS.players, ['uuid', 'name', 'skill', 'stageSkillHistoryJson', 'updatedAt']);
-  ensureSheet_(ss, EVG_SHEETS.currentGame, ['key', 'json', 'updatedAt']);
+  ensureSheet_(ss, EVG_SHEETS.currentGame, ['key', 'chunkIndex', 'json', 'updatedAt']);
   ensureSheet_(ss, EVG_SHEETS.stageSettings, ['gameId', 'stageId', 'stageJson', 'createdAt']);
   ensureSheet_(ss, EVG_SHEETS.gameHistory, ['gameId', 'summaryJson', 'createdAt']);
-  const config = ss.getSheetByName(EVG_SHEETS.config);
-  if (config.getLastRow() < 2) {
-    config.appendRow(['hostPassword', 'host']);
-    config.appendRow(['pollCacheSeconds', '2']);
-  }
+  ensureConfigDefaults_(ss.getSheetByName(EVG_SHEETS.config));
   if (!getRoom_()) {
     saveRoom_(createInitialRoom_(EVG_DEFAULT_CONFIG));
   }
@@ -131,9 +132,11 @@ function route_(e, method) {
   const payload = parsePayload_(e);
   try {
     setupElevatorGameSheets();
+    const apiAuth = verifyApiKey_(payload);
+    if (!apiAuth.ok) return json_(apiAuth);
     let response;
     if (method === 'GET' && path === '/api/time') response = { serverTime: new Date().toISOString() };
-    else if (method === 'GET' && (path === '/api/room/state' || path === '/api/screen/state')) response = publicRoom_(getRoom_(), payload.uuid);
+    else if (method === 'GET' && (path === '/api/room/state' || path === '/api/screen/state')) response = publicRoom_(getRoom_(), payload);
     else if (method === 'GET' && path === '/api/history/games') response = getHistoryGames_();
     else if (method === 'GET' && path.indexOf('/api/history/player/') === 0) response = getPlayerHistory_(path.split('/').pop(), payload.uuid);
     else if (method === 'POST') response = mutateRoute_(path, payload);
@@ -159,23 +162,29 @@ function mutateRoute_(path, payload) {
     else if (path === '/api/ticket/submit') result = submitTicket_(room, payload.uuid, payload.ticket || payload);
     else if (path === '/api/ticket/abstain') result = abstain_(room, payload.uuid);
     else if (path === '/api/host/auth') return authHost_(payload.password);
-    else if (path === '/api/host/start-stage') result = advancePhase_(room, 'start-stage', payload.hostName || 'host');
-    else if (path === '/api/host/open-voting') result = advancePhase_(room, 'open-voting', payload.hostName || 'host');
-    else if (path === '/api/host/close-voting') result = advancePhase_(room, 'close-voting', payload.hostName || 'host');
-    else if (path === '/api/host/reveal-result') result = tallyCurrentStage_(room, payload.hostName || 'host');
-    else if (path === '/api/host/show-ranking') result = advancePhase_(room, 'show-ranking', payload.hostName || 'host');
-    else if (path === '/api/host/skip-animation') result = advancePhase_(room, 'skip-animation', payload.hostName || 'host');
-    else if (path === '/api/host/advance') result = advancePhase_(room, 'next-stage', payload.hostName || 'host');
-    else if (path === '/api/host/recalculate') result = recalculate_(room);
-    else if (path === '/api/host/import-config') result = importConfig_(room, payload.config, payload.preservePlayers !== false);
-    else if (path === '/api/host/update-config') result = updateConfig_(room, payload.config);
+    else if (path.indexOf('/api/host/') === 0) {
+      const hostAuth = verifyHostToken_(payload.hostToken);
+      if (!hostAuth.ok) return hostAuth;
+      if (path === '/api/host/start-stage') result = advancePhase_(room, 'start-stage', payload.hostName || 'host');
+      else if (path === '/api/host/open-voting') result = advancePhase_(room, 'open-voting', payload.hostName || 'host');
+      else if (path === '/api/host/close-voting') result = advancePhase_(room, 'close-voting', payload.hostName || 'host');
+      else if (path === '/api/host/reveal-result') result = tallyCurrentStage_(room, payload.hostName || 'host');
+      else if (path === '/api/host/show-ranking') result = advancePhase_(room, 'show-ranking', payload.hostName || 'host');
+      else if (path === '/api/host/skip-animation') result = advancePhase_(room, 'skip-animation', payload.hostName || 'host');
+      else if (path === '/api/host/advance') result = advancePhase_(room, 'next-stage', payload.hostName || 'host');
+      else if (path === '/api/host/recalculate') result = recalculate_(room);
+      else if (path === '/api/host/import-config') result = importConfig_(room, payload.config, payload.preservePlayers !== false);
+      else if (path === '/api/host/update-config') result = updateConfig_(room, payload.config);
+      else return error_('not_found', 'Unknown endpoint: ' + path, 404);
+    }
     else return error_('not_found', 'Unknown endpoint: ' + path, 404);
     if (result && result.room) {
       saveRoom_(result.room);
       syncPlayersSheet_(result.room);
+      syncStageSettingsSheet_(result.room);
       if (result.room.phase === EVG_PHASES.FINAL) persistGameHistory_(result.room);
     }
-    return Object.assign({}, result, { room: result && result.room ? publicRoom_(result.room, payload.uuid) : undefined });
+    return Object.assign({}, result, { room: result && result.room ? publicRoom_(result.room, payload) : undefined });
   } finally {
     lock.releaseLock();
   }
@@ -286,14 +295,15 @@ function registerPlayer_(room, name, uuid) {
     player.connected = true;
     player.lastSeenAt = new Date().toISOString();
   } else {
+    const saved = uuid ? findSavedPlayer_(uuid) : null;
     player = {
-      uuid: uuid || Utilities.getUuid(),
+      uuid: uuid || createUuid_(),
       name: cleanName,
-      joinedAt: new Date().toISOString(),
+      joinedAt: saved && saved.joinedAt ? saved.joinedAt : new Date().toISOString(),
       connected: true,
       lastSeenAt: new Date().toISOString(),
-      skill: 0,
-      stageSkillHistory: [],
+      skill: saved ? Number(saved.skill || 0) : 0,
+      stageSkillHistory: saved ? clone_(saved.stageSkillHistory || []) : [],
     };
     room.players.push(player);
     room.scores[player.uuid] = room.scores[player.uuid] || 0;
@@ -303,8 +313,23 @@ function registerPlayer_(room, name, uuid) {
 }
 
 function restorePlayer_(room, uuid) {
-  const player = room.players.find(function(item) { return item.uuid === uuid; });
-  if (!player) return error_('not_found', 'UUIDが見つかりません。', 404);
+  let player = room.players.find(function(item) { return item.uuid === uuid; });
+  if (!player) {
+    const saved = findSavedPlayer_(uuid);
+    if (!saved) return error_('not_found', 'UUIDが見つかりません。', 404);
+    player = {
+      uuid: saved.uuid,
+      name: saved.name,
+      joinedAt: saved.joinedAt || new Date().toISOString(),
+      connected: true,
+      lastSeenAt: new Date().toISOString(),
+      skill: Number(saved.skill || 0),
+      stageSkillHistory: clone_(saved.stageSkillHistory || []),
+      pendingName: null,
+    };
+    room.players.push(player);
+    room.scores[player.uuid] = room.scores[player.uuid] || 0;
+  }
   player.connected = true;
   player.lastSeenAt = new Date().toISOString();
   touchRoom_(room);
@@ -761,28 +786,44 @@ function updateConfig_(room, config) {
 }
 
 function authHost_(password) {
-  return { ok: password === getConfigValue_('hostPassword', 'host') };
+  if (password !== getConfigValue_('hostPassword', 'host')) return error_('auth', 'パスワードが違います。', 403);
+  const issued = issueHostToken_();
+  return { ok: true, hostToken: issued.token, expiresAt: issued.expiresAt, serverTime: new Date().toISOString() };
 }
 
-function publicRoom_(room, uuid) {
+function publicRoom_(room, payload) {
+  payload = payload || {};
+  const uuid = payload.uuid || '';
+  const role = payload.role || '';
+  const hostAuthed = role === 'host' && verifyHostToken_(payload.hostToken).ok;
+  const publicRoom = hostAuthed ? clone_(room) : sanitizeRoomForRole_(room, role, uuid);
   return {
     ok: true,
     serverTime: new Date().toISOString(),
-    room,
-    me: uuid ? room.players.find(function(player) { return player.uuid === uuid; }) || null : null,
+    room: publicRoom,
+    me: uuid ? (room.players.find(function(player) { return player.uuid === uuid; }) || null) : null,
   };
 }
 
 function getHistoryGames_() {
   const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.gameHistory);
-  return { ok: true, games: rowsAsObjects_(sheet) };
+  const games = rowsAsObjects_(sheet).map(function(row) {
+    const summary = parseJson_(row.summaryJson, {});
+    return Object.assign({ gameId: row.gameId, createdAt: row.createdAt }, summary);
+  });
+  return { ok: true, games, players: getPublicPlayers_() };
 }
 
 function getPlayerHistory_(targetUuid, requesterUuid) {
   if (targetUuid !== requesterUuid) return error_('forbidden', '自分自身の戦歴のみ取得できます。', 403);
-  const rows = rowsAsObjects_(SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.stageResults))
-    .filter(function(row) { return row.uuid === targetUuid; });
-  return { ok: true, stages: rows };
+  const ss = SpreadsheetApp.getActive();
+  const saves = rowsAsObjects_(ss.getSheetByName(EVG_SHEETS.saveData))
+    .filter(function(row) { return row.uuid === targetUuid; })
+    .map(function(row) { return Object.assign({}, row, { summary: parseJson_(row.summaryJson, {}) }); });
+  const stages = rowsAsObjects_(ss.getSheetByName(EVG_SHEETS.stageResults))
+    .filter(function(row) { return row.uuid === targetUuid; })
+    .map(function(row) { return Object.assign({}, row, { result: parseJson_(row.resultJson, {}) }); });
+  return { ok: true, games: saves, stages, summary: aggregatePlayerHistory_(targetUuid, saves, stages) };
 }
 
 function getCurrentStage_(room) {
@@ -793,8 +834,14 @@ function getRoom_() {
   const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.currentGame);
   if (!sheet || sheet.getLastRow() < 2) return null;
   const values = sheet.getDataRange().getValues();
+  const chunks = [];
   for (let i = 1; i < values.length; i += 1) {
-    if (values[i][0] === 'state') return JSON.parse(values[i][1]);
+    if (values[i][0] === 'state' && String(values[i][1] || '').charAt(0) === '{') return JSON.parse(values[i][1]);
+    if (values[i][0] === 'state') chunks.push({ index: Number(values[i][1] || 0), json: values[i][2] || '' });
+  }
+  if (chunks.length) {
+    chunks.sort(function(a, b) { return a.index - b.index; });
+    return JSON.parse(chunks.map(function(chunk) { return chunk.json; }).join(''));
   }
   return null;
 }
@@ -802,34 +849,82 @@ function getRoom_() {
 function saveRoom_(room) {
   const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.currentGame);
   const json = JSON.stringify(room);
-  if (sheet.getLastRow() < 2) sheet.appendRow(['state', json, new Date().toISOString()]);
-  else sheet.getRange(2, 1, 1, 3).setValues([['state', json, new Date().toISOString()]]);
+  const chunks = chunkString_(json, EVG_CURRENT_GAME_CHUNK_SIZE);
+  if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+  sheet.getRange(2, 1, chunks.length, 4).setValues(chunks.map(function(chunk, index) {
+    return ['state', index, chunk, new Date().toISOString()];
+  }));
 }
 
 function syncPlayersSheet_(room) {
   const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.players);
+  const byUuid = {};
+  rowsAsObjects_(sheet).forEach(function(row) {
+    if (row.uuid) byUuid[row.uuid] = {
+      uuid: row.uuid,
+      name: row.name,
+      skill: Number(row.skill || 0),
+      stageSkillHistory: parseJson_(row.stageSkillHistoryJson, []),
+      updatedAt: row.updatedAt,
+    };
+  });
+  (room.players || []).forEach(function(player) {
+    byUuid[player.uuid] = {
+      uuid: player.uuid,
+      name: player.name,
+      skill: Number(player.skill || 0),
+      stageSkillHistory: clone_(player.stageSkillHistory || []),
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  const rows = Object.keys(byUuid).sort().map(function(uuid) {
+    const player = byUuid[uuid];
+    return [player.uuid, player.name, player.skill || 0, JSON.stringify(player.stageSkillHistory || []), player.updatedAt || new Date().toISOString()];
+  });
   if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
-  if (!room.players.length) return;
-  sheet.getRange(2, 1, room.players.length, 5).setValues(room.players.map(function(player) {
-    return [player.uuid, player.name, player.skill || 0, JSON.stringify(player.stageSkillHistory || []), new Date().toISOString()];
-  }));
+  if (rows.length) sheet.getRange(2, 1, rows.length, 5).setValues(rows);
+}
+
+function syncStageSettingsSheet_(room) {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.stageSettings);
+  const existing = rowsAsObjects_(sheet).filter(function(row) { return row.gameId !== room.gameId; });
+  const rows = existing.map(function(row) { return [row.gameId, row.stageId, row.stageJson, row.createdAt]; });
+  (room.config.stages || []).forEach(function(stage) {
+    rows.push([room.gameId, stage.stageId, JSON.stringify(stage), new Date().toISOString()]);
+  });
+  if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+  if (rows.length) sheet.getRange(2, 1, rows.length, 4).setValues(rows);
 }
 
 function persistGameHistory_(room) {
   const history = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.gameHistory);
   const existing = rowsAsObjects_(history).some(function(row) { return row.gameId === room.gameId; });
   if (!existing) {
-    history.appendRow([room.gameId, JSON.stringify({ rankings: rankCumulative_(room), finishedAt: new Date().toISOString() }), new Date().toISOString()]);
+    history.appendRow([room.gameId, JSON.stringify(buildGameSummary_(room)), new Date().toISOString()]);
   }
   const saveData = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.saveData);
   const stageResults = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.stageResults);
   room.players.forEach(function(player) {
-    saveData.appendRow([player.uuid, room.gameId, player.name, JSON.stringify({ score: room.scores[player.uuid] || 0, skill: player.skill || 0 }), new Date().toISOString()]);
+    if (!saveDataRowExists_(player.uuid, room.gameId)) {
+      saveData.appendRow([player.uuid, room.gameId, player.name, JSON.stringify(buildPlayerGameSummary_(room, player)), new Date().toISOString()]);
+    }
   });
   Object.keys(room.stageResults).forEach(function(stageId) {
     const result = room.stageResults[stageId];
     Object.keys(result.players).forEach(function(uuid) {
-      stageResults.appendRow([uuid, room.gameId, stageId, JSON.stringify(result.players[uuid]), new Date().toISOString()]);
+      if (!stageResultRowExists_(uuid, room.gameId, stageId)) {
+        const playerResult = result.players[uuid];
+        stageResults.appendRow([
+          uuid,
+          room.gameId,
+          stageId,
+          playerResult.stageSkill === null || playerResult.stageSkill === undefined ? '' : playerResult.stageSkill,
+          playerResult.score || 0,
+          playerResult.status || '',
+          JSON.stringify(playerResult),
+          new Date().toISOString(),
+        ]);
+      }
     });
   });
 }
@@ -838,7 +933,30 @@ function ensureSheet_(ss, name, headers) {
   let sheet = ss.getSheetByName(name);
   if (!sheet) sheet = ss.insertSheet(name);
   if (sheet.getLastRow() === 0) sheet.appendRow(headers);
+  const width = Math.max(sheet.getLastColumn(), headers.length);
+  const currentHeaders = sheet.getRange(1, 1, 1, width).getValues()[0];
+  headers.forEach(function(header, index) {
+    if (currentHeaders[index] !== header) sheet.getRange(1, index + 1).setValue(header);
+  });
   return sheet;
+}
+
+function ensureConfigDefaults_(sheet) {
+  const defaults = {
+    apiKey: 'evg-' + createUuid_(),
+    hostPassword: 'host',
+    hostSessionMinutes: String(EVG_DEFAULT_HOST_SESSION_MINUTES),
+    pollCacheSeconds: '2',
+    webAppUrl: EVG_DEPLOYED_WEB_APP_URL,
+  };
+  const rows = rowsAsObjects_(sheet);
+  Object.keys(defaults).forEach(function(key) {
+    if (!rows.some(function(row) { return row.key === key; })) sheet.appendRow([key, defaults[key]]);
+  });
+  const apiKeyRow = rows.find(function(row) { return row.key === 'apiKey'; });
+  if (apiKeyRow && !apiKeyRow.value) {
+    setConfigValue_('apiKey', defaults.apiKey);
+  }
 }
 
 function rowsAsObjects_(sheet) {
@@ -852,6 +970,205 @@ function rowsAsObjects_(sheet) {
   });
 }
 
+function verifyApiKey_(payload) {
+  return verifyApiKeyValue_(payload, getConfigValue_('apiKey', ''));
+}
+
+function verifyApiKeyValue_(payload, configured) {
+  if (!configured) return { ok: true };
+  if (String(payload.apiKey || '') === String(configured)) return { ok: true };
+  return error_('auth', 'APIキーが一致しません。', 403);
+}
+
+function issueHostToken_() {
+  const minutes = clamp_(Number(getConfigValue_('hostSessionMinutes', EVG_DEFAULT_HOST_SESSION_MINUTES)), 1, 1440, EVG_DEFAULT_HOST_SESSION_MINUTES);
+  const expiresAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+  const token = EVG_HOST_TOKEN_PREFIX + createUuid_();
+  CacheService.getScriptCache().put(token, expiresAt, Math.min(minutes * 60, 21600));
+  return { token, expiresAt };
+}
+
+function verifyHostToken_(token) {
+  if (!token) return error_('auth', 'ホスト認証が必要です。', 403);
+  const cached = CacheService.getScriptCache().get(token);
+  if (!cached) return error_('auth', 'ホスト認証の有効期限が切れました。', 403);
+  if (new Date(cached).getTime() <= Date.now()) return error_('auth', 'ホスト認証の有効期限が切れました。', 403);
+  return { ok: true, expiresAt: cached };
+}
+
+function storeHostTokenForTest_(token, expiresAt) {
+  CacheService.getScriptCache().put(token, expiresAt, 60);
+  return token;
+}
+
+function sanitizeRoomForRole_(room, role, uuid) {
+  const copy = clone_(room);
+  if (role !== 'screen') {
+    copy.tickets = filterTicketsForPlayer_(copy.tickets || {}, uuid);
+  }
+  if (role === 'player' && uuid) {
+    copy.players = (copy.players || []).map(function(player) {
+      if (player.uuid === uuid) return player;
+      return { uuid: player.uuid, name: player.name, connected: player.connected !== false, skill: player.skill || 0 };
+    });
+  }
+  if (role === 'player' && !isCurrentRevealComplete_(copy)) {
+    const stage = getCurrentStage_(copy);
+    if (stage && copy.stageResults) delete copy.stageResults[stage.stageId];
+  }
+  return copy;
+}
+
+function filterTicketsForPlayer_(tickets, uuid) {
+  const filtered = {};
+  Object.keys(tickets || {}).forEach(function(stageId) {
+    filtered[stageId] = {};
+    if (uuid && tickets[stageId] && tickets[stageId][uuid]) filtered[stageId][uuid] = tickets[stageId][uuid];
+  });
+  return filtered;
+}
+
+function isCurrentRevealComplete_(room) {
+  if (room.phase !== EVG_PHASES.REVEAL && room.phase !== EVG_PHASES.RANKING) return true;
+  if (room.animationSkippedAt) return true;
+  if (!room.animationStartedAt) return true;
+  const stage = getCurrentStage_(room);
+  if (!stage) return true;
+  return Date.now() - new Date(room.animationStartedAt).getTime() >= getRevealDurationMs_(stage);
+}
+
+function getRevealDurationMs_(stage) {
+  return Math.max(12, Number(stage.params.N || 0) * 1.6) * 1000;
+}
+
+function getPublicPlayers_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.players);
+  return rowsAsObjects_(sheet).map(function(row) {
+    return { uuid: row.uuid, name: row.name, skill: Number(row.skill || 0) };
+  });
+}
+
+function findSavedPlayer_(uuid) {
+  if (!uuid || typeof SpreadsheetApp === 'undefined') return null;
+  const playersSheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.players);
+  const playerRow = rowsAsObjects_(playersSheet).find(function(row) { return row.uuid === uuid; });
+  if (playerRow) {
+    return {
+      uuid: playerRow.uuid,
+      name: playerRow.name,
+      skill: Number(playerRow.skill || 0),
+      stageSkillHistory: parseJson_(playerRow.stageSkillHistoryJson, []),
+    };
+  }
+  const stageRows = rowsAsObjects_(SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.stageResults))
+    .filter(function(row) { return row.uuid === uuid && row.stageSkill !== ''; });
+  const saveRows = rowsAsObjects_(SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.saveData))
+    .filter(function(row) { return row.uuid === uuid; });
+  if (!stageRows.length && !saveRows.length) return null;
+  const history = stageRows.map(function(row) { return Number(row.stageSkill || 0); }).filter(function(value) { return value > 0; });
+  const latestSave = saveRows[saveRows.length - 1] || {};
+  return {
+    uuid,
+    name: latestSave.nameSnapshot || uuid,
+    skill: currentSkill_(history),
+    stageSkillHistory: history,
+  };
+}
+
+function buildGameSummary_(room) {
+  return {
+    title: room.config && room.config.gameMeta ? room.config.gameMeta.title : room.gameId,
+    rankings: rankCumulative_(room),
+    scores: clone_(room.scores || {}),
+    finishedAt: new Date().toISOString(),
+    stageCount: Object.keys(room.stageResults || {}).length,
+  };
+}
+
+function buildPlayerGameSummary_(room, player) {
+  const stages = Object.keys(room.stageResults || {}).map(function(stageId) {
+    return room.stageResults[stageId].players[player.uuid];
+  }).filter(Boolean);
+  const stageScores = stages.map(function(result) { return Number(result.score || 0); });
+  const answeredPredictions = [];
+  stages.forEach(function(result) {
+    (result.predictionBreakdown || []).forEach(function(item) {
+      if (!item.noAnswer) answeredPredictions.push(item);
+    });
+  });
+  const ranking = rankCumulative_(room).find(function(row) { return row.uuid === player.uuid; }) || {};
+  return {
+    currentSkill: Number(player.skill || 0),
+    averageSkill: average_(player.stageSkillHistory || []),
+    totalSkill: round_((player.stageSkillHistory || []).reduce(function(sum, value) { return sum + Number(value || 0); }, 0)),
+    totalScore: Number(room.scores[player.uuid] || 0),
+    averageScore: average_(stageScores),
+    bestScore: stageScores.length ? Math.max.apply(null, stageScores) : 0,
+    gameCount: 1,
+    stageCount: stages.filter(function(result) { return result.ticket && !result.ticket.abstained; }).length,
+    forcedOffCount: stages.filter(function(result) { return result.status === 'forced_off'; }).length,
+    predictionAccuracy: answeredPredictions.length ? round_(answeredPredictions.filter(function(item) { return item.matched; }).length / answeredPredictions.length) : null,
+    wins: ranking.rank === 1 ? 1 : 0,
+    podiums: ranking.rank <= 3 ? 1 : 0,
+    rank: ranking.rank || null,
+  };
+}
+
+function aggregatePlayerHistory_(uuid, saveRows, stageRows) {
+  const summaries = (saveRows || []).map(function(row) { return row.summary || parseJson_(row.summaryJson, {}); });
+  const stageSkills = (stageRows || []).map(function(row) { return Number(row.stageSkill || 0); }).filter(function(value) { return value > 0; });
+  const scores = (stageRows || []).map(function(row) { return Number(row.score || 0); });
+  const totals = summaries.reduce(function(acc, summary) {
+    acc.totalScore += Number(summary.totalScore || 0);
+    acc.gameCount += Number(summary.gameCount || 0);
+    acc.wins += Number(summary.wins || 0);
+    acc.podiums += Number(summary.podiums || 0);
+    acc.forcedOffCount += Number(summary.forcedOffCount || 0);
+    return acc;
+  }, { totalScore: 0, gameCount: 0, wins: 0, podiums: 0, forcedOffCount: 0 });
+  return Object.assign(totals, {
+    uuid,
+    currentSkill: currentSkill_(stageSkills),
+    averageSkill: average_(stageSkills),
+    totalSkill: round_(stageSkills.reduce(function(sum, value) { return sum + value; }, 0)),
+    averageScore: average_(scores),
+    bestScore: scores.length ? Math.max.apply(null, scores) : 0,
+    stageCount: scores.length,
+  });
+}
+
+function saveDataRowExists_(uuid, gameId) {
+  return rowsAsObjects_(SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.saveData)).some(function(row) {
+    return row.uuid === uuid && row.gameId === gameId;
+  });
+}
+
+function stageResultRowExists_(uuid, gameId, stageId) {
+  return rowsAsObjects_(SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.stageResults)).some(function(row) {
+    return row.uuid === uuid && row.gameId === gameId && row.stageId === stageId;
+  });
+}
+
+function chunkString_(text, size) {
+  const chunks = [];
+  for (let index = 0; index < text.length; index += size) chunks.push(text.slice(index, index + size));
+  return chunks.length ? chunks : [''];
+}
+
+function parseJson_(text, fallback) {
+  try {
+    return text ? JSON.parse(text) : fallback;
+  } catch (err) {
+    return fallback;
+  }
+}
+
+function average_(values) {
+  const filtered = (values || []).map(Number).filter(function(value) { return isFinite(value); });
+  if (!filtered.length) return 0;
+  return round_(filtered.reduce(function(sum, value) { return sum + value; }, 0) / filtered.length);
+}
+
 function clone_(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -861,6 +1178,38 @@ function getConfigValue_(key, fallback) {
   const rows = rowsAsObjects_(config);
   const row = rows.find(function(item) { return item.key === key; });
   return row ? row.value : fallback;
+}
+
+function setConfigValue_(key, value) {
+  const config = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.config);
+  const values = config.getDataRange().getValues();
+  for (let i = 1; i < values.length; i += 1) {
+    if (values[i][0] === key) {
+      config.getRange(i + 1, 2).setValue(value);
+      return;
+    }
+  }
+  config.appendRow([key, value]);
+}
+
+function getClientConfigSnippet() {
+  setupElevatorGameSheets();
+  const url = getConfigValue_('webAppUrl', EVG_DEPLOYED_WEB_APP_URL);
+  const apiKey = getConfigValue_('apiKey', '');
+  return buildClientConfigSnippet_(url, apiKey);
+}
+
+function buildClientConfigSnippet_(url, apiKey) {
+  return [
+    '(function (root) {',
+    '  root.EVG_BUILD_CONFIG = {',
+    '    GAS_API_BASE_URL: "' + url + '",',
+    '    GAS_API_KEY: "' + apiKey + '",',
+    '    USE_GAS_API: true,',
+    '    POLL_INTERVAL_MS: 3000,',
+    '  };',
+    '})(typeof self !== "undefined" ? self : this);',
+  ].join('\n');
 }
 
 function normalizePath_(e) {
@@ -954,6 +1303,34 @@ function prop_(key) {
   };
 }
 
+function createUuid_() {
+  if (typeof Utilities !== 'undefined' && Utilities.getUuid) return Utilities.getUuid();
+  return 'uuid-' + Math.random().toString(36).slice(2) + '-' + Date.now();
+}
+
 function uniqueGameId_(title) {
-  return String(title || 'game').trim().replace(/\s+/g, '-') + '-' + new Date().toISOString().slice(0, 10);
+  const base = String(title || 'game').trim().replace(/\s+/g, '-') + '-' + new Date().toISOString().slice(0, 10);
+  return nextAvailableGameId_(base, existingGameIds_());
+}
+
+function nextAvailableGameId_(base, existingIds) {
+  const used = {};
+  (existingIds || []).forEach(function(id) { used[String(id)] = true; });
+  if (!used[base]) return base;
+  let suffix = 2;
+  while (used[base + '_' + suffix]) suffix += 1;
+  return base + '_' + suffix;
+}
+
+function existingGameIds_() {
+  if (typeof SpreadsheetApp === 'undefined') return [];
+  const ss = SpreadsheetApp.getActive();
+  const ids = [];
+  [EVG_SHEETS.gameHistory, EVG_SHEETS.saveData, EVG_SHEETS.stageSettings].forEach(function(sheetName) {
+    const sheet = ss.getSheetByName(sheetName);
+    rowsAsObjects_(sheet).forEach(function(row) {
+      if (row.gameId) ids.push(row.gameId);
+    });
+  });
+  return ids;
 }

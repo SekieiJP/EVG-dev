@@ -2,32 +2,35 @@
 
 更新日: 2026-05-24
 
-## 今回対応済み
+## 対応済み
 
-- GASロジックをローカルNode VMで読み込む `tests/gas-logic.test.js` を追加した。
-- `ticket/submit` と `ticket/abstain` は、受付中またはカウントダウン中だけ受け付けるようにした。
-- カウントダウン終了後のチケット送信・棄権を拒否するようにした。
-- 未参加UUIDによる棄権を拒否するようにした。
-- ホスト進行操作は現在フェーズと一致する場合だけ受け付けるようにした。
-- `reveal-result` の二重実行を拒否し、累積得点とSkill履歴の二重加算を防いだ。
+- `apiKey` と期限付き `hostToken` によるホストmutation認証を実装した。
+- `config` シートに `apiKey`, `hostPassword`, `hostSessionMinutes`, `pollCacheSeconds`, `webAppUrl` を作成する。
+- `apiKey` は `setupElevatorGameSheets()` 実行時に自動生成し、空欄のまま公開されないようにする。
+- `current_game` は1セルJSONではなく複数行チャンクで保存する。旧1セル形式も読み取り可能。
+- `players` は既存UUIDを保持し、現在ゲーム参加者をマージする。
+- `save_data` にゲーム単位の12指標、`stage_results` にStageSkill込みのステージ別結果を保存する。
+- `stage_settings` と `game_history` をゲームID単位で同期する。
+- 同名同日ゲームIDは `_2`, `_3` の連番で衝突回避する。
+- 参加/復元時に、現在ルーム外のUUIDを `players` または履歴シートから復元できる。
+- Player向け状態は他人のチケットと発表前結果を隠し、Screen向け状態は投影に必要な全体情報を返す。
+- クライアントはGASの `serverTime` から時刻差分を保持し、カウントダウンと結果発表に使う。
+- GASロジックテストで、認証、チャンク保存、gameId連番、公開範囲、12指標保存を確認する。
 
-## 次に必要な実装
+## デプロイ前チェック
 
-- ホストmutation認証: `/api/host/auth` 後の `/api/host/*` に署名、セッション、またはAPI keyを要求する。
-- クライアントの時刻同期: `/api/time` を使い、端末時計差を吸収してカウントダウンと結果発表を同期する。
-- リトライ制御: 投票送信は一時通信失敗時に自動リトライし、締切判定は送信開始時刻とサーバ時刻の扱いを確定する。
-- フェーズ別ポーリング: ロビー/受付/結果/最終などで取得頻度と取得対象を切り替える。
-- `/api/screen/state` 活用: スクリーン用に軽量レスポンスを返し、プレイヤー向けの不要情報を減らす。
-- 公開範囲整理: プレイヤー端末に全チケット・全UUID・内部結果を配るか、本人分だけに絞るか決める。
-- GASとブラウザエンジンのfixture比較: 同一入力で `calculateStage` と `calculateStage_` の主要結果が一致するテストを追加する。
-- 履歴/Skill復元: `save_data` から過去Skillを参加時に復元し、戦歴12指標を保存・取得できるようにする。
-- Spreadsheet保存分割: `current_game` 1セルJSONから、players/tickets/stage_results/stage_settings への分割保存を検討する。
-- gameId採番: 同日同タイトルのゲームでID衝突しないように連番またはUUIDを付与する。
+- Apps Scriptプロジェクトへ `gas/src/Code.gs` の内容を `Code.gs` として配置する。`appsscript.json` はエディタへ直接貼り付けない。
+- スプレッドシートに紐づいた状態で `setupElevatorGameSheets()` を一度実行する。
+- `config` シートの `hostPassword` を本番値へ変更する。
+- Apps Scriptで `getClientConfigSnippet()` を実行し、返された内容を `game/assets/js/config.js` に反映する。
+- Web Appは `executeAs: USER_DEPLOYING`, `access: ANYONE` でデプロイする。
 
-## 手動検証が必要な項目
+## API URL受領後の手動検証
 
-- 実GAS Web App URLで `text/plain` POST と `?path=` ルーティングが主要ブラウザから通ること。
-- remote modeでHost/Screen/Playerの3端末相当を開き、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
+- 実GAS Web App URLで `text/plain` POST と `?path=` ルーティングが通ること。
+- Host認証後、`hostToken` なしのホストmutationが拒否され、認証済み操作だけ成功すること。
+- Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
+- 終了後に `save_data`, `stage_results`, `players`, `game_history`, `stage_settings` が更新されること。
+- UUID復元で過去SkillとStageSkill履歴が復元されること。
 - 端末時計をずらした状態で、カウントダウンと結果発表の同期が許容範囲に収まること。
-- 同時ホスト2名が同じボタンを押した時、片方だけ成功し後発が拒否されること。
-- 100人規模でjoin/submit/pollを行った時、Lock待ちとSpreadsheet書き込み時間が許容範囲に収まること。
+- 100人規模のjoin/submit/pollで、Lock待ちとSpreadsheet書き込み時間が許容範囲に収まること。

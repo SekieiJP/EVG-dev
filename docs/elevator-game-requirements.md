@@ -1,4 +1,4 @@
-# エレベーターゲーム 要件定義書（ドラフト v1.8）
+# エレベーターゲーム 要件定義書（ドラフト v1.9）
 
 ## 1. 概要
 
@@ -149,6 +149,8 @@
 - GAS通信前に必要な接続先情報は、ビルド時定数として静的クライアントに埋め込む。
 - 実行時にプレイヤーやホストがGAS URLを手入力する運用にはしない。
 - ローカル検証モードでは、ビルド時定数でGAS通信を無効化し、ローカルストレージを使用できる。
+- GAS通信有効時は、静的クライアントに埋め込む `apiKey` を各リクエストへ付与する。本番運用では `config` シートにも同じ `apiKey` を設定する。
+- `apiKey` はGASセットアップ時に自動生成し、`getClientConfigSnippet()` で静的クライアントへ貼り付ける設定片を取得する。
 - GAS通信有効時、静的クライアントは参加、復元、名前変更、チケット送信、棄権、ホスト進行、設定インポート、状態ポーリングをGAS APIへ送信する。
 - Apps ScriptのCORSプリフライトを避けるため、POSTボディはJSON文字列を `text/plain` として送信できる設計にする。
 
@@ -484,17 +486,17 @@
 | `/api/player/proceed-next` | POST | プレイヤーが「次のステージへ」ボタンを押下した通知（ゲーム全体のフェーズは進めない） |
 | `/api/ticket/submit` | POST | チケット購入（投票） |
 | `/api/ticket/abstain` | POST | 棄権宣言（自動送信用） |
-| `/api/host/auth` | POST | ホストパスワード認証 |
-| `/api/host/start-stage` | POST | ホストがステージ開始 |
-| `/api/host/open-voting` | POST | ホストがチケット購入受付を開始 |
-| `/api/host/close-voting` | POST | ホストが締切開始 |
-| `/api/host/reveal-result` | POST | 結果発表トリガ |
-| `/api/host/show-ranking` | POST | 結果発表後にランキング画面へ遷移 |
-| `/api/host/skip-animation` | POST | アニメーションSkip |
-| `/api/host/advance` | POST | ホストが「次のステージへ」を実行（プレイヤー画面のボタンを有効化） |
-| `/api/host/recalculate` | POST | ホストによる手動再集計（指標定義変更時等） |
-| `/api/host/import-config` | POST | 次ゲーム設定を読み込み、既存参加者を保持して新ゲームを開始 |
-| `/api/host/update-config` | POST | 現在ルームの参加者・進行状態を維持したまま設定JSONだけ更新 |
+| `/api/host/auth` | POST | `apiKey` とホストパスワード認証。成功時に期限付き `hostToken` を返す |
+| `/api/host/start-stage` | POST | ホストがステージ開始（`hostToken` 必須） |
+| `/api/host/open-voting` | POST | ホストがチケット購入受付を開始（`hostToken` 必須） |
+| `/api/host/close-voting` | POST | ホストが締切開始（`hostToken` 必須） |
+| `/api/host/reveal-result` | POST | 結果発表トリガ（`hostToken` 必須） |
+| `/api/host/show-ranking` | POST | 結果発表後にランキング画面へ遷移（`hostToken` 必須） |
+| `/api/host/skip-animation` | POST | アニメーションSkip（`hostToken` 必須） |
+| `/api/host/advance` | POST | ホストが「次のステージへ」を実行（`hostToken` 必須） |
+| `/api/host/recalculate` | POST | ホストによる手動再集計（`hostToken` 必須） |
+| `/api/host/import-config` | POST | 次ゲーム設定を読み込み、既存参加者を保持して新ゲームを開始（`hostToken` 必須） |
+| `/api/host/update-config` | POST | 現在ルームの参加者・進行状態を維持したまま設定JSONだけ更新（`hostToken` 必須） |
 | `/api/history/games` | GET | 過去ゲーム一覧と総合戦歴取得（タイトル画面用、全員分のSkill含む） |
 | `/api/history/player/{uuid}` | GET | 個人別の累積戦歴取得（本人のみアクセス可、UUID照合） |
 
@@ -636,11 +638,11 @@ StageSkill = (上昇成功階数 / (ステージ階数 × 定員 / 参加人数)
 
 | シート名 | 内容 | 主キー |
 |----------|------|--------|
-| `config` | ホストパスワード、運用設定 | - |
+| `config` | 自動生成`apiKey`、ホストパスワード、hostToken有効時間、Web App URL、運用設定 | - |
 | `save_data` | プレイヤー単位×ゲーム単位の戦績データ（参加時点の表示名スナップショット含む、事前集計指標含む） | (UUID, gameId) |
 | `stage_results` | プレイヤー単位×ステージ単位の結果（StageSkill値含む、Skill再計算用） | (UUID, gameId, stageId) |
 | `players` | プレイヤーマスタ（UUID、現在の表示名） | UUID |
-| `current_game` | 現在進行中のゲーム状況（参加者・投票・スコア） | - |
+| `current_game` | 現在進行中のゲーム状況（参加者・投票・スコア）。JSONを複数行チャンクで保存 | - |
 | `stage_settings` | 現在および過去のステージ設定 | (gameId, stageId) |
 | `game_history` | 過去ゲームのサマリ | gameId |
 
@@ -648,7 +650,7 @@ StageSkill = (上昇成功階数 / (ステージ階数 × 定員 / 参加人数)
 - セーブデータは複数ゲームをまたいで永続化。
 - 1ゲーム終了時に `current_game` の内容を `game_history` に転記し、UUID×ゲーム別の戦績を `save_data` に追記。
 - `save_data` には参加時点の表示名をスナップショットとして保存（履歴の整合性確保）。
-- `players` シートは現在の表示名のみ管理し、変更時は上書き。
+- `players` シートはUUID、現在の表示名、現在Skill、StageSkill履歴を管理する。現在ゲームにいないUUIDも復元用に保持する。
 - 累積戦歴は `save_data` からUUID単位で集計して算出。
 - スプレッドシート行数の上限（500万セル）に達する前に、古いデータのアーカイブ運用が必要（12章参照）。
 
@@ -705,3 +707,4 @@ StageSkill = (上昇成功階数 / (ステージ階数 × 定員 / 参加人数)
 | v1.6 | 2026-05-24 | 予想イベントの正解解決順を、固定値correctAnswerよりゲーム結果メトリクス優先に変更。 |
 | v1.7 | 2026-05-24 | 結果発表のフロアスクロール修正、待機表示廃止、次ゲーム移行時の参加者保持と戦歴退避を反映。 |
 | v1.8 | 2026-05-24 | 結果発表のネタバレ防止、かご/プレイヤー列分離、完了後スクロール、Player結果表示タイミングと次へ操作を反映。 |
+| v1.9 | 2026-05-24 | GASのapiKey/hostToken認証、Spreadsheetチャンク保存、履歴/Skill復元、role別公開範囲を反映。 |

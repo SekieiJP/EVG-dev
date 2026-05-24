@@ -27,6 +27,10 @@ node tests/gas-logic.test.js
 - GAS版ロジックでも、不正フェーズ操作、未参加者の棄権、締切後送信、二重集計を拒否する。
 - 次ゲーム設定のimportでは、参加者とSkill履歴を保持し、前ゲーム結果を戦歴用に退避する。
 - Playerの中間ランキング画面の「次へ」は、ゲーム全体のフェーズを進めない。
+- GAS版では、APIキー不一致、hostTokenなし、hostToken期限切れのホスト操作を拒否する。
+- GAS版では、`current_game` を複数行チャンクで保存でき、同名ゲームIDに連番を付ける。
+- GAS版では、Player向け状態から他人のチケットと発表前の現在ステージ結果を隠す。
+- GAS版では、`save_data` に12指標、`stage_results` にStageSkill込みのステージ結果を保存する。
 
 ## 複数プレイヤーブラウザハーネス
 
@@ -62,10 +66,15 @@ python3 -m http.server 8000
 
 Apps Script上で以下を確認する。
 
-1. `setupElevatorGameSheets()` が必要なシートとヘッダーを作成する。
-2. `doPost` に `/api/player/join` 相当のpayloadを渡して参加登録できる。
-3. `doPost` に `/api/ticket/submit` 相当のpayloadを渡して投票できる。
-4. ホスト進行APIで集計後、`current_game` のJSONと `players` シートが更新される。
+1. `setupElevatorGameSheets()` が必要なシートとヘッダーを作成し、`apiKey` を自動生成する。
+2. `config` シートの `hostPassword` を本番値へ変更する。
+3. `getClientConfigSnippet()` が、デプロイURLと生成済み `apiKey` を含む `config.js` 内容を返す。
+4. `/api/host/auth` で `hostToken` を取得でき、`hostToken` なしの `/api/host/*` が拒否される。
+5. `doPost` に `/api/player/join` 相当のpayloadを渡して参加登録できる。
+6. `doPost` に `/api/ticket/submit` 相当のpayloadを渡して投票できる。
+7. ホスト進行APIで集計後、`current_game` のチャンクJSONと `players` シートが更新される。
+8. 最終結果後、`save_data`、`stage_results`、`stage_settings`、`game_history` が更新される。
+9. UUID復元で、現在ゲーム外の過去UUIDから名前とSkill履歴を復元できる。
 
 ## 残テスト
 

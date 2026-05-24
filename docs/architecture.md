@@ -18,11 +18,11 @@ tests/
 
 ## 状態管理
 
-- 確定状態はGASの `current_game` シートにJSONスナップショットとして保存する。
+- 確定状態はGASの `current_game` シートにJSONスナップショットとして保存する。Spreadsheetの1セル上限を避けるため、JSONは複数行チャンクに分割する。
 - ブラウザ版は既定では未デプロイ環境の検証用に `localStorage` へ同じ形のルーム状態を保存する。`assets/js/config.js` でGAS通信を有効化した場合は、参加・投票・ホスト進行・状態ポーリングをGAS Web Appへ送る。
 - ルール計算は `engine.js` の純粋関数に集約し、ブラウザUIから直接呼び出す。
 - GAS版は Apps Script 単体で動くよう、主要ロジックを `Code.gs` に移植している。
-- GAS接続前に必要な情報は `assets/js/config.js` のビルド時定数で管理する。GASへのPOSTはApps ScriptのCORSプリフライトを避けるため、JSON文字列を `text/plain` で送る。
+- GAS接続前に必要な情報は `assets/js/config.js` のビルド時定数で管理する。`apiKey` はGASセットアップ時に自動生成し、`getClientConfigSnippet()` からクライアント設定を取得する。GASへのPOSTはApps ScriptのCORSプリフライトを避けるため、JSON文字列を `text/plain` で送る。ホスト操作は `apiKey` と `/api/host/auth` で取得する期限付き `hostToken` を要求する。
 - Screenの参加URL QRコードは `assets/vendor/qrcode-generator` の同梱ライブラリで生成する。
 
 ## 主要データ
@@ -59,4 +59,4 @@ lobby
 - `stage_settings`
 - `game_history`
 
-初版では `current_game` のJSONが進行中ゲームの主データで、`players` と履歴系シートは同期・終了時保存に使う。
+`current_game` のチャンクJSONが進行中ゲームの主データで、`players` はUUID/現在名/Skill履歴のマスタとして維持する。ゲーム終了時に `save_data`、`stage_results`、`stage_settings`、`game_history` へ履歴を保存する。

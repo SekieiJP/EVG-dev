@@ -16,6 +16,7 @@
     room: "evg.room.v1",
     playerUuid: "evg.playerUuid.v1",
     hostAuthed: "evg.hostAuthed.v1",
+    hostToken: "evg.hostToken.v1",
     logs: "evg.logs.v1",
     screenReady: "evg.screenReady.v1",
   };
@@ -24,6 +25,7 @@
     room: null,
     playerUuid: localStorage.getItem(playerUuidStorageKey()) || "",
     hostAuthed: localStorage.getItem(STORAGE_KEYS.hostAuthed) === "true",
+    hostToken: localStorage.getItem(STORAGE_KEYS.hostToken) || "",
     screenReady: localStorage.getItem(STORAGE_KEYS.screenReady) === "true",
     logs: loadJson(STORAGE_KEYS.logs, []),
     toast: "",
@@ -33,6 +35,7 @@
     revealCompletionCheckedFor: "",
     revealWasIncomplete: false,
     playerRankingHold: null,
+    serverTimeOffsetMs: 0,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -165,6 +168,8 @@
       if (isRemoteMode()) {
         const result = await apiPost("/api/host/auth", { password });
         if (!result.ok) return showToast(result.error || "パスワードが違います。");
+        state.hostToken = result.hostToken || "";
+        localStorage.setItem(STORAGE_KEYS.hostToken, state.hostToken);
       } else {
         const configured = getHostPassword(state.room);
         if (password !== configured) return showToast("パスワードが違います。");
@@ -538,7 +543,7 @@
   }
 
   function renderHostView() {
-    if (!state.hostAuthed) {
+    if (!state.hostAuthed || (isRemoteMode() && !state.hostToken)) {
       return `
         <section class="shell narrow">
           <header class="view-header"><div><p class="eyebrow">Host</p><h1>認証</h1></div></header>
@@ -765,8 +770,8 @@
 
   function getRevealElapsedSeconds() {
     if (state.room.animationSkippedAt) return Infinity;
-    const started = state.room.animationStartedAt ? new Date(state.room.animationStartedAt).getTime() : Date.now();
-    return Math.max(0, (Date.now() - started) / 1000);
+    const started = state.room.animationStartedAt ? new Date(state.room.animationStartedAt).getTime() : serverNow();
+    return Math.max(0, (serverNow() - started) / 1000);
   }
 
   function getRevealFloor(stage, duration) {
@@ -1105,7 +1110,7 @@
 
   function countdownSeconds() {
     if (!state.room.countdownEndsAt) return 0;
-    return Math.max(0, Math.ceil((new Date(state.room.countdownEndsAt).getTime() - Date.now()) / 1000));
+    return Math.max(0, Math.ceil((new Date(state.room.countdownEndsAt).getTime() - serverNow()) / 1000));
   }
 
   function movingSeconds() {
@@ -1114,14 +1119,14 @@
         ? new Date(new Date(state.room.countdownEndsAt).getTime() + 3000).toISOString()
         : "");
     if (!endAt) return 0;
-    return Math.max(0, Math.ceil((new Date(endAt).getTime() - Date.now()) / 1000));
+    return Math.max(0, Math.ceil((new Date(endAt).getTime() - serverNow()) / 1000));
   }
 
   function isRemoteMoving() {
     return isRemoteMode() &&
       state.room.phase === Engine.PHASES.COUNTDOWN &&
       state.room.countdownEndsAt &&
-      new Date(state.room.countdownEndsAt).getTime() <= Date.now();
+      new Date(state.room.countdownEndsAt).getTime() <= serverNow();
   }
 
   function eventLabel(event) {
@@ -1274,7 +1279,7 @@
   async function apiGet(path, payload) {
     const url = apiUrl(path, payload);
     const response = await fetch(url.toString(), { method: "GET", cache: "no-store" });
-    return normalizePublicResponse(await response.json());
+    return normalizePublicResponse(updateServerTime(await response.json()));
   }
 
   async function apiPost(path, payload) {
@@ -1283,7 +1288,7 @@
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(withApiMeta(payload || {})),
     });
-    return normalizePublicResponse(await response.json());
+    return normalizePublicResponse(updateServerTime(await response.json()));
   }
 
   function apiUrl(path, payload) {
@@ -1298,7 +1303,24 @@
   }
 
   function withApiMeta(payload) {
-    return Object.assign({}, payload, BUILD_CONFIG.GAS_API_KEY ? { apiKey: BUILD_CONFIG.GAS_API_KEY } : {});
+    const meta = {
+      role: state.role,
+      uuid: state.playerUuid || payload.uuid || "",
+    };
+    if (BUILD_CONFIG.GAS_API_KEY) meta.apiKey = BUILD_CONFIG.GAS_API_KEY;
+    if (state.hostToken) meta.hostToken = state.hostToken;
+    return Object.assign({}, payload, meta);
+  }
+
+  function updateServerTime(response) {
+    if (response && response.serverTime) {
+      state.serverTimeOffsetMs = new Date(response.serverTime).getTime() - Date.now();
+    }
+    return response;
+  }
+
+  function serverNow() {
+    return Date.now() + (state.serverTimeOffsetMs || 0);
   }
 
   function normalizePublicResponse(response) {
