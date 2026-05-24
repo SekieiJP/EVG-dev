@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-05-24 / 対象: <code>docs/elevator-game-requirements.md</code> v1.5</p>
+      <p class="meta">更新日: 2026-05-24 / 対象: <code>docs/elevator-game-requirements.md</code> v1.6</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -86,6 +86,7 @@
           <li>2026-05-24追記: Host/Screen/Player A/B/Cを同一ブラウザで並べて確認する<code>tests/multiplayer-browser-harness.html</code>を追加した。</li>
           <li>2026-05-24追記: ブラウザエンジンとGASで、未参加者の棄権、受付外の棄権/投票、締切後の送信、フェーズ外ホスト操作、同一ステージの二重集計を拒否するようにした。</li>
           <li>2026-05-24追記: GASの既定ゲーム設定をブラウザ版の既定設定と揃え、予想イベント形式と3ステージ構成の差分をなくした。</li>
+          <li>2026-05-24追記: 予想イベントの正解解決順を、<code>correctAnswer</code>より<code>metric</code>/<code>answerMetric</code>優先に変更し、ブラウザエンジンとGASのテストを追加した。</li>
         </ul>
       </section>
 
@@ -106,6 +107,7 @@
           <li>GAS接続先はランタイム入力ではなくビルド時定数にした。運営中に誤ったURLを入力するリスクを避けるため。</li>
           <li>GASへのPOSTは<code>application/json</code>ではなく<code>text/plain</code>でJSON文字列を送る。Apps Script Web AppでCORSプリフライトに詰まりにくい運用を優先した。</li>
           <li><code>topPlayer</code>予想の正解は、予想イベント得点を加える前のステージ得点1位にした。予想得点によって正解が変わる自己参照を避けるため。</li>
+          <li>予想イベントで<code>metric</code>と<code>correctAnswer</code>が両方指定された場合は、ゲーム結果から得られる<code>metric</code>を正解にする。<code>correctAnswer</code>は固定正解や暫定設定用のフォールバックに限定した。</li>
           <li>複数プレイヤーブラウザハーネスでは、<code>testSlot</code>クエリをUUID保存キーのサフィックスとして使う。同一ブラウザ内でもプレイヤーごとのUUIDを分離して、実端末を複数用意しなくても参加フローを確認できるようにした。</li>
         </ul>
       </section>

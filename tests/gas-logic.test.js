@@ -140,3 +140,39 @@ run("GAS logic prevents duplicate tally score accumulation", () => {
   assert.strictEqual(ranked.ok, true, ranked.message);
   assert.strictEqual(gas.advancePhase_(ranked.room, "start-stage", "test-host").ok, false);
 });
+
+run("GAS prediction metric takes precedence over explicit correct answer", () => {
+  const gas = loadGas();
+  const stage = {
+    stageId: "prediction",
+    name: "Prediction",
+    params: { N: 6, X: 2, P: 10, Q: 1 },
+    events: [
+      {
+        type: "E1_prediction",
+        question: "強制下車は何回？",
+        answerFormat: "integer",
+        metric: "forcedOffCount",
+        correctAnswer: 99,
+        scoreOnCorrect: 20,
+        scoreOnWrong: -5,
+        scoreOnNoAnswer: -2,
+      },
+    ],
+  };
+  const result = gas.calculateStage_(
+    stage,
+    [
+      { uuid: "alice", name: "Alice" },
+      { uuid: "bob", name: "Bob" },
+    ],
+    {
+      alice: { uuid: "alice", boardFloor: 1, exitFloor: 2, predictions: { 0: "0" } },
+      bob: { uuid: "bob", boardFloor: 2, exitFloor: 3, predictions: { 0: "99" } },
+    }
+  );
+  assert.strictEqual(result.stats.forcedOffCount, 0);
+  assert.strictEqual(result.players.alice.predictionBreakdown[0].correctAnswer, 0);
+  assert.strictEqual(result.players.alice.predictionBreakdown[0].matched, true);
+  assert.strictEqual(result.players.bob.predictionBreakdown[0].matched, false);
+});

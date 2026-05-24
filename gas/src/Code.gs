@@ -608,12 +608,12 @@ function calculatePredictionBonus_(stage, result, context) {
 }
 
 function resolveCorrectAnswer_(event, context) {
-  if (event.correctAnswer !== undefined) return event.correctAnswer;
   const metric = event.metric || event.answerMetric;
   if (metric === 'forcedOffCount') return context.forcedOffCount;
   if (metric === 'allSucceeded') return context.allSucceeded ? 'yes' : 'no';
   if (metric === 'totalBoarded') return context.totalBoarded;
   if (metric === 'topPlayer') return context.topPlayer || '';
+  if (event.correctAnswer !== undefined) return event.correctAnswer;
   return '';
 }
 

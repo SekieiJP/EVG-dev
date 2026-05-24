@@ -117,6 +117,34 @@ run("prediction no answer and correct answer scoring are applied", () => {
   assert.strictEqual(result.players.p2.eventBonus, -2);
 });
 
+run("prediction metric takes precedence over explicit correct answer", () => {
+  const result = Engine.calculateStage(
+    stage({
+      events: [
+        {
+          type: "E1_prediction",
+          question: "強制下車は何回？",
+          answerFormat: "integer",
+          metric: "forcedOffCount",
+          correctAnswer: 99,
+          scoreOnCorrect: 20,
+          scoreOnWrong: -5,
+          scoreOnNoAnswer: -2,
+        },
+      ],
+    }),
+    players(["A", "B"]),
+    {
+      p1: { uuid: "p1", boardFloor: 1, exitFloor: 2, predictions: { 0: "0" } },
+      p2: { uuid: "p2", boardFloor: 2, exitFloor: 3, predictions: { 0: "99" } },
+    }
+  );
+  assert.strictEqual(result.stats.forcedOffCount, 0);
+  assert.strictEqual(result.players.p1.predictionBreakdown[0].correctAnswer, 0);
+  assert.strictEqual(result.players.p1.predictionBreakdown[0].matched, true);
+  assert.strictEqual(result.players.p2.predictionBreakdown[0].matched, false);
+});
+
 run("range prediction matches metric value inside selected range", () => {
   const result = Engine.calculateStage(
     stage({
