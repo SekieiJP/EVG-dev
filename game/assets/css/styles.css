@@ -398,6 +398,10 @@ code {
   overflow: hidden;
 }
 
+.screen-shell.is-review {
+  overflow-y: auto;
+}
+
 .screen-top {
   display: flex;
   justify-content: space-between;
@@ -572,12 +576,18 @@ code {
 }
 
 .elevator-camera {
+  --floor-label-width: 86px;
+  --car-lane-width: clamp(120px, 18vw, 180px);
   position: relative;
   min-height: calc(100vh - 145px);
   border: 1px solid var(--screen-line);
   border-radius: 8px;
   overflow: hidden;
   background: #0a1213;
+}
+
+.elevator-camera.reveal-complete {
+  overflow: visible;
 }
 
 .shaft-track {
@@ -590,9 +600,16 @@ code {
   animation-delay: var(--reveal-delay, 0s);
 }
 
+.elevator-camera.reveal-complete .shaft-track {
+  position: relative;
+  inset: auto;
+  animation: none;
+  transform: none;
+}
+
 .floor {
   display: grid;
-  grid-template-columns: 86px 1fr;
+  grid-template-columns: var(--floor-label-width) var(--car-lane-width) 1fr;
   align-items: center;
   gap: 12px;
   min-height: 84px;
@@ -618,9 +635,9 @@ code {
 
 .car {
   position: absolute;
-  left: 50%;
+  left: calc(var(--floor-label-width) + 12px + (var(--car-lane-width) / 2));
   bottom: 34%;
-  width: min(180px, 28%);
+  width: min(180px, var(--car-lane-width));
   height: 96px;
   border: 3px solid #eff7f5;
   border-radius: 6px;
@@ -632,6 +649,10 @@ code {
   color: #fff;
   font-size: 28px;
   font-weight: 950;
+}
+
+.elevator-camera.reveal-complete .car {
+  display: none;
 }
 
 @keyframes cameraClimb {
@@ -653,6 +674,7 @@ code {
 }
 
 .floor-activity {
+  grid-column: 3;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;

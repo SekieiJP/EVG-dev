@@ -155,7 +155,7 @@ function mutateRoute_(path, payload) {
     if (path === '/api/player/join') result = registerPlayer_(room, payload.name, payload.uuid);
     else if (path === '/api/player/restore') result = restorePlayer_(room, payload.uuid);
     else if (path === '/api/player/rename') result = renamePlayer_(room, payload.uuid, payload.name);
-    else if (path === '/api/player/proceed-next') result = advancePhase_(room, 'next-stage', payload.uuid || 'player');
+    else if (path === '/api/player/proceed-next') result = acknowledgePlayerNext_(room, payload.uuid);
     else if (path === '/api/ticket/submit') result = submitTicket_(room, payload.uuid, payload.ticket || payload);
     else if (path === '/api/ticket/abstain') result = abstain_(room, payload.uuid);
     else if (path === '/api/host/auth') return authHost_(payload.password);
@@ -359,6 +359,14 @@ function abstain_(room, uuid) {
   }
   room.tickets[stage.stageId] = room.tickets[stage.stageId] || {};
   room.tickets[stage.stageId][uuid] = { uuid, abstained: true, predictions: {}, submittedAt: new Date().toISOString() };
+  touchRoom_(room);
+  return { ok: true, room };
+}
+
+function acknowledgePlayerNext_(room, uuid) {
+  const player = room.players.find(function(item) { return item.uuid === uuid; });
+  if (!player) return error_('not_joined', '参加登録が必要です。', 403);
+  player.lastSeenAt = new Date().toISOString();
   touchRoom_(room);
   return { ok: true, room };
 }

@@ -29,6 +29,7 @@ function loadGas() {
   abstain_,
   advancePhase_,
   tallyCurrentStage_,
+  acknowledgePlayerNext_,
   calculateStage_,
   importConfig_,
   updateConfig_,
@@ -140,6 +141,9 @@ run("GAS logic prevents duplicate tally score accumulation", () => {
 
   const ranked = gas.advancePhase_(room, "show-ranking", "test-host");
   assert.strictEqual(ranked.ok, true, ranked.message);
+  const acknowledged = gas.acknowledgePlayerNext_(ranked.room, "alice");
+  assert.strictEqual(acknowledged.ok, true, acknowledged.message);
+  assert.strictEqual(acknowledged.room.phase, gas.EVG_PHASES.RANKING);
   assert.strictEqual(gas.advancePhase_(ranked.room, "start-stage", "test-host").ok, false);
 });
 

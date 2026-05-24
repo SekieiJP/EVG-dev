@@ -31,6 +31,8 @@
     syncing: false,
     lastRevealPollAt: 0,
     revealCompletionCheckedFor: "",
+    revealWasIncomplete: false,
+    playerRankingHold: null,
   };
 
   const $ = (selector) => document.querySelector(selector);
@@ -47,6 +49,7 @@
     }
     window.addEventListener("storage", (event) => {
       if (!isRemoteMode() && event.key === STORAGE_KEYS.room) {
+        if (isPlayerRankingHeld()) return;
         state.room = loadRoom();
         render();
       }
@@ -58,6 +61,7 @@
       const button = event.target.closest("[data-role]");
       if (!button) return;
       state.role = button.dataset.role;
+      restorePlayerRankingHoldIfNeeded();
       history.replaceState(null, "", `?view=${state.role}`);
       render();
     });
@@ -96,9 +100,19 @@
     const needsCountdownRefresh =
       [Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase) &&
       (state.role === "screen" || state.role === "player");
-    const needsRevealRefresh = state.room.phase === Engine.PHASES.REVEAL && state.role === "screen";
-    if (needsRevealRefresh) checkRevealCompletionRemoteState();
-    if (changed || needsCountdownRefresh || needsRevealRefresh) render();
+    const stage = Engine.getCurrentStage(state.room);
+    const revealPlaybackIncomplete =
+      stage &&
+      state.room.animationStartedAt &&
+      [Engine.PHASES.REVEAL, Engine.PHASES.RANKING].includes(state.room.phase) &&
+      !isRevealPlaybackComplete(stage);
+    const revealJustCompleted = stage && !revealPlaybackIncomplete && state.revealWasIncomplete;
+    state.revealWasIncomplete = Boolean(revealPlaybackIncomplete);
+    const needsRevealRefresh =
+      Boolean(revealPlaybackIncomplete) &&
+      ((state.role === "screen" && state.room.phase === Engine.PHASES.REVEAL) || state.role === "player");
+    if (needsRevealRefresh || revealJustCompleted) checkRevealCompletionRemoteState();
+    if (changed || needsCountdownRefresh || needsRevealRefresh || revealJustCompleted) render();
   }
 
   async function handleSubmit(event) {
@@ -222,14 +236,9 @@
     }
     if (action === "player-next") {
       if (state.room.phase !== Engine.PHASES.RANKING) return showToast("ホストの操作待ちです。");
-      const result = await runMutation(
-        () => Engine.advancePhase(state.room, "next-stage", "player"),
-        "/api/player/proceed-next",
-        { uuid: state.playerUuid }
-      );
-      if (!result.ok) return showToast(result.error || "進行できません。");
-      state.room = result.room;
-      saveRoom("player.proceed-next", state.playerUuid);
+      state.playerRankingHold = null;
+      if (isRemoteMode()) await refreshRemoteState({ force: true });
+      else state.room = loadRoom();
       render();
     }
     if (action === "screen-ready") {
@@ -320,6 +329,7 @@
   }
 
   function render() {
+    restorePlayerRankingHoldIfNeeded();
     const app = $("#app");
     document.body.dataset.phase = state.room.phase;
     document.body.dataset.role = state.role;
@@ -390,7 +400,15 @@
     if ([Engine.PHASES.VOTING, Engine.PHASES.COUNTDOWN].includes(state.room.phase)) {
       return renderTicketForm(stage, ticket);
     }
+    if (
+      state.room.animationStartedAt &&
+      [Engine.PHASES.REVEAL, Engine.PHASES.RANKING].includes(state.room.phase) &&
+      !isRevealPlaybackComplete(stage)
+    ) {
+      return `<div class="panel waiting-result"><h2>結果発表中</h2><p>スクリーンをご覧ください。</p></div>`;
+    }
     if ([Engine.PHASES.REVEAL, Engine.PHASES.RANKING, Engine.PHASES.FINAL].includes(state.room.phase)) {
+      if (state.room.phase === Engine.PHASES.RANKING) holdPlayerRanking();
       return renderPlayerResult(result);
     }
     return `
@@ -594,8 +612,9 @@
   function renderScreenView() {
     const stage = Engine.getCurrentStage(state.room);
     const result = getCurrentStageResult();
+    const reviewMode = state.room.phase === Engine.PHASES.REVEAL && stage && isRevealComplete(stage);
     return `
-      <section class="screen-shell">
+      <section class="screen-shell ${reviewMode ? "is-review" : ""}">
         ${!state.screenReady ? `<button class="ready-button" data-action="screen-ready">準備完了</button>` : ""}
         <div class="screen-top">
           <p>${escapeHtml(state.room.config.gameMeta.title)}</p>
@@ -652,10 +671,11 @@
     const duration = getRevealDuration(stage);
     const elapsed = getRevealElapsedSeconds();
     const currentFloor = getRevealFloor(stage, duration);
+    const reviewMode = isRevealComplete(stage);
     const scoreRows = buildRevealScoreRows(stage, result, currentFloor);
     return `
       <div class="elevator-board">
-        <div class="elevator-camera" style="--floor-count:${stage.params.N}; --track-height:${stage.params.N * 84}px; --travel-shift:${Math.max(0, stage.params.N - 1) * 84}px; --travel-duration:${duration}s; --reveal-delay:-${Math.min(elapsed, duration)}s">
+        <div class="elevator-camera ${reviewMode ? "reveal-complete" : ""}" style="--floor-count:${stage.params.N}; --track-height:${stage.params.N * 84}px; --travel-shift:${Math.max(0, stage.params.N - 1) * 84}px; --travel-duration:${duration}s; --reveal-delay:-${Math.min(elapsed, duration)}s">
           <div class="shaft-track">
             ${floors.map((floor) => renderFloorEvent(floor, timelineByFloor.get(floor), result, tickets, forcedFloors.has(floor), currentFloor)).join("")}
           </div>
@@ -687,8 +707,9 @@
     const exiting = step ? step.exiting : [];
     const passengers = step ? step.passengersAfterCheck.filter((uuid) => !boarding.includes(uuid) && !exiting.includes(uuid)) : [];
     const visible = floor <= currentFloor;
+    const revealedDanger = danger && visible;
     return `
-      <div class="floor ${danger ? "danger" : ""} ${visible ? "is-revealed" : "is-future"}">
+      <div class="floor ${revealedDanger ? "danger" : ""} ${visible ? "is-revealed" : "is-future"}">
         <span class="floor-label">${floor}F</span>
         <div class="floor-activity">
           ${visible ? renderChipGroup("乗車", boarding, result, "boarding") : ""}
@@ -753,6 +774,46 @@
     const elapsedSeconds = getRevealElapsedSeconds();
     const floor = Math.floor(elapsedSeconds / (duration / stage.params.N)) + 1;
     return Math.max(1, Math.min(stage.params.N, floor));
+  }
+
+  function isRevealComplete(stage) {
+    if (!stage || state.room.phase !== Engine.PHASES.REVEAL) return false;
+    return isRevealPlaybackComplete(stage);
+  }
+
+  function isRevealPlaybackComplete(stage) {
+    if (!stage) return false;
+    if (state.room.animationSkippedAt) return true;
+    if (!state.room.animationStartedAt) return false;
+    return getRevealElapsedSeconds() >= getRevealDuration(stage);
+  }
+
+  function holdPlayerRanking() {
+    if (state.role !== "player" || !state.room || state.room.phase !== Engine.PHASES.RANKING) return;
+    const stage = Engine.getCurrentStage(state.room);
+    const key = `${state.room.gameId}:${stage ? stage.stageId : state.room.currentStageIndex}`;
+    if (!state.playerRankingHold || state.playerRankingHold.key !== key) {
+      state.playerRankingHold = { key, room: Engine.deepClone(state.room) };
+    }
+  }
+
+  function hasPlayerRankingHold() {
+    return Boolean(
+      state.playerRankingHold &&
+        state.playerRankingHold.room &&
+        state.playerRankingHold.room.phase === Engine.PHASES.RANKING
+    );
+  }
+
+  function restorePlayerRankingHoldIfNeeded() {
+    if (state.role !== "player" || !hasPlayerRankingHold()) return;
+    if (!state.room || state.room.phase !== Engine.PHASES.RANKING) {
+      state.room = Engine.deepClone(state.playerRankingHold.room);
+    }
+  }
+
+  function isPlayerRankingHeld() {
+    return state.role === "player" && hasPlayerRankingHold();
   }
 
   function buildRevealScoreRows(stage, result, currentFloor) {
@@ -944,7 +1005,7 @@
     return `
       <div class="table-wrap">
         <table>
-          <thead><tr><th>名前</th><th>UUID</th><th>入力</th><th>得点</th><th>Skill</th></tr></thead>
+          <thead><tr><th>名前</th><th>UUID</th><th>入力</th><th>得点</th><th>現在Skill</th></tr></thead>
           <tbody>${rows.join("") || `<tr><td colspan="5">なし</td></tr>`}</tbody>
         </table>
       </div>
@@ -1131,6 +1192,7 @@
 
   function pollRemoteState() {
     if (!isRemoteMode() || !state.room) return;
+    if (isPlayerRankingHeld()) return;
     if (state.room.phase === Engine.PHASES.REVEAL) {
       if (state.role !== "screen" && state.role !== "player") return;
       const now = Date.now();
@@ -1157,6 +1219,7 @@
 
   async function refreshRemoteState(options = {}) {
     if (!isRemoteMode() || state.syncing) return;
+    if (!options.force && isPlayerRankingHeld()) return;
     try {
       state.syncing = true;
       const response = await apiGet("/api/room/state", { uuid: state.playerUuid });
