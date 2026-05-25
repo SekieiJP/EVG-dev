@@ -1,6 +1,6 @@
 # GAS版 readiness
 
-更新日: 2026-05-24
+更新日: 2026-05-25
 
 ## 対応済み
 
@@ -11,6 +11,7 @@
 - `players` は既存UUIDを保持し、現在ゲーム参加者をマージする。
 - `save_data` にゲーム単位の12指標、`stage_results` にStageSkill込みのステージ別結果を保存する。
 - `stage_settings` と `game_history` をゲームID単位で同期する。
+- `game_configs` にHostが事前登録した次ゲーム候補を保存し、`status=ACTIVE` の設定を再利用可能テンプレートとしてHost画面に表示する。
 - 同名同日ゲームIDは `_2`, `_3` の連番で衝突回避する。
 - 参加/復元時に、現在ルーム外のUUIDを `players` または履歴シートから復元できる。
 - Player向け状態は他人のチケットと発表前結果を隠し、Screen向け状態は投影に必要な全体情報を返す。
@@ -27,12 +28,15 @@
 - 認証済みHost画面は、締切カウントダウンと移動中演出の終了後に自動で集計commitを開始する。
 - Player入口URLではHost/Screenタブを無効化し、Player入力中は状態ポーリングによる再描画を抑制する。
 - GASロジックテストで、認証、チャンク保存、gameId連番、公開範囲、12指標保存を確認する。
+- `/api/host/game-configs` と `/api/host/start-game-config` で、Spreadsheet上の候補から参加者保持の次ゲームを開始できる。
 
 ## デプロイ前チェック
 
 - Apps Scriptプロジェクトへ `gas/src/Code.gs` の内容を `Code.gs` として配置する。`appsscript.json` はエディタへ直接貼り付けない。
 - スプレッドシートに紐づいた状態で `setupElevatorGameSheets()` を一度実行する。
+- 既存Spreadsheetへ再デプロイする場合も、`game_configs` 作成のため `setupElevatorGameSheets()` を再実行する。
 - `config` シートの `hostPassword` を本番値へ変更する。
+- `game_configs` シートへ次ゲーム候補を追加する。`configId`, `name`, `status=ACTIVE`, `sortOrder`, `configJson` を入力し、`configJson` は既存の設定JSON importと同じ形式にする。
 - Apps Scriptで `getClientConfigSnippet()` を実行し、`game/assets/js/config.js` と同じデプロイURL/デプロイIDになっていることを確認する。
 - Web Appは `executeAs: USER_DEPLOYING`, `access: ANYONE` でデプロイする。
 
@@ -54,6 +58,11 @@
 - Apps Script実行ログに各API呼び出しのJSONログが残ること。
 - Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
 - 終了後に `save_data`, `stage_results`, `players`, `game_history`, `stage_settings` が更新されること。
+- Host最終結果画面で `game_configs` 候補を読み込み、ACTIVEな候補だけが表示されること。
+- Hostが `configId` を選んで次ゲームを開始すると、参加者・UUID・現在Skillが保持され、スコア・チケット・ステージ結果がリセットされること。
+- 同じ `game_configs` 行を再利用しても、gameId衝突時に `_2`, `_3` が付くこと。
+- Player最終結果画面では自動遷移せず、「次へ」押下時だけ次ゲームへ追従すること。
+- Screen最終結果画面は表示を維持し、新 `gameId` 検出後に次ゲームへ切り替わること。
 - UUID復元で過去SkillとStageSkill履歴が復元されること。
 - 端末時計をずらした状態で、カウントダウンと結果発表の同期が許容範囲に収まること。
 - 100人規模のjoin/submit/pollで、Lock待ちとSpreadsheet書き込み時間が許容範囲に収まること。

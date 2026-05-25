@@ -6,6 +6,7 @@ const EVG_SHEETS = {
   currentGame: 'current_game',
   stageSettings: 'stage_settings',
   gameHistory: 'game_history',
+  gameConfigs: 'game_configs',
 };
 
 const EVG_CURRENT_GAME_CHUNK_SIZE = 45000;
@@ -122,7 +123,9 @@ function setupElevatorGameSheets() {
   ensureSheet_(ss, EVG_SHEETS.currentGame, ['key', 'chunkIndex', 'json', 'updatedAt']);
   ensureSheet_(ss, EVG_SHEETS.stageSettings, ['gameId', 'stageId', 'stageJson', 'createdAt']);
   ensureSheet_(ss, EVG_SHEETS.gameHistory, ['gameId', 'summaryJson', 'createdAt']);
+  ensureSheet_(ss, EVG_SHEETS.gameConfigs, ['configId', 'name', 'status', 'sortOrder', 'configJson', 'notes', 'createdAt', 'updatedAt']);
   ensureConfigDefaults_(ss.getSheetByName(EVG_SHEETS.config));
+  ensureGameConfigDefaults_(ss.getSheetByName(EVG_SHEETS.gameConfigs));
   if (!getRoom_()) {
     saveRoom_(createInitialRoom_(EVG_DEFAULT_CONFIG));
   }
@@ -172,6 +175,7 @@ function route_(e, method) {
     if (method === 'GET' && path === '/api/time') response = { serverTime: new Date().toISOString() };
     else if (method === 'GET' && path === '/api/status') response = publicStatus_(getRoom_() || createInitialRoom_(EVG_DEFAULT_CONFIG), payload);
     else if (method === 'GET' && (path === '/api/room/state' || path === '/api/screen/state')) response = publicRoom_(getRoom_() || createInitialRoom_(EVG_DEFAULT_CONFIG), payload);
+    else if (method === 'GET' && path === '/api/host/game-configs') response = listGameConfigs_(payload);
     else if (method === 'GET' && path === '/api/history/games') response = getHistoryGames_();
     else if (method === 'GET' && path.indexOf('/api/history/player/') === 0) response = getPlayerHistory_(path.split('/').pop(), payload.uuid);
     else if (method === 'POST') response = mutateRoute_(path, payload);
@@ -212,6 +216,7 @@ function mutateRoute_(path, payload) {
       else if (path === '/api/host/advance') result = advancePhase_(room, 'next-stage', payload.hostName || 'host');
       else if (path === '/api/host/recalculate') result = recalculate_(room);
       else if (path === '/api/host/import-config') result = importConfig_(room, payload.config, payload.preservePlayers !== false);
+      else if (path === '/api/host/start-game-config') result = startGameConfig_(room, payload.configId);
       else if (path === '/api/host/update-config') result = updateConfig_(room, payload.config);
       else return error_('not_found', 'Unknown endpoint: ' + path, 404);
     }
@@ -841,6 +846,36 @@ function importConfig_(room, config, preservePlayers) {
   return { ok: true, room: preservePlayers && room.players && room.players.length ? createNextGameRoom_(room, config) : createInitialRoom_(config) };
 }
 
+function listGameConfigs_(payload) {
+  const hostAuth = verifyHostToken_(payload.hostToken);
+  if (!hostAuth.ok) return hostAuth;
+  const configs = readActiveGameConfigs_().map(function(item) {
+    return {
+      configId: item.configId,
+      name: item.name,
+      status: item.status,
+      sortOrder: item.sortOrder,
+      notes: item.notes,
+      updatedAt: item.updatedAt,
+      valid: item.valid,
+      error: item.error || '',
+      stageCount: item.config ? item.config.stages.length : 0,
+      stageNames: item.config ? item.config.stages.map(function(stage) { return stage.name; }) : [],
+      title: item.config && item.config.gameMeta ? item.config.gameMeta.title : item.name,
+    };
+  });
+  return { ok: true, serverTime: new Date().toISOString(), configs };
+}
+
+function startGameConfig_(room, configId) {
+  if (room.phase !== EVG_PHASES.FINAL) return error_('phase', '最終結果後に次ゲームを開始してください。', 409);
+  const item = findActiveGameConfig_(configId);
+  if (!item) return error_('not_found', '次ゲーム設定が見つかりません。', 404);
+  if (!item.valid) return error_('validation', '次ゲーム設定JSONを読み込めません: ' + item.error, 400);
+  if (Object.keys(room.stageResults || {}).length) persistGameHistory_(room);
+  return { ok: true, room: createNextGameRoom_(room, item.config), gameConfig: { configId: item.configId, name: item.name } };
+}
+
 function updateConfig_(room, config) {
   room.config = normalizeConfig_(config);
   touchRoom_(room);
@@ -870,7 +905,9 @@ function publicRoom_(room, payload) {
 function publicStatus_(room, payload) {
   payload = payload || {};
   const summary = compactRoomStatus_(room);
-  if (String(payload.sinceVersion || '') === String(room.roomVersion || 0)) {
+  const sameVersion = String(payload.sinceVersion || '') === String(room.roomVersion || 0);
+  const sameGame = !payload.sinceGameId || String(payload.sinceGameId || '') === String(room.gameId || '');
+  if (sameVersion && sameGame) {
     return { ok: true, unchanged: true, serverTime: new Date().toISOString(), status: summary };
   }
   return Object.assign(publicRoom_(room, payload), { status: summary });
@@ -883,6 +920,7 @@ function compactRoomStatus_(room) {
   const submitted = Object.keys(tickets).filter(function(uuid) { return tickets[uuid] && !tickets[uuid].abstained; }).length;
   const abstained = Object.keys(tickets).filter(function(uuid) { return tickets[uuid] && tickets[uuid].abstained; }).length;
   return {
+    gameId: room.gameId || '',
     roomVersion: Number(room.roomVersion || 0),
     phase: room.phase,
     currentStageIndex: room.currentStageIndex || 0,
@@ -1073,6 +1111,60 @@ function ensureConfigDefaults_(sheet) {
   } else if (apiKeyRow && String(apiKeyRow.value).indexOf('evg-') === 0) {
     setConfigValue_('apiKey', defaults.apiKey);
   }
+}
+
+function ensureGameConfigDefaults_(sheet) {
+  const rows = rowsAsObjects_(sheet);
+  if (rows.some(function(row) { return row.configId; })) return;
+  const now = new Date().toISOString();
+  sheet.appendRow([
+    'default-party',
+    '短時間パーティ版',
+    'ACTIVE',
+    1,
+    JSON.stringify(EVG_DEFAULT_CONFIG),
+    '初期サンプル。不要ならstatusをARCHIVEDに変更してください。',
+    now,
+    now,
+  ]);
+}
+
+function readActiveGameConfigs_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.gameConfigs);
+  return rowsAsObjects_(sheet)
+    .filter(function(row) { return row.configId && String(row.status || 'ACTIVE').toUpperCase() === 'ACTIVE'; })
+    .map(normalizeGameConfigRow_)
+    .sort(function(a, b) {
+      return Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name).localeCompare(String(b.name), 'ja');
+    });
+}
+
+function findActiveGameConfig_(configId) {
+  const target = String(configId || '').trim();
+  if (!target) return null;
+  return readActiveGameConfigs_().find(function(item) { return item.configId === target; }) || null;
+}
+
+function normalizeGameConfigRow_(row) {
+  const item = {
+    configId: String(row.configId || '').trim(),
+    name: String(row.name || row.configId || '').trim(),
+    status: String(row.status || 'ACTIVE').toUpperCase(),
+    sortOrder: Number(row.sortOrder || 0),
+    notes: String(row.notes || ''),
+    updatedAt: row.updatedAt || row.createdAt || '',
+    valid: false,
+    config: null,
+    error: '',
+  };
+  try {
+    item.config = normalizeConfig_(JSON.parse(String(row.configJson || '')));
+    item.valid = true;
+    if (!item.name) item.name = item.config.gameMeta.title;
+  } catch (err) {
+    item.error = String(err && err.message ? err.message : err);
+  }
+  return item;
 }
 
 function rowsAsObjects_(sheet) {

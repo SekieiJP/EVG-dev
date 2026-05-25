@@ -62,5 +62,6 @@ lobby
 - `current_game`
 - `stage_settings`
 - `game_history`
+- `game_configs`
 
-`current_game` のチャンクJSONが進行中ゲームの主データで、`players` はUUID/現在名/Skill履歴のマスタとして維持する。ゲーム終了時に `save_data`、`stage_results`、`stage_settings`、`game_history` へ履歴を保存する。
+`current_game` のチャンクJSONが進行中ゲームの主データで、`players` はUUID/現在名/Skill履歴のマスタとして維持する。ゲーム終了時に `save_data`、`stage_results`、`stage_settings`、`game_history` へ履歴を保存する。`game_configs` はHostが手動登録する次ゲーム候補で、実績保存用の `stage_settings` とは分離する。

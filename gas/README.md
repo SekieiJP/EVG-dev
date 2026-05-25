@@ -13,10 +13,11 @@ Google Apps Script のコード・設定を格納します。
 2. Apps Scriptプロジェクトへ `src/Code.gs` の内容を `Code.gs` として配置します。
 3. スプレッドシートに紐づいた状態で `setupElevatorGameSheets()` を一度実行します。
 4. `config` シートの `hostPassword` を運用値へ変更します。`apiKey` はデプロイIDが既定値です。
-5. Web Appとしてデプロイします。
+5. `game_configs` シートに次ゲーム候補を登録します。`status` は `ACTIVE`、`configJson` はHost設定JSON importと同じ形式です。
+6. Web Appとしてデプロイします。
    - Execute as: `USER_DEPLOYING`
    - Access: `ANYONE`
-6. Apps Scriptで `getClientConfigSnippet()` を実行すると、デプロイURLとデプロイID入りの `game/assets/js/config.js` 内容を確認できます。
+7. Apps Scriptで `getClientConfigSnippet()` を実行すると、デプロイURLとデプロイID入りの `game/assets/js/config.js` 内容を確認できます。
 
 通常APIリクエストでは `setupElevatorGameSheets()` を自動実行しません。未セットアップ時は `setup_required` を返します。初期化処理をポーリングごとに走らせないため、セットアップは必ず手動で一度実行してください。
 
@@ -40,6 +41,19 @@ Google Apps Script のコード・設定を格納します。
 - `stage_results`: UUID×gameId×stageIdのステージ単位結果とStageSkillを保存します。
 - `stage_settings`: gameId×stageIdのステージ設定を保存します。
 - `game_history`: ゲーム単位サマリとランキングを保存します。
+- `game_configs`: Hostが事前登録する次ゲーム候補を保存します。`status=ACTIVE` の行だけHost画面に表示し、使用後も再利用可能です。
+
+## game_configs シート
+
+| 列 | 用途 |
+| --- | --- |
+| `configId` | Hostが次ゲーム開始時に指定する一意ID。 |
+| `name` | Host画面に表示する候補名。 |
+| `status` | `ACTIVE` の行だけ候補に表示します。不要な行は `ARCHIVED` にします。 |
+| `sortOrder` | Host画面の表示順。 |
+| `configJson` | ゲーム設定JSON全文。既存のHost JSON importと同じ形式です。 |
+| `notes` | 運用メモ。 |
+| `createdAt` / `updatedAt` | 手動更新用の日時メモ。 |
 
 ## API
 
@@ -65,6 +79,8 @@ Google Apps Script のコード・設定を格納します。
 - `POST /api/host/skip-animation`
 - `POST /api/host/advance`
 - `POST /api/host/recalculate`
+- `GET /api/host/game-configs`
+- `POST /api/host/start-game-config`
 - `POST /api/host/import-config`
 - `POST /api/host/update-config`
 - `GET /api/history/games`

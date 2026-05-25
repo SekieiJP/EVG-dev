@@ -58,6 +58,8 @@ function loadGas() {
   publicStatus_,
   buildPlayerGameSummary_,
   buildClientConfigSnippet_,
+  normalizeGameConfigRow_,
+  startGameConfig_,
 });
 `, sandbox);
 }
@@ -256,6 +258,36 @@ run("GAS storage helpers chunk current game JSON and allocate unique game ids", 
   assert.deepStrictEqual(Array.from(gas.chunkString_("abcdef", 2)), ["ab", "cd", "ef"]);
   assert.strictEqual(gas.nextAvailableGameId_("party", ["party", "party_2"]), "party_3");
   assert.strictEqual(gas.nextAvailableGameId_("new", ["party"]), "new");
+});
+
+run("GAS game config rows expose reusable active config metadata", () => {
+  const gas = loadGas();
+  const item = gas.normalizeGameConfigRow_({
+    configId: "party-a",
+    name: "Party A",
+    status: "ACTIVE",
+    sortOrder: 3,
+    configJson: JSON.stringify(config()),
+    notes: "reusable",
+    updatedAt: "2026-05-25T00:00:00.000Z",
+  });
+  assert.strictEqual(item.valid, true, item.error);
+  assert.strictEqual(item.configId, "party-a");
+  assert.strictEqual(item.name, "Party A");
+  assert.strictEqual(item.config.stages.length, 1);
+  assert.strictEqual(item.config.stages[0].name, "First");
+
+  const invalid = gas.normalizeGameConfigRow_({ configId: "bad", status: "ACTIVE", configJson: "{bad" });
+  assert.strictEqual(invalid.valid, false);
+  assert.ok(invalid.error);
+});
+
+run("GAS game config start is only allowed after final results", () => {
+  const gas = loadGas();
+  const room = gas.createInitialRoom_(config());
+  const result = gas.startGameConfig_(room, "party-a");
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.code, "phase");
 });
 
 run("GAS public room hides other tickets and unrevealed player results", () => {

@@ -478,10 +478,15 @@
 - 本格版（10ステージ・60分想定）
 
 ### 8.3 次ゲームへの移行
-- ゲーム終了後に次ゲームの設定JSONをimportする場合、接続中の参加者、UUID、表示名、現在Skill値、Skill履歴は保持する。
+- ゲーム終了後、HostはSpreadsheetの `game_configs` シートに事前登録したゲーム設定から次ゲームを選択して開始できる。
+- `game_configs` は予定ゲームテンプレートの置き場であり、実際に進行したステージ設定を保存する `stage_settings` とは分離する。
+- `game_configs` の `status=ACTIVE` の行だけHost画面の次ゲーム候補に表示する。選択後も候補は再利用可能なテンプレートとして残す。
+- 手動JSON importを行う場合も、通常は接続中の参加者、UUID、表示名、現在Skill値、Skill履歴を保持する。
 - 次ゲームではゲーム内累積得点、チケット、ステージ結果、現在ステージ位置はリセットする。
 - 終了済みゲームの結果は戦歴集計用に退避し、次ゲーム開始後も参加ゲーム数、参加ステージ数、平均得点、最高得点、優勝回数、表彰台回数などの戦歴計算に含める。
 - 参加者を破棄して完全に初期化する操作は、設定JSON importとは別のReset操作で行う。
+- Playerは最終結果画面から自動では次ゲームへ遷移しない。「次ゲームへ」ボタン押下時だけ最新状態を取得し、Hostが次ゲームを開始済みなら新しい `gameId` の現在フェーズへ追従する。未開始なら最終結果画面を維持する。
+- Screenは最終結果表示を維持し、同一端末Host連携または別端末時の低頻度状態確認で新しい `gameId` を検出したときに次ゲームへ切り替える。
 
 ---
 
@@ -509,6 +514,8 @@
 | `/api/host/skip-animation` | POST | アニメーションSkip（`hostToken` 必須） |
 | `/api/host/advance` | POST | ホストが「次のステージへ」を実行（`hostToken` 必須） |
 | `/api/host/recalculate` | POST | ホストによる手動再集計（`hostToken` 必須） |
+| `/api/host/game-configs` | GET | Spreadsheetの `game_configs` からACTIVEな次ゲーム候補一覧を取得（`hostToken` 必須） |
+| `/api/host/start-game-config` | POST | `configId` 指定で参加者を保持した次ゲームを開始（`hostToken` 必須） |
 | `/api/host/import-config` | POST | 次ゲーム設定を読み込み、既存参加者を保持して新ゲームを開始（`hostToken` 必須） |
 | `/api/host/update-config` | POST | 現在ルームの参加者・進行状態を維持したまま設定JSONだけ更新（`hostToken` 必須） |
 | `/api/history/games` | GET | 過去ゲーム一覧と総合戦歴取得（タイトル画面用、全員分のSkill含む） |
@@ -661,6 +668,7 @@ StageSkill = (上昇成功階数 / (ステージ階数 × 定員 / 参加人数)
 | `current_game` | 現在進行中のゲーム状況（参加者・投票・スコア）。JSONを複数行チャンクで保存 | - |
 | `stage_settings` | 現在および過去のステージ設定 | (gameId, stageId) |
 | `game_history` | 過去ゲームのサマリ | gameId |
+| `game_configs` | Hostが事前登録する次ゲーム候補。`status=ACTIVE` の設定をHost画面に表示し、使用後も再利用可能 | configId |
 
 ### 11.7 データ保存方針
 - セーブデータは複数ゲームをまたいで永続化。
@@ -729,3 +737,4 @@ StageSkill = (上昇成功階数 / (ステージ階数 × 定員 / 参加人数)
 | v1.13 | 2026-05-24 | Player入口のHost/Screen遷移制限、Host自動集計、結果演出完了時のPlayer個人結果解禁、Player入力中のポーリング再描画抑制、ステージ基礎情報の色分けを反映。 |
 | v1.14 | 2026-05-25 | GAS通信の短期リトライと、戦歴ページの本人個人詳細制限を反映。 |
 | v1.15 | 2026-05-25 | Playerの中間ランキング保持をローカル永続化し、「次へ」未押下Playerは本人操作までランキング画面に置き去りにする仕様を反映。 |
+| v1.16 | 2026-05-25 | `game_configs` による次ゲーム候補管理と、Host/Player/Screenのゲーム間導線を反映。 |

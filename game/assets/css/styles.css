@@ -229,6 +229,18 @@ code {
   font-size: 18px;
 }
 
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.panel-heading h2 {
+  margin-bottom: 4px;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -385,6 +397,39 @@ code {
 
 .log-list p {
   margin: 0;
+}
+
+.game-config-list {
+  display: grid;
+  gap: 10px;
+}
+
+.game-config-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  padding: 12px;
+}
+
+.game-config-item strong,
+.game-config-item span,
+.game-config-item p {
+  display: block;
+  margin: 0;
+}
+
+.game-config-item span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.game-config-item.is-invalid {
+  border-color: #dc2626;
 }
 
 .inline {
@@ -911,6 +956,7 @@ code {
   }
 
   .view-header,
+  .panel-heading,
   .split {
     align-items: stretch;
     flex-direction: column;
@@ -930,6 +976,10 @@ code {
   }
 
   .dual-ranking {
+    grid-template-columns: 1fr;
+  }
+
+  .game-config-item {
     grid-template-columns: 1fr;
   }
 

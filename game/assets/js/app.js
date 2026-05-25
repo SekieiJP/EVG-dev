@@ -47,6 +47,9 @@
     revealCompletionCheckedFor: "",
     revealWasIncomplete: false,
     playerRankingHold: null,
+    nextGameConfigs: [],
+    nextGameConfigsLoadedAt: "",
+    nextGameConfigError: "",
     autoTallyKey: "",
     nextRemoteFetchAt: 0,
     playerNextDisabledUntil: 0,
@@ -280,17 +283,19 @@
       state.playerNextDisabledUntil = Date.now() + 5000;
       render();
       setTimeout(render, 5000);
-      if (state.room.phase !== Engine.PHASES.RANKING) return showToast("ホストの操作待ちです。");
+      if (![Engine.PHASES.RANKING, Engine.PHASES.FINAL].includes(state.room.phase)) return showToast("ホストの操作待ちです。");
       const heldRoom = state.playerRankingHold ? Engine.deepClone(state.playerRankingHold.room) : null;
+      const beforeGameId = state.room.gameId;
       const beforePhase = state.room.phase;
       const beforeVersion = state.room.roomVersion || 0;
       if (isRemoteMode()) await refreshRemoteState({ force: true, showLoading: true });
       else state.room = loadRoom();
-      if (state.room.phase === beforePhase && (state.room.roomVersion || 0) === beforeVersion) {
+      if (state.room.gameId === beforeGameId && state.room.phase === beforePhase && (state.room.roomVersion || 0) === beforeVersion) {
         if (heldRoom) state.room = heldRoom;
         showToast("ホストの操作待ちです。");
       } else {
         clearPlayerRankingHold();
+        if (state.room.gameId !== beforeGameId) showToast("次ゲームへ移動しました。");
       }
       render();
     }
@@ -336,6 +341,15 @@
       } catch (error) {
         showToast(`JSONを読み込めません: ${error.message}`);
       }
+    }
+    if (action === "load-game-configs") {
+      await loadGameConfigs(true);
+    }
+    if (action === "start-game-config") {
+      const configId = button.dataset.configId || "";
+      if (!configId) return;
+      if (!confirm("接続中の参加者を保持して次ゲームを開始しますか？")) return;
+      await startGameConfig(configId);
     }
     if (action === "import-stage") {
       const textarea = $("#stageJson");
@@ -484,7 +498,7 @@
           <h2>チケット</h2>
           <p class="muted">${renderTicketSummary(ticket)}</p>
         </div>
-        <button data-action="player-next" ${playerNextDisabledAttr()}>次へ</button>
+        <button data-action="player-next" ${playerNextDisabledAttr()}>${state.room.phase === Engine.PHASES.FINAL ? "次ゲームへ" : "次へ"}</button>
       </div>
     `;
   }
@@ -667,6 +681,7 @@
             <h2>参加者</h2>
             ${renderParticipantsTable()}
           </section>
+          ${renderNextGamePanel()}
           <section class="panel wide">
             <h2>設定</h2>
             <div class="form-actions">
@@ -684,6 +699,47 @@
           </section>
         </div>
       </section>
+    `;
+  }
+
+  function renderNextGamePanel() {
+    const canUseSheetConfigs = isRemoteMode();
+    const configs = state.nextGameConfigs || [];
+    const rows = configs.length
+      ? configs.map(renderGameConfigOption).join("")
+      : `<p class="muted">${state.nextGameConfigError ? escapeHtml(state.nextGameConfigError) : "Spreadsheetのgame_configsから候補を読み込んでください。"}</p>`;
+    return `
+      <section class="panel wide next-game-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>次ゲーム</h2>
+            <p class="muted">最終結果後、game_configsシートのACTIVEな設定を参加者保持で開始します。</p>
+          </div>
+          <button type="button" data-action="load-game-configs" ${canUseSheetConfigs ? "" : "disabled"}>候補を更新</button>
+        </div>
+        ${canUseSheetConfigs ? `
+          <div class="game-config-list">${rows}</div>
+          ${state.nextGameConfigsLoadedAt ? `<p class="muted">更新 ${formatTime(state.nextGameConfigsLoadedAt)}</p>` : ""}
+        ` : `<p class="muted">ローカルモードでは手動JSON importを使用してください。</p>`}
+      </section>
+    `;
+  }
+
+  function renderGameConfigOption(item) {
+    const stageNames = (item.stageNames || []).slice(0, 6).join(" / ");
+    const invalid = item.valid === false;
+    const canStart = !invalid && state.room.phase === Engine.PHASES.FINAL;
+    return `
+      <div class="game-config-item ${invalid ? "is-invalid" : ""}">
+        <div>
+          <strong>${escapeHtml(item.name || item.title || item.configId)}</strong>
+          <span>${escapeHtml(item.configId)} ・ ${Number(item.stageCount || 0)}ステージ</span>
+          <p>${escapeHtml(stageNames || item.notes || "ステージ名なし")}</p>
+          ${item.notes && stageNames ? `<p class="muted">${escapeHtml(item.notes)}</p>` : ""}
+          ${invalid ? `<p class="muted">JSONエラー: ${escapeHtml(item.error || "読み込み不可")}</p>` : ""}
+        </div>
+        <button type="button" class="primary" data-action="start-game-config" data-config-id="${escapeAttr(item.configId)}" ${canStart ? "" : "disabled"}>開始</button>
+      </div>
     `;
   }
 
@@ -1322,7 +1378,11 @@
 
   function applyLocalScreenRoom(room) {
     if (!isRemoteMode() || state.role !== "screen" || !state.screenLocalSync || !room) return;
-    if (state.room && Number(room.roomVersion || 0) < Number(state.room.roomVersion || 0)) return;
+    if (
+      state.room &&
+      room.gameId === state.room.gameId &&
+      Number(room.roomVersion || 0) < Number(state.room.roomVersion || 0)
+    ) return;
     state.room = room;
     render();
   }
@@ -1378,6 +1438,7 @@
       state.syncing = true;
       const response = await maybeBusy(options.showLoading ? "読み込み中…" : "", () => apiGet("/api/status", {
         uuid: state.playerUuid,
+        sinceGameId: state.room ? state.room.gameId || "" : "",
         sinceVersion: options.full ? "" : (state.room ? state.room.roomVersion || 0 : 0),
       }));
       if (response.ok && response.unchanged) return;
@@ -1479,6 +1540,44 @@
       showToast("集計の通信に失敗しました。");
       return false;
     }
+  }
+
+  async function loadGameConfigs(showLoading) {
+    if (!isRemoteMode()) return;
+    try {
+      state.nextGameConfigError = "";
+      const response = await maybeBusy(showLoading ? "次ゲーム候補を読み込み中…" : "", () => apiGet("/api/host/game-configs", {}));
+      if (!response.ok) {
+        state.nextGameConfigError = response.error || response.message || "候補を取得できませんでした。";
+        showToast(state.nextGameConfigError);
+      } else {
+        state.nextGameConfigs = response.configs || [];
+        state.nextGameConfigsLoadedAt = response.serverTime || new Date().toISOString();
+        if (!state.nextGameConfigs.length) state.nextGameConfigError = "ACTIVEな次ゲーム候補がありません。";
+      }
+    } catch (error) {
+      state.nextGameConfigError = "候補の通信に失敗しました。";
+      logClient("game-configs.error", error.message);
+      showToast(state.nextGameConfigError);
+    }
+    render();
+  }
+
+  async function startGameConfig(configId) {
+    if (!isRemoteMode()) return;
+    const beforeGameId = state.room.gameId;
+    const result = await runMutation(
+      () => ({ ok: false, room: state.room, error: "ローカルモードでは使用できません。" }),
+      "/api/host/start-game-config",
+      { configId }
+    );
+    if (!result.ok) return showToast(result.error || "次ゲームを開始できません。");
+    state.room = result.room;
+    clearPlayerRankingHold();
+    state.nextGameConfigsLoadedAt = "";
+    saveRoom("host.game-config.start", "host");
+    showToast(state.room.gameId !== beforeGameId ? "次ゲームを開始しました。" : "設定を読み込みました。");
+    render();
   }
 
   function isEditingPlayerText() {
