@@ -292,6 +292,8 @@ function archiveCurrentGame_(room) {
     gameId: room.gameId,
     title: room.config && room.config.gameMeta ? room.config.gameMeta.title : 'game',
     finishedAt: new Date().toISOString(),
+    interrupted: room.phase !== EVG_PHASES.FINAL,
+    finalPhase: room.phase,
     scores: clone_(room.scores || {}),
     rankings: rankCumulative_(room),
     stageResults: clone_(room.stageResults || {}),
@@ -843,6 +845,7 @@ function recalculate_(room) {
 }
 
 function importConfig_(room, config, preservePlayers) {
+  if (preservePlayers && room.players && room.players.length) persistCurrentGameIfNeeded_(room);
   return { ok: true, room: preservePlayers && room.players && room.players.length ? createNextGameRoom_(room, config) : createInitialRoom_(config) };
 }
 
@@ -868,11 +871,10 @@ function listGameConfigs_(payload) {
 }
 
 function startGameConfig_(room, configId) {
-  if (room.phase !== EVG_PHASES.FINAL) return error_('phase', '最終結果後に次ゲームを開始してください。', 409);
   const item = findActiveGameConfig_(configId);
   if (!item) return error_('not_found', '次ゲーム設定が見つかりません。', 404);
   if (!item.valid) return error_('validation', '次ゲーム設定JSONを読み込めません: ' + item.error, 400);
-  if (Object.keys(room.stageResults || {}).length) persistGameHistory_(room);
+  persistCurrentGameIfNeeded_(room);
   return { ok: true, room: createNextGameRoom_(room, item.config), gameConfig: { configId: item.configId, name: item.name } };
 }
 
@@ -1046,6 +1048,12 @@ function syncStageSettingsSheet_(room) {
   });
   if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
   if (rows.length) sheet.getRange(2, 1, rows.length, 4).setValues(rows);
+}
+
+function persistCurrentGameIfNeeded_(room) {
+  if (!room || !room.stageResults || Object.keys(room.stageResults).length === 0) return;
+  if (typeof SpreadsheetApp === 'undefined') return;
+  persistGameHistory_(room);
 }
 
 function persistGameHistory_(room) {
@@ -1290,6 +1298,8 @@ function buildGameSummary_(room) {
     rankings: rankCumulative_(room),
     scores: clone_(room.scores || {}),
     finishedAt: new Date().toISOString(),
+    interrupted: room.phase !== EVG_PHASES.FINAL,
+    finalPhase: room.phase,
     stageCount: Object.keys(room.stageResults || {}).length,
   };
 }
@@ -1320,6 +1330,7 @@ function buildPlayerGameSummary_(room, player) {
     wins: ranking.rank === 1 ? 1 : 0,
     podiums: ranking.rank <= 3 ? 1 : 0,
     rank: ranking.rank || null,
+    interrupted: room.phase !== EVG_PHASES.FINAL,
   };
 }
 

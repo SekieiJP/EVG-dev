@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-05-25 / 対象: <code>docs/elevator-game-requirements.md</code> v1.16</p>
+      <p class="meta">更新日: 2026-05-25 / 対象: <code>docs/elevator-game-requirements.md</code> v1.17</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -125,6 +125,7 @@
           <li>2026-05-25追記: 「次へ」を押さないPlayerは自動追従も自動棄権もせず、本人が押すまでランキング画面に置き去りにする仕様に固定した。</li>
           <li>2026-05-25追記: GASの<code>game_configs</code>シートを追加し、HostがSpreadsheetに事前登録したACTIVEなゲーム設定を選んで、参加者を保持したまま次ゲームを開始できるようにした。</li>
           <li>2026-05-25追記: Playerの最終結果画面にも<code>次へ</code>を残し、押下時だけ最新状態を取得して次ゲーム開始済みなら新しい<code>gameId</code>へ追従するようにした。</li>
+          <li>2026-05-25追記: Hostが進行途中のゲームを中断し、集計済みステージ結果だけを保存して<code>game_configs</code>の次ゲームへ移行できるようにした。</li>
         </ul>
       </section>
 
@@ -155,6 +156,7 @@
           <li>Playerの中間ランキング保持は<code>localStorage</code>内のスナップショットで実装した。ホストが次ステージへ進めても、本人が<code>次へ</code>を押すまでPlayerタブはランキングのまま残る。</li>
           <li>事前登録する次ゲーム候補は<code>stage_settings</code>ではなく<code>game_configs</code>に分離した。<code>stage_settings</code>は実際に走ったゲームのステージ設定履歴、<code>game_configs</code>は今後開始するテンプレートという役割にする。</li>
           <li><code>game_configs</code>の行は使用後も<code>ACTIVE</code>のまま残す。テンプレートを繰り返し使う運用を優先し、不要な候補はSpreadsheet上で<code>ARCHIVED</code>へ手動変更する。</li>
+          <li>中断して次ゲームへ進む場合、保存対象は集計済みステージだけにした。未集計の投票や受付中ステージは確定結果ではないため、履歴には残さず破棄する。</li>
           <li>GASの<code>players</code>シートは現在ゲーム参加者だけで上書きせず、既存UUIDを保持したまま現在参加者をマージする。過去UUID復元の起点を消さないため。</li>
         </ul>
       </section>
@@ -174,6 +176,7 @@
           <li>GASの<code>reveal-result</code>は、すでに当該ステージの結果が存在する場合は拒否する。再集計は別APIの<code>recalculate</code>に限定し、通常進行で累積得点とSkill履歴が二重加算されないことを優先した。</li>
           <li>完了済みゲームのローカル戦歴は<code>completedGames</code>に退避する。次ゲームのゲーム内スコアは0から始めるが、History画面では退避済み結果と現在ゲーム結果を合算して表示する。</li>
           <li>次ゲーム開始時は、現在ゲームのステージ結果が存在する場合に<code>save_data</code>、<code>stage_results</code>、<code>game_history</code>への保存を先に試みる。既存行がある場合は重複保存しない。</li>
+          <li>中断保存されたゲームのサマリには<code>interrupted=true</code>と中断時の<code>finalPhase</code>を記録する。ランキングや個人戦歴では、集計済みステージだけを含む短縮ゲームとして扱う。</li>
           <li>Playerの結果表示解禁は、スクリーン演出の<code>animationStartedAt</code>とステージ階数から計算した最終階到達時刻で判定する。ホストのフェーズ遷移ではなく演出完了時刻に合わせる。</li>
           <li>GASの<code>save_data</code>に保存する12指標はゲーム終了時点の事前集計値とした。個別ステージ再計算に必要なStageSkillと結果詳細は<code>stage_results</code>へ保存する。</li>
           <li>GASのPlayer向け状態レスポンスは、UI表示に必要な参加者名と本人チケットを優先し、全チケットや発表前結果は返さない。Screen向け状態は投影表示のため全体チケットと結果を返す。</li>
@@ -204,6 +207,7 @@
           <li>GAS通信リトライは0.4秒、0.8秒程度の短い遅延に限定した。長いリトライはApps Script実行時間節約と利用者操作の明快さを損なうため採用しない。</li>
           <li>ランキング保持はGASに既読状態を保存せず、Player端末ごとのローカル状態に限定した。通信量とサーバ状態の複雑化を抑えるため。</li>
           <li>Playerの最終結果後の次ゲーム検知は自動ポーリングではなくボタン取得にした。切り替わりの即時性は落ちるが、ゲーム終了後に参加者端末が放置されてもGAS実行時間を消費し続けない。</li>
+          <li>中断操作を許すと誤操作リスクが上がるため、Host画面では<code>中断して開始</code>という別ラベルと確認ダイアログで、未集計データが破棄されることを明示する。</li>
           <li>イベント仕様をすべて細かいGUIにする案もあったが、初版の設定GUIはJSON import/export中心にした。イベント種別が多く、先にスキーマ互換性を保つ方が安全なため。</li>
           <li>GAS側へブラウザ版エンジンを完全移植する案もあったが、サイズと検証時間を抑えるために主要ルール中心の実装にした。正式運用前には差分をなくす必要がある。</li>
           <li><code>topPlayer</code>を最終得点ベースにする案もあったが、予想イベント得点を含めると循環参照になるため、予想イベント加算前の基礎得点ベースを採用した。</li>

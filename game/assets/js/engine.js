@@ -152,6 +152,8 @@
       gameId: room.gameId,
       title: room.config && room.config.gameMeta ? room.config.gameMeta.title : "game",
       finishedAt: nowIso(),
+      interrupted: room.phase !== PHASES.FINAL,
+      finalPhase: room.phase,
       scores: deepClone(room.scores || {}),
       rankings: cumulativeRankings(room),
       stageResults: deepClone(room.stageResults || {}),

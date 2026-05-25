@@ -348,7 +348,12 @@
     if (action === "start-game-config") {
       const configId = button.dataset.configId || "";
       if (!configId) return;
-      if (!confirm("接続中の参加者を保持して次ゲームを開始しますか？")) return;
+      const interrupted = state.room.phase !== Engine.PHASES.FINAL;
+      const completedStages = Object.keys(state.room.stageResults || {}).length;
+      const message = interrupted
+        ? `進行中のゲームを中断し、集計済み${completedStages}ステージ分を保存して次ゲームを開始します。未集計の投票や現在ステージの途中経過は破棄されます。`
+        : "接続中の参加者を保持して次ゲームを開始しますか？";
+      if (!confirm(message)) return;
       await startGameConfig(configId);
     }
     if (action === "import-stage") {
@@ -713,7 +718,7 @@
         <div class="panel-heading">
           <div>
             <h2>次ゲーム</h2>
-            <p class="muted">最終結果後、game_configsシートのACTIVEな設定を参加者保持で開始します。</p>
+            <p class="muted">game_configsシートのACTIVEな設定を、参加者保持で開始します。途中中断時は集計済みステージだけ保存します。</p>
           </div>
           <button type="button" data-action="load-game-configs" ${canUseSheetConfigs ? "" : "disabled"}>候補を更新</button>
         </div>
@@ -728,7 +733,9 @@
   function renderGameConfigOption(item) {
     const stageNames = (item.stageNames || []).slice(0, 6).join(" / ");
     const invalid = item.valid === false;
-    const canStart = !invalid && state.room.phase === Engine.PHASES.FINAL;
+    const completedStages = Object.keys(state.room.stageResults || {}).length;
+    const canStart = !invalid && (state.room.phase === Engine.PHASES.FINAL || completedStages > 0);
+    const buttonLabel = state.room.phase === Engine.PHASES.FINAL ? "開始" : "中断して開始";
     return `
       <div class="game-config-item ${invalid ? "is-invalid" : ""}">
         <div>
@@ -738,7 +745,7 @@
           ${item.notes && stageNames ? `<p class="muted">${escapeHtml(item.notes)}</p>` : ""}
           ${invalid ? `<p class="muted">JSONエラー: ${escapeHtml(item.error || "読み込み不可")}</p>` : ""}
         </div>
-        <button type="button" class="primary" data-action="start-game-config" data-config-id="${escapeAttr(item.configId)}" ${canStart ? "" : "disabled"}>開始</button>
+        <button type="button" class="primary" data-action="start-game-config" data-config-id="${escapeAttr(item.configId)}" ${canStart ? "" : "disabled"}>${buttonLabel}</button>
       </div>
     `;
   }

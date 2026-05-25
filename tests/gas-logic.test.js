@@ -59,7 +59,6 @@ function loadGas() {
   buildPlayerGameSummary_,
   buildClientConfigSnippet_,
   normalizeGameConfigRow_,
-  startGameConfig_,
 });
 `, sandbox);
 }
@@ -237,6 +236,8 @@ run("GAS import config can preserve players for the next game", () => {
   assert.strictEqual(imported.room.stageResults["stage-001"], undefined);
   assert.strictEqual(imported.room.completedGames.length, 1);
   assert.strictEqual(imported.room.completedGames[0].scores.alice, 32);
+  assert.strictEqual(imported.room.completedGames[0].interrupted, true);
+  assert.strictEqual(imported.room.completedGames[0].finalPhase, gas.EVG_PHASES.REVEAL);
 });
 
 run("GAS auth helpers reject wrong API key and expired host token", () => {
@@ -282,12 +283,25 @@ run("GAS game config rows expose reusable active config metadata", () => {
   assert.ok(invalid.error);
 });
 
-run("GAS game config start is only allowed after final results", () => {
+run("GAS next game import archives interrupted games with completed stages", () => {
   const gas = loadGas();
-  const room = gas.createInitialRoom_(config());
-  const result = gas.startGameConfig_(room, "party-a");
-  assert.strictEqual(result.ok, false);
-  assert.strictEqual(result.code, "phase");
+  let room = gas.createInitialRoom_(config());
+  room = addPlayer(gas, room, "Alice", "alice");
+  room = advance(gas, room, "start-stage");
+  room = advance(gas, room, "open-voting");
+  const submitted = gas.submitTicket_(room, "alice", { boardFloor: 1, exitFloor: 3, predictions: { 0: "yes" } });
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  room = advance(gas, submitted.room, "close-voting");
+  room = gas.tallyCurrentStage_(room, "test-host").room;
+
+  const nextConfig = config();
+  nextConfig.gameMeta.title = "after-interrupt";
+  const imported = gas.importConfig_(room, nextConfig, true);
+  assert.strictEqual(imported.ok, true, imported.message);
+  assert.strictEqual(imported.room.completedGames.length, 1);
+  assert.strictEqual(imported.room.completedGames[0].interrupted, true);
+  assert.strictEqual(imported.room.completedGames[0].stageResults["stage-001"].players.alice.score, 32);
+  assert.strictEqual(imported.room.stageResults["stage-001"], undefined);
 });
 
 run("GAS public room hides other tickets and unrevealed player results", () => {
