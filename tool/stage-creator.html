@@ -1,0 +1,1299 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>エレベーターゲーム ステージ制作ツール</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7f8;
+        --panel: #ffffff;
+        --ink: #182426;
+        --muted: #617176;
+        --line: #d9e1e3;
+        --line-strong: #b8c7ca;
+        --accent: #146c72;
+        --accent-ink: #ffffff;
+        --danger: #b4232a;
+        --warning: #9a5b00;
+        --ok: #0c6b3d;
+        --blue: #1d5d9b;
+        --shadow: 0 12px 30px rgba(19, 34, 38, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        background: #fff;
+        color: var(--ink);
+        min-height: 38px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        border-color: var(--accent);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--accent-ink);
+      }
+
+      .danger {
+        border-color: #e4b5b8;
+        color: var(--danger);
+      }
+
+      .ghost {
+        background: transparent;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr) 440px;
+      }
+
+      header {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 16px 22px;
+        background: #ffffff;
+        border-bottom: 1px solid var(--line);
+        position: sticky;
+        top: 0;
+        z-index: 5;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.2;
+      }
+
+      h2 {
+        margin: 0 0 14px;
+        font-size: 18px;
+      }
+
+      h3 {
+        margin: 0;
+        font-size: 16px;
+      }
+
+      .header-actions,
+      .row,
+      .actions,
+      .stage-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .sidebar,
+      .workspace,
+      .preview {
+        min-height: calc(100vh - 71px);
+        padding: 18px;
+      }
+
+      .sidebar {
+        border-right: 1px solid var(--line);
+        background: #eef3f4;
+      }
+
+      .workspace {
+        overflow: auto;
+      }
+
+      .preview {
+        border-left: 1px solid var(--line);
+        background: #102024;
+        color: #eaf3f3;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        padding: 18px;
+        margin-bottom: 16px;
+      }
+
+      .sidebar .panel {
+        box-shadow: none;
+      }
+
+      .stage-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .stage-item {
+        width: 100%;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        text-align: left;
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px;
+      }
+
+      .stage-item.is-active {
+        border-color: var(--accent);
+        outline: 2px solid rgba(20, 108, 114, 0.15);
+      }
+
+      .stage-item strong,
+      .stage-item span {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .stage-item span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .count {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        background: #e0eff0;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        background: #ffffff;
+        color: var(--ink);
+        padding: 9px 10px;
+      }
+
+      textarea {
+        min-height: 104px;
+        resize: vertical;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        line-height: 1.45;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .grid.four {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .muted {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .event-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfc;
+        padding: 14px;
+        margin-top: 12px;
+      }
+
+      .event-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .choice-row {
+        display: grid;
+        grid-template-columns: minmax(80px, 1fr) minmax(120px, 1.6fr) minmax(68px, 0.8fr) minmax(68px, 0.8fr) auto;
+        gap: 8px;
+        align-items: end;
+        margin-top: 8px;
+      }
+
+      .messages {
+        display: grid;
+        gap: 8px;
+      }
+
+      .message {
+        border-radius: 8px;
+        padding: 10px 12px;
+        background: #eef3f4;
+        border: 1px solid var(--line);
+        color: var(--ink);
+        overflow-wrap: anywhere;
+      }
+
+      .message.error {
+        background: #fff0f1;
+        border-color: #efc1c5;
+        color: var(--danger);
+      }
+
+      .message.warning {
+        background: #fff7e8;
+        border-color: #edd2a3;
+        color: var(--warning);
+      }
+
+      .message.ok {
+        background: #ecf8f1;
+        border-color: #b7dfc8;
+        color: var(--ok);
+      }
+
+      .preview textarea {
+        flex: 1;
+        min-height: 440px;
+        background: #0b171a;
+        color: #d9f7ee;
+        border-color: #335158;
+      }
+
+      .preview label {
+        color: #aac2c7;
+      }
+
+      .preview button {
+        background: #173136;
+        border-color: #45636b;
+        color: #ecf7f8;
+      }
+
+      .preview .primary {
+        background: #2f9ca4;
+        border-color: #2f9ca4;
+        color: #061315;
+      }
+
+      .file-input {
+        position: relative;
+        overflow: hidden;
+      }
+
+      .file-input input {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        cursor: pointer;
+      }
+
+      .small {
+        font-size: 12px;
+      }
+
+      @media (max-width: 1180px) {
+        .app {
+          grid-template-columns: 280px minmax(0, 1fr);
+        }
+
+        .preview {
+          grid-column: 1 / -1;
+          min-height: auto;
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+      }
+
+      @media (max-width: 760px) {
+        .app {
+          display: block;
+        }
+
+        header {
+          position: static;
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .sidebar,
+        .workspace,
+        .preview {
+          min-height: auto;
+          border: 0;
+        }
+
+        .grid,
+        .grid.four,
+        .choice-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <div>
+          <h1>エレベーターゲーム ステージ制作ツール</h1>
+          <div class="muted">複数ステージの設定を作成し、ゲーム設定JSONを出力します。</div>
+        </div>
+        <div class="header-actions">
+          <button type="button" data-action="load-sample">サンプル</button>
+          <label class="file-input">
+            <button type="button">JSON読込</button>
+            <input id="configFile" type="file" accept="application/json,.json">
+          </label>
+          <button type="button" class="primary" data-action="download">JSON保存</button>
+        </div>
+      </header>
+
+      <aside class="sidebar">
+        <div class="panel">
+          <div class="section-title">
+            <h2>ステージ</h2>
+            <button type="button" class="primary" data-action="add-stage">追加</button>
+          </div>
+          <div id="stageList" class="stage-list"></div>
+        </div>
+        <div class="panel">
+          <h2>部分インポート</h2>
+          <p class="muted">単体ステージJSONを現在の末尾に追加します。</p>
+          <textarea id="stageImportText" spellcheck="false" placeholder='{"stageId":"stage-004","name":"追加ステージ",...}'></textarea>
+          <div class="actions">
+            <button type="button" data-action="import-stage">ステージ追加</button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <section class="panel">
+          <div class="section-title">
+            <h2>ゲーム情報</h2>
+            <span id="summary" class="muted"></span>
+          </div>
+          <div class="grid">
+            <label>
+              スキーマバージョン
+              <input id="schemaVersion" data-bind="schemaVersion">
+            </label>
+            <label>
+              作成日時
+              <input id="createdAt" data-bind="createdAt">
+            </label>
+            <label>
+              タイトル
+              <input id="title" data-bind="title">
+            </label>
+            <label>
+              説明
+              <input id="description" data-bind="description">
+            </label>
+          </div>
+          <label style="margin-top:12px">
+            追加トップレベルJSON（未知項目や将来拡張用。既知項目と衝突するキーは無視）
+            <textarea id="topExtraJson" data-bind="topExtraJson" spellcheck="false" placeholder='{"settings":{"theme":"party"}}'></textarea>
+          </label>
+        </section>
+
+        <section id="stageEditor" class="panel"></section>
+        <section class="panel">
+          <h2>検証結果</h2>
+          <div id="messages" class="messages"></div>
+        </section>
+      </main>
+
+      <aside class="preview">
+        <div class="section-title">
+          <h2>出力JSON</h2>
+          <div class="actions">
+            <button type="button" data-action="copy">コピー</button>
+            <button type="button" class="primary" data-action="download">保存</button>
+          </div>
+        </div>
+        <label>
+          Hostの設定Import、またはSpreadsheetの game_configs.configJson に使うJSON
+          <textarea id="jsonOutput" spellcheck="false" readonly></textarea>
+        </label>
+      </aside>
+    </div>
+
+    <script>
+      (() => {
+        "use strict";
+
+        const EVENT_TYPES = [
+          ["E1_prediction", "E1 予想イベント"],
+          ["E2_forbidden", "E2 禁止イベント"],
+          ["E3a_zone_multiplier", "E3a 区間倍率"],
+          ["E3b_score_multiplier", "E3b 得点倍率"],
+          ["E4_special_floor", "E4 特別階"],
+          ["E5_occupancy_multiplier", "E5 人数指定倍率"],
+          ["E6_view_bonus", "E6 眺望イベント"],
+        ];
+        const ANSWER_FORMATS = [
+          ["integer", "整数入力"],
+          ["range", "範囲選択"],
+          ["select", "択一選択"],
+          ["player", "プレイヤー指名"],
+          ["player_uuid", "プレイヤーUUID"],
+          ["yesno", "Yes / No"],
+        ];
+        const METRICS = [
+          ["", "固定正解または手動判定"],
+          ["forcedOffCount", "強制下車発生回数"],
+          ["totalBoarded", "乗車成功人数"],
+          ["allSucceeded", "全員乗車成功 yes/no"],
+          ["topPlayer", "基礎得点トップUUID"],
+        ];
+        const CHOICE_KEYS = ["ranges", "options", "choices"];
+        const SAMPLE = {
+          schemaVersion: "1.0.0",
+          gameMeta: {
+            title: "短時間パーティ版",
+            description: "3ステージ・10分想定",
+            createdAt: new Date().toISOString(),
+          },
+          stages: [
+            {
+              stageId: "short-001",
+              name: "オープニング",
+              params: { N: 10, X: 3, P: 10, Q: 4 },
+              events: [
+                {
+                  type: "E1_prediction",
+                  question: "強制下車は何回発生する？",
+                  answerFormat: "integer",
+                  metric: "forcedOffCount",
+                  scoreOnCorrect: 30,
+                  scoreOnWrong: 0,
+                  scoreOnNoAnswer: -5,
+                },
+                { type: "E2_forbidden", fromFloor: 4, toFloor: 4 },
+                { type: "E3a_zone_multiplier", fromFloor: 7, toFloor: 10, multiplier: 2 },
+              ],
+            },
+            {
+              stageId: "short-002",
+              name: "混雑予報",
+              params: { N: 14, X: 4, P: 8, Q: 3 },
+              events: [
+                {
+                  type: "E1_prediction",
+                  question: "乗車成功者数は？",
+                  answerFormat: "range",
+                  metric: "totalBoarded",
+                  ranges: [
+                    { value: "low", label: "0〜2人", min: 0, max: 2 },
+                    { value: "mid", label: "3〜4人", min: 3, max: 4 },
+                    { value: "high", label: "5人以上", min: 5 },
+                  ],
+                  scoreOnCorrect: 20,
+                  scoreOnWrong: 0,
+                  scoreOnNoAnswer: -5,
+                },
+                { type: "E4_special_floor", floor: 8, bonus: 25 },
+                { type: "E5_occupancy_multiplier", threshold: 3, multiplier: 1.5 },
+              ],
+            },
+            {
+              stageId: "short-003",
+              name: "ラストライド",
+              params: { N: 20, X: 5, P: 7, Q: 2 },
+              events: [
+                {
+                  type: "E1_prediction",
+                  question: "このステージの最高得点者は？",
+                  answerFormat: "player",
+                  metric: "topPlayer",
+                  scoreOnCorrect: 30,
+                  scoreOnWrong: 0,
+                  scoreOnNoAnswer: -5,
+                },
+                { type: "E3b_score_multiplier", fromFloor: 12, toFloor: 20, multiplier: 1.8 },
+                { type: "E6_view_bonus", bonusPerExitFloor: 2 },
+              ],
+            },
+          ],
+        };
+
+        let state = normalizeConfig(SAMPLE);
+        let selectedStageIndex = 0;
+
+        const $ = (selector, root = document) => root.querySelector(selector);
+        const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+        function normalizeConfig(config) {
+          const source = config && typeof config === "object" ? config : {};
+          const meta = source.gameMeta || {};
+          const knownTop = ["schemaVersion", "gameMeta", "stages"];
+          return {
+            schemaVersion: String(source.schemaVersion || "1.0.0"),
+            gameMeta: {
+              title: String(meta.title || "エレベーターゲーム"),
+              description: String(meta.description || ""),
+              createdAt: String(meta.createdAt || new Date().toISOString()),
+            },
+            topExtra: extractExtra(source, knownTop),
+            stages: (Array.isArray(source.stages) && source.stages.length ? source.stages : [createStage(1)])
+              .map((stage, index) => normalizeStage(stage, index)),
+          };
+        }
+
+        function normalizeStage(stage, index) {
+          const source = stage && typeof stage === "object" ? stage : {};
+          const params = source.params || {};
+          return {
+            stageId: String(source.stageId || `stage-${String(index + 1).padStart(3, "0")}`),
+            name: String(source.name || `ステージ${index + 1}`),
+            params: {
+              N: numberOr(params.N, 10),
+              X: numberOr(params.X, 4),
+              P: numberOr(params.P, 10),
+              Q: numberOr(params.Q, 5),
+            },
+            events: (Array.isArray(source.events) ? source.events : []).map(normalizeEvent),
+            extra: extractExtra(source, ["stageId", "name", "params", "events"]),
+            extraError: "",
+          };
+        }
+
+        function normalizeEvent(event) {
+          const source = event && typeof event === "object" ? event : {};
+          const type = String(source.type || "E1_prediction");
+          const eventData = {
+            type,
+            question: String(source.question || ""),
+            answerFormat: String(source.answerFormat || "integer"),
+            metric: String(source.metric || source.answerMetric || ""),
+            correctAnswer: valueOrEmpty(source.correctAnswer),
+            scoreOnCorrect: numberOr(source.scoreOnCorrect, 0),
+            scoreOnWrong: numberOr(source.scoreOnWrong, 0),
+            scoreOnNoAnswer: numberOr(source.scoreOnNoAnswer, 0),
+            choiceKey: choiceKeyFor(source),
+            choices: choiceListFor(source),
+            fromFloor: numberOr(source.fromFloor, 1),
+            toFloor: numberOr(source.toFloor, numberOr(source.fromFloor, 1)),
+            multiplier: numberOr(source.multiplier, 2),
+            floor: numberOr(source.floor, 1),
+            bonus: numberOr(source.bonus !== undefined ? source.bonus : source.score, 0),
+            threshold: numberOr(source.threshold, 2),
+            bonusPerExitFloor: numberOr(source.bonusPerExitFloor !== undefined ? source.bonusPerExitFloor : source.multiplier, 1),
+            extra: extractExtra(source, knownEventKeys()),
+            extraError: "",
+          };
+          return eventData;
+        }
+
+        function knownEventKeys() {
+          return [
+            "type", "question", "answerFormat", "metric", "answerMetric", "correctAnswer",
+            "scoreOnCorrect", "scoreOnWrong", "scoreOnNoAnswer", "ranges", "options", "choices",
+            "fromFloor", "toFloor", "multiplier", "floor", "bonus", "score", "threshold", "bonusPerExitFloor",
+          ];
+        }
+
+        function choiceKeyFor(source) {
+          if (Array.isArray(source.options)) return "options";
+          if (Array.isArray(source.choices)) return "choices";
+          return "ranges";
+        }
+
+        function choiceListFor(source) {
+          const raw = source.ranges || source.options || source.choices || [];
+          return Array.isArray(raw)
+            ? raw.map((choice, index) => ({
+                value: String(choice.value !== undefined ? choice.value : `choice-${index + 1}`),
+                label: String(choice.label !== undefined ? choice.label : ""),
+                min: valueOrEmpty(choice.min),
+                max: valueOrEmpty(choice.max),
+              }))
+            : [];
+        }
+
+        function extractExtra(source, knownKeys) {
+          return Object.fromEntries(Object.entries(source || {}).filter(([key]) => !knownKeys.includes(key)));
+        }
+
+        function createStage(index) {
+          return {
+            stageId: `stage-${String(index).padStart(3, "0")}`,
+            name: `ステージ${index}`,
+            params: { N: 10, X: 4, P: 10, Q: 5 },
+            events: [],
+            extra: {},
+            extraError: "",
+          };
+        }
+
+        function createEvent(type = "E1_prediction") {
+          return normalizeEvent({ type });
+        }
+
+        function buildConfig() {
+          const topExtra = safeObjectFromText($("#topExtraJson").value, "追加トップレベルJSON");
+          const config = mergeKnown(topExtra, {
+            schemaVersion: $("#schemaVersion").value.trim() || "1.0.0",
+            gameMeta: {
+              title: $("#title").value.trim() || "エレベーターゲーム",
+              description: $("#description").value.trim(),
+              createdAt: $("#createdAt").value.trim() || new Date().toISOString(),
+            },
+            stages: state.stages.map(buildStage),
+          });
+          return config;
+        }
+
+        function buildStage(stage) {
+          const stageExtra = safeObject(stage.extra);
+          return mergeKnown(stageExtra, {
+            stageId: stage.stageId.trim(),
+            name: stage.name.trim(),
+            params: {
+              N: integer(stage.params.N),
+              X: integer(stage.params.X),
+              P: number(stage.params.P),
+              Q: number(stage.params.Q),
+            },
+            events: stage.events.map(buildEvent),
+          });
+        }
+
+        function buildEvent(event) {
+          const extra = safeObject(event.extra);
+          const base = { type: event.type };
+          if (event.type === "E1_prediction") {
+            base.question = event.question.trim();
+            base.answerFormat = event.answerFormat;
+            if (event.metric) base.metric = event.metric;
+            if (event.correctAnswer !== "") base.correctAnswer = normalizeCorrectAnswer(event.correctAnswer);
+            base.scoreOnCorrect = number(event.scoreOnCorrect);
+            base.scoreOnWrong = number(event.scoreOnWrong);
+            base.scoreOnNoAnswer = number(event.scoreOnNoAnswer);
+            if (event.answerFormat === "range" || event.answerFormat === "select") {
+              base[event.choiceKey || "ranges"] = event.choices.map((choice) => {
+                const item = { value: choice.value, label: choice.label };
+                if (choice.min !== "") item.min = number(choice.min);
+                if (choice.max !== "") item.max = number(choice.max);
+                return item;
+              });
+            }
+          } else if (event.type === "E2_forbidden") {
+            base.fromFloor = integer(event.fromFloor);
+            base.toFloor = integer(event.toFloor);
+          } else if (event.type === "E3a_zone_multiplier" || event.type === "E3b_score_multiplier") {
+            base.fromFloor = integer(event.fromFloor);
+            base.toFloor = integer(event.toFloor);
+            base.multiplier = number(event.multiplier);
+          } else if (event.type === "E4_special_floor") {
+            base.floor = integer(event.floor);
+            base.bonus = number(event.bonus);
+          } else if (event.type === "E5_occupancy_multiplier") {
+            base.threshold = integer(event.threshold);
+            base.multiplier = number(event.multiplier);
+          } else if (event.type === "E6_view_bonus") {
+            base.bonusPerExitFloor = number(event.bonusPerExitFloor);
+          }
+          return mergeKnown(extra, base);
+        }
+
+        function mergeKnown(extra, known) {
+          return Object.assign({}, safeObject(extra), known);
+        }
+
+        function validate(config) {
+          const errors = [];
+          const warnings = [];
+          if (!config.schemaVersion) errors.push("schemaVersion が空です。");
+          if (!config.gameMeta.title) errors.push("ゲームタイトルが空です。");
+          if (!Array.isArray(config.stages) || config.stages.length === 0) errors.push("ステージを1件以上作成してください。");
+
+          const ids = new Set();
+          config.stages.forEach((stage, stageIndex) => {
+            const label = `${stageIndex + 1}番目のステージ`;
+            if (!stage.stageId) errors.push(`${label}: stageId が空です。`);
+            if (ids.has(stage.stageId)) errors.push(`${label}: stageId「${stage.stageId}」が重複しています。`);
+            ids.add(stage.stageId);
+            if (!stage.name) warnings.push(`${label}: name が空です。`);
+            validateRange(errors, label, "N", stage.params.N, 2, 999);
+            validateRange(errors, label, "X", stage.params.X, 1, 999);
+            validateRange(errors, label, "P", stage.params.P, 0, 9999);
+            validateRange(errors, label, "Q", stage.params.Q, 0, 9999);
+            const predictionCount = stage.events.filter((event) => event.type === "E1_prediction").length;
+            if (predictionCount > 2) errors.push(`${label}: E1予想イベントは最大2問です。`);
+            if (stage.events.length > 10) warnings.push(`${label}: 現行エンジンは events を先頭10件までに丸めます。`);
+            stage.events.forEach((event, eventIndex) => validateEvent(errors, warnings, stage, event, `${label} / イベント${eventIndex + 1}`));
+          });
+          if (!errors.length && !warnings.length) {
+            warnings.push("検証エラーはありません。");
+          }
+          return { errors: errors.concat(collectExtraErrors()), warnings };
+        }
+
+        function collectExtraErrors() {
+          const errors = [];
+          if (state.topExtraError) errors.push(state.topExtraError);
+          state.stages.forEach((stage, stageIndex) => {
+            if (stage.extraError) errors.push(`${stageIndex + 1}番目のステージ: ${stage.extraError}`);
+            stage.events.forEach((event, eventIndex) => {
+              if (event.extraError) errors.push(`${stageIndex + 1}番目のステージ / イベント${eventIndex + 1}: ${event.extraError}`);
+            });
+          });
+          return errors;
+        }
+
+        function validateEvent(errors, warnings, stage, event, label) {
+          const maxFloor = stage.params.N;
+          if (!EVENT_TYPES.some(([type]) => type === event.type)) warnings.push(`${label}: 未知のイベントtypeです。追加JSONとしては出力できます。`);
+          if (event.type === "E1_prediction") {
+            if (!event.question) warnings.push(`${label}: question が空です。`);
+            if (!ANSWER_FORMATS.some(([format]) => format === event.answerFormat)) errors.push(`${label}: answerFormat が未対応です。`);
+            if ((event.answerFormat === "range" || event.answerFormat === "select") && (!Array.isArray(event[event.choiceKey || "ranges"]) || event[event.choiceKey || "ranges"].length === 0)) {
+              errors.push(`${label}: 範囲/択一選択肢を1件以上追加してください。`);
+            }
+          } else if (event.type === "E2_forbidden" || event.type === "E3a_zone_multiplier" || event.type === "E3b_score_multiplier") {
+            validateFloorRange(errors, label, event.fromFloor, event.toFloor, maxFloor);
+            if (event.type !== "E2_forbidden" && number(event.multiplier) <= 0) errors.push(`${label}: multiplier は0より大きい値にしてください。`);
+          } else if (event.type === "E4_special_floor") {
+            validateRange(errors, label, "floor", event.floor, 1, maxFloor);
+          } else if (event.type === "E5_occupancy_multiplier") {
+            validateRange(errors, label, "threshold", event.threshold, 1, 999);
+            if (number(event.multiplier) <= 0) errors.push(`${label}: multiplier は0より大きい値にしてください。`);
+          }
+        }
+
+        function validateFloorRange(errors, label, from, to, maxFloor) {
+          validateRange(errors, label, "fromFloor", from, 1, maxFloor);
+          validateRange(errors, label, "toFloor", to, 1, maxFloor);
+          if (integer(from) > integer(to)) errors.push(`${label}: fromFloor は toFloor 以下にしてください。`);
+        }
+
+        function validateRange(errors, label, name, value, min, max) {
+          const numeric = number(value);
+          if (!Number.isFinite(numeric) || numeric < min || numeric > max) {
+            errors.push(`${label}: ${name} は ${min}〜${max} の範囲で入力してください。`);
+          }
+        }
+
+        function render() {
+          syncGlobalInputs();
+          renderStageList();
+          renderStageEditor();
+          updateOutput();
+        }
+
+        function syncGlobalInputs() {
+          $("#schemaVersion").value = state.schemaVersion;
+          $("#createdAt").value = state.gameMeta.createdAt;
+          $("#title").value = state.gameMeta.title;
+          $("#description").value = state.gameMeta.description;
+          $("#topExtraJson").value = JSON.stringify(state.topExtra || {}, null, 2);
+          $("#summary").textContent = `${state.stages.length}ステージ`;
+        }
+
+        function renderStageList() {
+          const list = $("#stageList");
+          list.innerHTML = state.stages.map((stage, index) => `
+            <button type="button" class="stage-item ${index === selectedStageIndex ? "is-active" : ""}" data-action="select-stage" data-index="${index}">
+              <span>
+                <strong>${escapeHtml(stage.name || `ステージ${index + 1}`)}</strong><br>
+                ${escapeHtml(stage.stageId)} / ${stage.params.N}階 / ${stage.events.length}イベント
+              </span>
+              <span class="count">${index + 1}</span>
+            </button>
+          `).join("");
+        }
+
+        function renderStageEditor() {
+          const stage = state.stages[selectedStageIndex];
+          const editor = $("#stageEditor");
+          if (!stage) {
+            editor.innerHTML = "<h2>ステージがありません</h2>";
+            return;
+          }
+          editor.innerHTML = `
+            <div class="section-title">
+              <h2>ステージ設定</h2>
+              <div class="stage-actions">
+                <button type="button" data-action="move-stage-up" ${selectedStageIndex === 0 ? "disabled" : ""}>上へ</button>
+                <button type="button" data-action="move-stage-down" ${selectedStageIndex === state.stages.length - 1 ? "disabled" : ""}>下へ</button>
+                <button type="button" class="danger" data-action="delete-stage" ${state.stages.length === 1 ? "disabled" : ""}>削除</button>
+              </div>
+            </div>
+            <div class="grid">
+              <label>ステージID<input data-stage-field="stageId" value="${escapeAttr(stage.stageId)}"></label>
+              <label>ステージ名<input data-stage-field="name" value="${escapeAttr(stage.name)}"></label>
+            </div>
+            <div class="grid four" style="margin-top:12px">
+              <label>総階数 N<input type="number" min="2" max="999" step="1" data-param-field="N" value="${escapeAttr(stage.params.N)}"></label>
+              <label>定員 X<input type="number" min="1" max="999" step="1" data-param-field="X" value="${escapeAttr(stage.params.X)}"></label>
+              <label>上昇報酬 P<input type="number" min="0" max="9999" step="0.1" data-param-field="P" value="${escapeAttr(stage.params.P)}"></label>
+              <label>運賃 Q<input type="number" min="0" max="9999" step="0.1" data-param-field="Q" value="${escapeAttr(stage.params.Q)}"></label>
+            </div>
+            <label style="margin-top:12px">
+              追加ステージJSON
+              <textarea data-stage-extra spellcheck="false">${escapeHtml(JSON.stringify(stage.extra || {}, null, 2))}</textarea>
+            </label>
+            <div class="section-title" style="margin-top:18px">
+              <h2>イベント</h2>
+              <button type="button" class="primary" data-action="add-event">追加</button>
+            </div>
+            <div id="eventList">
+              ${stage.events.map((event, index) => renderEvent(event, index)).join("") || `<p class="muted">イベントなし</p>`}
+            </div>
+          `;
+        }
+
+        function renderEvent(event, index) {
+          return `
+            <article class="event-card" data-event-index="${index}">
+              <div class="event-head">
+                <div>
+                  <h3>${index + 1}. ${escapeHtml(labelFor(EVENT_TYPES, event.type))}</h3>
+                  <div class="muted">${escapeHtml(event.type)}</div>
+                </div>
+                <div class="actions">
+                  <button type="button" data-action="move-event-up" data-event-index="${index}" ${index === 0 ? "disabled" : ""}>上へ</button>
+                  <button type="button" data-action="move-event-down" data-event-index="${index}" ${index === state.stages[selectedStageIndex].events.length - 1 ? "disabled" : ""}>下へ</button>
+                  <button type="button" class="danger" data-action="delete-event" data-event-index="${index}">削除</button>
+                </div>
+              </div>
+              <label>
+                イベント種別
+                <select data-event-field="type">
+                  ${EVENT_TYPES.map(([type, label]) => `<option value="${type}" ${type === event.type ? "selected" : ""}>${label}</option>`).join("")}
+                </select>
+              </label>
+              ${renderEventFields(event)}
+              <label style="margin-top:12px">
+                追加イベントJSON
+                <textarea data-event-extra spellcheck="false">${escapeHtml(JSON.stringify(event.extra || {}, null, 2))}</textarea>
+              </label>
+            </article>
+          `;
+        }
+
+        function renderEventFields(event) {
+          if (event.type === "E1_prediction") {
+            return `
+              <div class="grid" style="margin-top:12px">
+                <label>問題文<input data-event-field="question" value="${escapeAttr(event.question)}"></label>
+                <label>回答形式<select data-event-field="answerFormat">${ANSWER_FORMATS.map(([value, label]) => `<option value="${value}" ${value === event.answerFormat ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+                <label>正解メトリクス<select data-event-field="metric">${METRICS.map(([value, label]) => `<option value="${value}" ${value === event.metric ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+                <label>固定正解フォールバック<input data-event-field="correctAnswer" value="${escapeAttr(event.correctAnswer)}"></label>
+              </div>
+              <div class="grid four" style="margin-top:12px">
+                <label>正解時点<input type="number" step="0.1" data-event-field="scoreOnCorrect" value="${escapeAttr(event.scoreOnCorrect)}"></label>
+                <label>不正解時点<input type="number" step="0.1" data-event-field="scoreOnWrong" value="${escapeAttr(event.scoreOnWrong)}"></label>
+                <label>無回答時点<input type="number" step="0.1" data-event-field="scoreOnNoAnswer" value="${escapeAttr(event.scoreOnNoAnswer)}"></label>
+                <label>選択肢キー<select data-event-field="choiceKey">${CHOICE_KEYS.map((key) => `<option value="${key}" ${key === event.choiceKey ? "selected" : ""}>${key}</option>`).join("")}</select></label>
+              </div>
+              ${(event.answerFormat === "range" || event.answerFormat === "select") ? renderChoices(event) : ""}
+            `;
+          }
+          if (event.type === "E2_forbidden") {
+            return floorRangeFields(event);
+          }
+          if (event.type === "E3a_zone_multiplier" || event.type === "E3b_score_multiplier") {
+            return `${floorRangeFields(event)}
+              <label style="margin-top:12px">倍率 R<input type="number" min="0.1" step="0.1" data-event-field="multiplier" value="${escapeAttr(event.multiplier)}"></label>`;
+          }
+          if (event.type === "E4_special_floor") {
+            return `<div class="grid" style="margin-top:12px">
+              <label>特別階 Y<input type="number" min="1" step="1" data-event-field="floor" value="${escapeAttr(event.floor)}"></label>
+              <label>加点 M<input type="number" step="0.1" data-event-field="bonus" value="${escapeAttr(event.bonus)}"></label>
+            </div>`;
+          }
+          if (event.type === "E5_occupancy_multiplier") {
+            return `<div class="grid" style="margin-top:12px">
+              <label>人数 A<input type="number" min="1" step="1" data-event-field="threshold" value="${escapeAttr(event.threshold)}"></label>
+              <label>倍率 R<input type="number" min="0.1" step="0.1" data-event-field="multiplier" value="${escapeAttr(event.multiplier)}"></label>
+            </div>`;
+          }
+          if (event.type === "E6_view_bonus") {
+            return `<label style="margin-top:12px">降車階ごとの加点 M<input type="number" step="0.1" data-event-field="bonusPerExitFloor" value="${escapeAttr(event.bonusPerExitFloor)}"></label>`;
+          }
+          return "";
+        }
+
+        function floorRangeFields(event) {
+          return `<div class="grid" style="margin-top:12px">
+            <label>開始階 S<input type="number" min="1" step="1" data-event-field="fromFloor" value="${escapeAttr(event.fromFloor)}"></label>
+            <label>終了階 T<input type="number" min="1" step="1" data-event-field="toFloor" value="${escapeAttr(event.toFloor)}"></label>
+          </div>`;
+        }
+
+        function renderChoices(event) {
+          return `
+            <div style="margin-top:14px">
+              <div class="section-title">
+                <h3>選択肢</h3>
+                <button type="button" data-action="add-choice">追加</button>
+              </div>
+              ${event.choices.map((choice, index) => `
+                <div class="choice-row" data-choice-index="${index}">
+                  <label>value<input data-choice-field="value" value="${escapeAttr(choice.value)}"></label>
+                  <label>label<input data-choice-field="label" value="${escapeAttr(choice.label)}"></label>
+                  <label>min<input type="number" step="0.1" data-choice-field="min" value="${escapeAttr(choice.min)}"></label>
+                  <label>max<input type="number" step="0.1" data-choice-field="max" value="${escapeAttr(choice.max)}"></label>
+                  <button type="button" class="danger" data-action="delete-choice" data-choice-index="${index}">削除</button>
+                </div>
+              `).join("") || `<p class="muted">範囲/択一選択肢を追加してください。</p>`}
+            </div>
+          `;
+        }
+
+        function updateOutput() {
+          let config;
+          try {
+            config = buildConfig();
+          } catch (error) {
+            $("#jsonOutput").value = `JSON拡張フィールドの解析エラー: ${error.message}`;
+            renderMessages([error.message], []);
+            return;
+          }
+          const report = validate(config);
+          $("#jsonOutput").value = JSON.stringify(config, null, 2);
+          renderMessages(report.errors, report.warnings);
+        }
+
+        function renderMessages(errors, warnings) {
+          const messages = $("#messages");
+          const items = [
+            ...errors.map((text) => ["error", text]),
+            ...warnings.map((text) => [text === "検証エラーはありません。" ? "ok" : "warning", text]),
+          ];
+          messages.innerHTML = items.map(([kind, text]) => `<div class="message ${kind}">${escapeHtml(text)}</div>`).join("");
+        }
+
+        function handleInput(event) {
+          const target = event.target;
+          if (!target.matches("input, select, textarea")) return;
+          if (target.dataset.bind) {
+            updateGlobalState();
+            updateOutput();
+            return;
+          }
+          const stage = state.stages[selectedStageIndex];
+          if (!stage) return;
+          if (target.dataset.stageField) {
+            stage[target.dataset.stageField] = target.value;
+            renderStageList();
+            updateOutput();
+          } else if (target.dataset.paramField) {
+            stage.params[target.dataset.paramField] = target.value;
+            renderStageList();
+            updateOutput();
+          } else if (target.hasAttribute("data-stage-extra")) {
+            trySetExtra(stage, target.value);
+            updateOutput();
+          } else {
+            const eventCard = target.closest("[data-event-index]");
+            if (!eventCard) return;
+            const item = stage.events[Number(eventCard.dataset.eventIndex)];
+            if (target.dataset.eventField) {
+              item[target.dataset.eventField] = target.value;
+              if (target.dataset.eventField === "type" || target.dataset.eventField === "answerFormat") {
+                renderStageEditor();
+              }
+              updateOutput();
+            } else if (target.hasAttribute("data-event-extra")) {
+              trySetExtra(item, target.value);
+              updateOutput();
+            } else if (target.dataset.choiceField) {
+              const choice = item.choices[Number(target.closest("[data-choice-index]").dataset.choiceIndex)];
+              choice[target.dataset.choiceField] = target.value;
+              updateOutput();
+            }
+          }
+        }
+
+        function trySetExtra(target, text) {
+          try {
+            target.extra = safeObjectFromText(text, "追加JSON");
+            target.extraError = "";
+          } catch (_) {
+            target.extraError = "追加JSONの構文を確認してください。最後に有効だった値で出力しています。";
+          }
+        }
+
+        function updateGlobalState() {
+          state.schemaVersion = $("#schemaVersion").value;
+          state.gameMeta.title = $("#title").value;
+          state.gameMeta.description = $("#description").value;
+          state.gameMeta.createdAt = $("#createdAt").value;
+          try {
+            state.topExtra = safeObjectFromText($("#topExtraJson").value, "追加トップレベルJSON");
+            state.topExtraError = "";
+          } catch (error) {
+            state.topExtraError = error.message;
+          }
+        }
+
+        function handleClick(event) {
+          const button = event.target.closest("button");
+          if (!button || button.disabled) return;
+          const action = button.dataset.action;
+          if (!action) return;
+          if (action === "load-sample") {
+            loadConfig(SAMPLE);
+          } else if (action === "add-stage") {
+            state.stages.push(createStage(state.stages.length + 1));
+            selectedStageIndex = state.stages.length - 1;
+            render();
+          } else if (action === "select-stage") {
+            selectedStageIndex = Number(button.dataset.index);
+            render();
+          } else if (action === "delete-stage") {
+            state.stages.splice(selectedStageIndex, 1);
+            selectedStageIndex = Math.max(0, selectedStageIndex - 1);
+            render();
+          } else if (action === "move-stage-up") {
+            moveItem(state.stages, selectedStageIndex, selectedStageIndex - 1);
+            selectedStageIndex -= 1;
+            render();
+          } else if (action === "move-stage-down") {
+            moveItem(state.stages, selectedStageIndex, selectedStageIndex + 1);
+            selectedStageIndex += 1;
+            render();
+          } else if (action === "add-event") {
+            currentStage().events.push(createEvent());
+            render();
+          } else if (action === "delete-event") {
+            currentStage().events.splice(Number(button.dataset.eventIndex), 1);
+            render();
+          } else if (action === "move-event-up") {
+            const index = Number(button.dataset.eventIndex);
+            moveItem(currentStage().events, index, index - 1);
+            render();
+          } else if (action === "move-event-down") {
+            const index = Number(button.dataset.eventIndex);
+            moveItem(currentStage().events, index, index + 1);
+            render();
+          } else if (action === "add-choice") {
+            const eventItem = eventFromButton(button);
+            eventItem.choices.push({ value: `choice-${eventItem.choices.length + 1}`, label: "", min: "", max: "" });
+            render();
+          } else if (action === "delete-choice") {
+            const eventItem = eventFromButton(button);
+            eventItem.choices.splice(Number(button.dataset.choiceIndex), 1);
+            render();
+          } else if (action === "import-stage") {
+            importStage();
+          } else if (action === "copy") {
+            copyOutput();
+          } else if (action === "download") {
+            downloadOutput();
+          }
+        }
+
+        function currentStage() {
+          return state.stages[selectedStageIndex];
+        }
+
+        function eventFromButton(button) {
+          const card = button.closest("[data-event-index]");
+          return currentStage().events[Number(card.dataset.eventIndex)];
+        }
+
+        function moveItem(items, from, to) {
+          if (to < 0 || to >= items.length) return;
+          const [item] = items.splice(from, 1);
+          items.splice(to, 0, item);
+        }
+
+        function loadConfig(config) {
+          state = normalizeConfig(config);
+          selectedStageIndex = 0;
+          render();
+        }
+
+        function importStage() {
+          try {
+            const parsed = JSON.parse($("#stageImportText").value);
+            state.stages.push(normalizeStage(parsed, state.stages.length));
+            selectedStageIndex = state.stages.length - 1;
+            $("#stageImportText").value = "";
+            render();
+          } catch (error) {
+            renderMessages([`ステージJSONを読み込めません: ${error.message}`], []);
+          }
+        }
+
+        async function copyOutput() {
+          const text = $("#jsonOutput").value;
+          try {
+            await navigator.clipboard.writeText(text);
+            renderMessages([], ["コピーしました。"]);
+          } catch (_) {
+            $("#jsonOutput").select();
+            document.execCommand("copy");
+            renderMessages([], ["コピーしました。"]);
+          }
+        }
+
+        function downloadOutput() {
+          let config;
+          try {
+            config = buildConfig();
+          } catch (error) {
+            renderMessages([error.message], []);
+            return;
+          }
+          const filenameBase = (config.gameMeta.title || "elevator-game-config")
+            .toLowerCase()
+            .replace(/[^a-z0-9\u3040-\u30ff\u3400-\u9fff_-]+/gi, "-")
+            .replace(/^-+|-+$/g, "") || "elevator-game-config";
+          const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = `${filenameBase}.json`;
+          anchor.click();
+          URL.revokeObjectURL(url);
+        }
+
+        function handleFile(event) {
+          const file = event.target.files && event.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              loadConfig(JSON.parse(String(reader.result || "")));
+            } catch (error) {
+              renderMessages([`JSONを読み込めません: ${error.message}`], []);
+            } finally {
+              event.target.value = "";
+            }
+          };
+          reader.readAsText(file);
+        }
+
+        function safeObjectFromText(text, label) {
+          if (!String(text || "").trim()) return {};
+          const parsed = JSON.parse(text);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error(`${label} はオブジェクトJSONにしてください。`);
+          }
+          return parsed;
+        }
+
+        function safeObject(value) {
+          return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+        }
+
+        function valueOrEmpty(value) {
+          return value === undefined || value === null ? "" : String(value);
+        }
+
+        function normalizeCorrectAnswer(value) {
+          const text = String(value).trim();
+          if (text === "") return "";
+          if (text === "true") return true;
+          if (text === "false") return false;
+          if (!Number.isNaN(Number(text)) && text !== "") return Number(text);
+          return text;
+        }
+
+        function numberOr(value, fallback) {
+          const numeric = Number(value);
+          return Number.isFinite(numeric) ? numeric : fallback;
+        }
+
+        function number(value) {
+          const numeric = Number(value);
+          return Number.isFinite(numeric) ? numeric : 0;
+        }
+
+        function integer(value) {
+          const numeric = parseInt(value, 10);
+          return Number.isFinite(numeric) ? numeric : 0;
+        }
+
+        function labelFor(options, value) {
+          const found = options.find(([key]) => key === value);
+          return found ? found[1] : value;
+        }
+
+        function escapeHtml(value) {
+          return String(value).replace(/[&<>"']/g, (char) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#039;",
+          }[char]));
+        }
+
+        function escapeAttr(value) {
+          return escapeHtml(value);
+        }
+
+        document.addEventListener("input", handleInput);
+        document.addEventListener("change", handleInput);
+        document.addEventListener("click", handleClick);
+        $("#configFile").addEventListener("change", handleFile);
+        render();
+      })();
+    </script>
+  </body>
+</html>
