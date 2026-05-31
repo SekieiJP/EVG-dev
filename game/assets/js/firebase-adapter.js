@@ -53,8 +53,8 @@
         projectId: this.config.FIREBASE_PROJECT_ID,
       });
       this.firebaseAuth = sdk.getAuth(this.firebaseApp);
-      const credential = await sdk.signInAnonymously(this.firebaseAuth);
-      this.auth = { uid: credential.user.uid, idToken: await credential.user.getIdToken(), mock: false };
+      const user = await currentOrAnonymousUser(sdk, this.firebaseAuth);
+      this.auth = { uid: user.uid, idToken: await user.getIdToken(), mock: false };
       localStorage.setItem(AUTH_KEY, JSON.stringify(this.auth));
       this.firebaseDb = sdk.getDatabase(this.firebaseApp);
       const room = await this.readRestRoom();
@@ -67,15 +67,15 @@
       if (this.mock) {
         const handler = (event) => {
           if (event.data && event.data.type === "room" && event.data.roomId === this.roomId) {
-            callback(normalizeRoomShape(this.readMockRoom(), this.engine));
+            callback(this.readMockRoom());
           }
         };
         if (this.channel) this.channel.addEventListener("message", handler);
         return () => this.channel && this.channel.removeEventListener("message", handler);
       }
-      const snapshotRef = this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/snapshot`);
-      this.unsubscribe = this.sdk.onValue(snapshotRef, (snapshot) => {
-        callback(normalizeRoomShape(snapshot.val(), this.engine));
+      const roomRef = this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`);
+      this.unsubscribe = this.sdk.onValue(roomRef, (snapshot) => {
+        callback(roomFromFirebaseNodes(snapshot.val(), this.engine));
       });
       return this.unsubscribe;
     }
@@ -102,8 +102,18 @@
 
     async post(path, payload) {
       await this.init();
-      if (path === "/api/host/auth") return this.authHost(payload && payload.password);
+      payload = payload || {};
+      if (path === "/api/host/auth") return this.authHost(payload.password);
+      if (!this.mock && isPlayerWritePath(path)) return this.postRestPlayer(path, payload);
+      if (!this.mock) return this.postRestTransaction(path, payload);
       const room = await this.readRoom();
+      const result = this.applyMutation(path, payload, room);
+      if (!result.ok) return result;
+      await this.writeRoom(result.room);
+      return Object.assign({}, result, { room: this.publicRoom(result.room, payload || {}) });
+    }
+
+    applyMutation(path, payload, room) {
       let result = null;
       if (path === "/api/player/join") {
         result = this.engine.registerPlayer(room, payload.name, payload.uuid || this.auth.uid);
@@ -136,22 +146,61 @@
       } else {
         result = { ok: false, code: "not_found", error: `Unknown endpoint: ${path}` };
       }
-      if (!result.ok) return result;
-      await this.writeRoom(result.room);
-      return Object.assign({}, result, { room: this.publicRoom(result.room, payload || {}) });
+      if (result.ok && result.room && path.indexOf("/api/host/") === 0) {
+        result.room.hostUid = this.auth.uid;
+      }
+      return result;
     }
 
-    authHost(password) {
+    async postRestTransaction(path, payload) {
+      const roomRef = this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`);
+      let result = null;
+      const transaction = await this.sdk.runTransaction(roomRef, (currentNodes) => {
+        const room = roomFromFirebaseNodes(currentNodes, this.engine) || this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG);
+        result = this.applyMutation(path, payload, room);
+        if (!result.ok) return;
+        const nodes = roomToFirebaseNodes(result.room);
+        const currentHostUid = currentNodes && currentNodes.meta && currentNodes.meta.hostUid;
+        nodes.meta.hostUid = nodes.meta.hostUid || currentHostUid || this.auth.uid;
+        return nodes;
+      }, { applyLocally: false });
+      if (!result) return { ok: false, code: "transaction", error: "更新を開始できませんでした。" };
+      if (!result.ok) return result;
+      if (!transaction.committed) return { ok: false, code: "version_conflict", error: "ルーム状態が更新されています。もう一度操作してください。" };
+      const nextRoom = roomFromFirebaseNodes(transaction.snapshot.val(), this.engine) || result.room;
+      return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload) });
+    }
+
+    async postRestPlayer(path, payload) {
+      const room = await this.readRoom();
+      const playerPayload = Object.assign({}, payload, { uuid: this.auth.uid });
+      const result = this.applyMutation(path, playerPayload, room);
+      if (!result.ok) return result;
+      const updates = playerUpdates(path, result.room, this.auth.uid);
+      if (!Object.keys(updates).length) return { ok: false, code: "not_supported", error: "この操作はFirebase Player更新に未対応です。" };
+      await this.sdk.update(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`), updates);
+      return Object.assign({}, result, { room: this.publicRoom(result.room, playerPayload) });
+    }
+
+    async authHost(password) {
       const expected = String(this.config.FIREBASE_HOST_PASSWORD || "host").trim();
       if (String(password || "").trim() !== expected) {
         return { ok: false, code: "auth", error: "パスワードが違います。" };
       }
+      await this.claimHost();
       return {
         ok: true,
         hostToken: `firebase-host:${this.auth.uid}:${Date.now()}`,
         expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
         serverTime: nowIso(),
       };
+    }
+
+    async claimHost() {
+      const room = await this.readRoom();
+      room.hostUid = this.auth.uid;
+      room.updatedAt = nowIso();
+      await this.writeRoom(room);
     }
 
     verifyHost(token) {
@@ -239,7 +288,7 @@
 
     async readRoom() {
       const room = this.mock ? this.readMockRoom() : await this.readRestRoom();
-      return normalizeRoomShape(room, this.engine) || this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG);
+      return room || this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG);
     }
 
     async writeRoom(room) {
@@ -249,7 +298,7 @@
     readMockRoom() {
       const db = loadJson(MOCK_DB_KEY, {});
       const entry = db.rooms && db.rooms[this.roomId];
-      return entry && entry.snapshot ? entry.snapshot : null;
+      return roomFromFirebaseNodes(entry, this.engine);
     }
 
     writeMockRoom(room) {
@@ -262,16 +311,14 @@
     }
 
     async readRestRoom() {
-      const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/snapshot`));
-      return snapshot.exists() ? snapshot.val() : null;
+      const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`));
+      return snapshot.exists() ? roomFromFirebaseNodes(snapshot.val(), this.engine) : null;
     }
 
     async writeRestRoom(room) {
       const nodes = roomToFirebaseNodes(room);
       nodes.meta.hostUid = nodes.meta.hostUid || this.auth.uid;
-      await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta`), nodes.meta);
-      delete nodes.meta;
-      await this.sdk.update(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`), nodes);
+      await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`), nodes);
       return { ok: true };
     }
   }
@@ -280,6 +327,7 @@
     const stage = room.config && room.config.stages ? room.config.stages[room.currentStageIndex || 0] : null;
     return {
       meta: {
+        roomId: room.roomId || "",
         title: room.config && room.config.gameMeta ? room.config.gameMeta.title : "エレベーターゲーム",
         schemaVersion: "firebase-spark-v1",
         activeGameId: room.gameId || "",
@@ -294,13 +342,97 @@
       tickets: room.tickets || {},
       ticketPresence: ticketPresence(room, stage && stage.stageId),
       results: room.stageResults || {},
+      completedGames: keyBy(room.completedGames || [], "gameId", (game) => game),
       scores: Object.keys(room.scores || {}).reduce((acc, uuid) => {
         acc[uuid] = { total: room.scores[uuid], updatedAt: room.updatedAt || nowIso() };
         return acc;
       }, {}),
-      operations: keyBy(room.operations || [], "id", operationNode),
-      snapshot: room,
+      operations: keyOperations(room.operations || []),
+      roomSettings: {
+        volume: room.volume !== undefined ? room.volume : 0.8,
+        muted: Boolean(room.muted),
+      },
     };
+  }
+
+  function roomFromFirebaseNodes(nodes, engine) {
+    if (!nodes) return null;
+    if (nodes.snapshot && !nodes.public && !nodes.players) return normalizeRoomShape(nodes.snapshot, engine);
+    const fallback = engine.createInitialRoom(nodes.config || engine.DEFAULT_CONFIG);
+    const status = nodes.public || {};
+    const players = Object.keys(nodes.players || {}).map((uuid) => {
+      const player = nodes.players[uuid] || {};
+      const stats = nodes.playerStats && nodes.playerStats[uuid] ? nodes.playerStats[uuid] : {};
+      return {
+        uuid,
+        name: player.name || uuid,
+        connected: player.connected !== false,
+        joinedAt: player.joinedAt || fallback.createdAt,
+        lastSeenAt: player.lastSeenAt || "",
+        pendingName: player.pendingName || null,
+        skill: Number(stats.currentSkill || 0),
+        stageSkillHistory: Array.isArray(stats.stageSkillHistory) ? stats.stageSkillHistory : Object.values(stats.stageSkillHistory || {}),
+      };
+    });
+    const scores = Object.keys(nodes.scores || {}).reduce((acc, uuid) => {
+      const value = nodes.scores[uuid];
+      acc[uuid] = typeof value === "number" ? value : Number(value && value.total || 0);
+      return acc;
+    }, {});
+    const settings = nodes.roomSettings || {};
+    return normalizeRoomShape({
+      roomId: nodes.meta && nodes.meta.roomId || fallback.roomId,
+      hostUid: nodes.meta && nodes.meta.hostUid || "",
+      gameId: status.gameId || (nodes.meta && nodes.meta.activeGameId) || fallback.gameId,
+      config: nodes.config || fallback.config,
+      phase: status.phase || fallback.phase,
+      currentStageIndex: Number(status.currentStageIndex || 0),
+      players,
+      tickets: nodes.tickets || {},
+      stageResults: nodes.results || {},
+      scores,
+      completedGames: Object.values(nodes.completedGames || {}),
+      operations: Object.values(nodes.operations || {}).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))),
+      countdownEndsAt: status.countdownEndsAt || null,
+      tallyingEndsAt: status.tallyingEndsAt || null,
+      animationStartedAt: status.animationStartedAt || null,
+      animationSkippedAt: status.animationSkippedAt || null,
+      roomVersion: Number(status.roomVersion || 0),
+      volume: settings.volume !== undefined ? Number(settings.volume) : fallback.volume,
+      muted: Boolean(settings.muted),
+      createdAt: nodes.meta && nodes.meta.createdAt || fallback.createdAt,
+      updatedAt: nodes.meta && nodes.meta.updatedAt || fallback.updatedAt,
+    }, engine);
+  }
+
+  function isPlayerWritePath(path) {
+    return [
+      "/api/player/join",
+      "/api/player/restore",
+      "/api/player/rename",
+      "/api/player/proceed-next",
+      "/api/ticket/submit",
+      "/api/ticket/abstain",
+    ].includes(path);
+  }
+
+  function playerUpdates(path, room, uid) {
+    const nodes = roomToFirebaseNodes(room);
+    const updates = {};
+    if (path.indexOf("/api/player/") === 0 && nodes.players && nodes.players[uid]) {
+      updates[`players/${uid}`] = nodes.players[uid];
+    }
+    if (path === "/api/ticket/submit" || path === "/api/ticket/abstain") {
+      const stage = room.config && room.config.stages ? room.config.stages[room.currentStageIndex || 0] : null;
+      const stageId = stage && stage.stageId;
+      if (stageId && nodes.tickets && nodes.tickets[stageId] && nodes.tickets[stageId][uid]) {
+        updates[`tickets/${stageId}/${uid}`] = nodes.tickets[stageId][uid];
+      }
+      if (stageId && nodes.ticketPresence && nodes.ticketPresence[stageId] && nodes.ticketPresence[stageId][uid]) {
+        updates[`ticketPresence/${stageId}/${uid}`] = nodes.ticketPresence[stageId][uid];
+      }
+    }
+    return updates;
   }
 
   function compactStatus(room) {
@@ -342,7 +474,15 @@
   }
 
   function operationNode(item, index) {
-    return Object.assign({ id: `op-${String(index).padStart(4, "0")}` }, item);
+    return Object.assign({}, item, { id: item.id || `op-${String(index).padStart(4, "0")}` });
+  }
+
+  function keyOperations(items) {
+    return (items || []).reduce((acc, item, index) => {
+      const node = operationNode(item, index);
+      acc[node.id] = node;
+      return acc;
+    }, {});
   }
 
   function ticketPresence(room, stageId) {
@@ -386,6 +526,7 @@
     room.completedGames = Array.isArray(room.completedGames) ? room.completedGames : Object.values(room.completedGames || {});
     room.operations = Array.isArray(room.operations) ? room.operations : Object.values(room.operations || {});
     room.roomVersion = Number(room.roomVersion || 0);
+    room.hostUid = room.hostUid || "";
     room.volume = room.volume !== undefined ? room.volume : fallback.volume;
     room.muted = Boolean(room.muted);
     return room;
@@ -450,5 +591,26 @@
     return root.__evgFirebaseSdk;
   }
 
-  root.EVGFirebaseAdapter = { createFirebaseAdapter, roomToFirebaseNodes };
+  async function currentOrAnonymousUser(sdk, firebaseAuth) {
+    if (firebaseAuth.currentUser) return firebaseAuth.currentUser;
+    const existing = await new Promise((resolve) => {
+      let settled = false;
+      let unsubscribe = () => {};
+      let timer = null;
+      const finish = (user) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        unsubscribe();
+        resolve(user);
+      };
+      timer = setTimeout(() => finish(null), 1000);
+      unsubscribe = sdk.onAuthStateChanged(firebaseAuth, finish, () => finish(null));
+    });
+    if (existing) return existing;
+    const credential = await sdk.signInAnonymously(firebaseAuth);
+    return credential.user;
+  }
+
+  root.EVGFirebaseAdapter = { createFirebaseAdapter, roomToFirebaseNodes, roomFromFirebaseNodes };
 })(typeof self !== "undefined" ? self : this);

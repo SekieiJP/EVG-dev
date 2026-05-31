@@ -4,6 +4,8 @@
     ".write": false,
     "rooms": {
       "$roomId": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.child('meta').child('hostUid').val() === auth.uid) || data.child('meta').child('hostUid').val() === auth.uid)",
         "meta": {
           ".read": "auth != null",
           ".write": "auth != null && (!data.exists() || data.child('hostUid').val() === auth.uid)",
@@ -107,12 +109,26 @@
           ".read": "auth != null",
           ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid"
         },
+        "completedGames": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid"
+        },
         "operations": {
           ".read": "auth != null",
           ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
           "$operationId": {
             ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
-            ".validate": "newData.hasChildren(['at', 'actorUid', 'action'])"
+            ".validate": "newData.hasChildren(['at', 'action']) && (newData.child('actor').isString() || newData.child('actorUid').isString())"
+          }
+        },
+        "roomSettings": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
+          "volume": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1"
+          },
+          "muted": {
+            ".validate": "newData.isBoolean()"
           }
         },
         "snapshot": {

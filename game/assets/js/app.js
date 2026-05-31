@@ -23,6 +23,9 @@
     BUILD_CONFIG.USE_GAS_API = false;
     BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK = QUERY.get("backend") === "firebase-mock" || BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK;
   }
+  if (QUERY.get("room") || QUERY.get("roomId")) {
+    BUILD_CONFIG.FIREBASE_ROOM_ID = QUERY.get("room") || QUERY.get("roomId");
+  }
   const REQUESTED_ROLE = QUERY.get("view") || QUERY.get("v") || "player";
   const PLAYER_ENTRY_LOCKED = (!QUERY.has("view") && !QUERY.has("v")) || REQUESTED_ROLE === "player";
   const TEST_SLOT = String(QUERY.get("testSlot") || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
