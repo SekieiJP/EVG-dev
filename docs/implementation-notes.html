@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-05-31 / 対象: <code>docs/elevator-game-requirements.md</code> v1.18</p>
+      <p class="meta">更新日: 2026-06-01 / 対象: <code>docs/elevator-game-requirements.md</code> v1.18</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -129,6 +129,17 @@
           <li>2026-05-25追記: Hostが進行途中のゲームを中断し、集計済みステージ結果だけを保存して<code>game_configs</code>の次ゲームへ移行できるようにした。</li>
           <li>2026-05-31追記: Host認証成功時に<code>hostToken</code>の期限時刻を保存し、期限切れ時またはGASの認証エラー時にパスワード入力画面へ戻れるようにした。</li>
           <li>2026-05-31追記: Screen端末向けに、フェーズBGMとカウントダウン/結果発表SEのmp3再生トリガーを追加した。音声ファイルは<code>game/assets/audio/</code>へ配置する。</li>
+          <li>2026-06-01追記: 現行GitHub Pages + GAS + Spreadsheet構成へ戻せるように、移行開始前のHEADを<code>preserve-gas-github-pages-20260601</code>ブランチとして保全し、Firebase移行作業用に<code>firebase-spark-migration</code>ブランチを作成した。</li>
+          <li>2026-06-01追記: Firebase Spark移行の初期計画として<code>docs/firebase-spark-migration-plan.md</code>を追加し、50人/2時間/20ステージを想定したRealtime Databaseのデータ分割、購読単位、Spark制約、Blaze移行判断を整理した。</li>
+          <li>2026-06-01追記: Firebase移行用の初期雛形として<code>firebase/README.md</code>と<code>firebase/database.rules.json</code>を追加した。まだ実FirebaseプロジェクトIDや秘密情報は置いていない。</li>
+          <li>2026-06-01追記: <code>game/assets/js/firebase-adapter.js</code>を追加し、既存GAS API互換のFirebase通信層を作り始めた。<code>?backend=firebase-mock</code>でローカルmock、<code>?backend=firebase</code>でFirebase RTDBへ接続する。</li>
+          <li>2026-06-01追記: Host画面にフェーズ進行パネルを追加し、現在フェーズと次の操作を視覚的に追えるようにした。</li>
+          <li>2026-06-01追記: Firebase CLIで<code>elevator-game-live</code>を確認し、Realtime Database初期化、Webアプリ登録、Anonymous Auth有効化、Security Rules deployまで実行した。手順は<code>docs/firebase-setup-guide.md</code>へ記録した。</li>
+          <li>2026-06-01追記: Firebase実接続版のadapterを、<code>snapshot</code>保存ではなく<code>meta</code>、<code>public</code>、<code>players</code>、<code>tickets</code>、<code>results</code>等の分割ノードをSingle Source of Truthとして読み書きする実装へ変更した。</li>
+          <li>2026-06-01追記: Firebase実接続版のホスト進行はRealtime Databaseの<code>runTransaction</code>でroom単位に更新し、同時操作時の単純な上書き競合を避けるようにした。Playerの参加・改名・投票は自分の<code>players/{uid}</code>、<code>tickets/{stageId}/{uid}</code>、<code>ticketPresence/{stageId}/{uid}</code>だけを書き込む。</li>
+          <li>2026-06-01追記: <code>tests/firebase-adapter.test.js</code>を追加し、Firebase分割ノードへ変換しても<code>snapshot</code>なしでroom状態を復元できることを確認した。</li>
+          <li>2026-06-01追記: Firebase疎通テスト用にURLクエリ<code>room</code>/<code>roomId</code>で<code>FIREBASE_ROOM_ID</code>を上書きできるようにした。</li>
+          <li>2026-06-01追記: Firebaseの<code>operations</code>は、既存idがある操作はそのidをキーにし、idがない操作だけ<code>op-0000</code>形式を付与するようにした。RTDB上で同一idの操作が別キーに重複することを避けるため。</li>
         </ul>
       </section>
 
@@ -162,6 +173,13 @@
           <li>中断して次ゲームへ進む場合、保存対象は集計済みステージだけにした。未集計の投票や受付中ステージは確定結果ではないため、履歴には残さず破棄する。</li>
           <li>音声ファイル名はすべて英小文字とアンダースコアのmp3に固定した。BGMは<code>bgm_フェーズ名.mp3</code>、SEは<code>se_イベント名.mp3</code>の形式にした。</li>
           <li><code>se_ride.mp3</code>は、結果発表で1人以上が乗車中、かつその階で新規乗車・下車・強制下車が発生しない場合の上昇演出として扱う。</li>
+          <li>Firebase Spark初期版では、静的SPA配信は維持し、ゲーム中のSingle Source of TruthをRealtime Databaseへ移す計画にした。GitHub Pages配信を残すことで、配信面の変更を最小化し、通信層の差し替えに集中するため。</li>
+          <li>Firebase版のデータ構造は、現行の<code>room</code>全体JSON保存ではなく、<code>public</code>、<code>players</code>、<code>tickets</code>、<code>ticketPresence</code>、<code>results</code>、<code>scores</code>へ分割する方針にした。Sparkの10GB/月ダウンロード枠に対して、全room再配信を避けるため。</li>
+          <li>Firebase SparkではCloud Functionsを前提にしないため、初期移行ではHostブラウザ集計を継続し、Realtime Database Rulesとtransactionで最低限の権限・二重操作対策を行う計画にした。</li>
+          <li>Firebase Authは匿名ログインを使う計画にした。既存UUIDはAuth uidへ完全置換せず、プレイヤー復旧や表示用のゲーム内IDとして移行互換を検討する。</li>
+          <li>Firebase実接続に使うWeb API key、authDomain、databaseURLは<code>game/assets/js/config.js</code>に置いた。Firebase Web API keyは公開前提の識別子であり、秘匿情報として扱わない。</li>
+          <li>Firebase adapterは既存UIとの接続面を小さくするため、画面側にはGAS互換APIを見せ、内部だけをRealtime Databaseの分割ノードへ変換する設計にした。</li>
+          <li>Firebaseの匿名Authは、既存セッションが復元されるまで最大1秒待ってから新規匿名ログインする。ホスト認証済み端末のuidがリロードごとに変わると、hostTokenとDB上のhostUidがずれるため。</li>
           <li>GASの<code>players</code>シートは現在ゲーム参加者だけで上書きせず、既存UUIDを保持したまま現在参加者をマージする。過去UUID復元の起点を消さないため。</li>
           <li>ステージ制作支援ツールは、既存アプリと同じ<code>schemaVersion</code>、<code>gameMeta</code>、<code>stages[].params</code>、<code>stages[].events</code>形式を出力する単一HTMLにした。GitHub Pagesやローカルファイルでそのまま開けることを優先した。</li>
           <li>JSON書式変更に備え、制作ツールにはトップレベル、ステージ、イベントごとの「追加JSON」欄を置いた。GUIがまだ知らないキーはここで保持・出力できるようにする。</li>
@@ -205,6 +223,10 @@
           <li><code>game_configs</code>追加後の既存Spreadsheetでは、再度<code>setupElevatorGameSheets()</code>を実行して新シートと初期サンプル行を作る必要がある。</li>
           <li>Skip時のBGM/SEフェードアウトは未実装。現状はフェーズBGM切替とSE発火トリガーの準備までで、フェード時間は引き続き未決定。</li>
           <li>制作ツールはゲーム進行中のHost画面には組み込まず、<code>tool/stage-creator.html</code>として独立させた。Host画面上での直接編集は未実装。</li>
+          <li>Firebase通信層は追加したが、既存画面との互換を優先してGAS API互換のadapterとして実装している。完全な画面別購読モデルへの置き換えは未完了。</li>
+          <li>Firebase adapterは<code>snapshot</code>ノードを新規保存しない実装へ変更した。ただし購読はまだroomルート単位で、完全な画面別購読モデルへの置き換えは未完了。</li>
+          <li>Firebase Security Rulesは、Host uidだけがroom全体を書けるようにし、Playerは自分の参加者ノードとチケットノードだけを書けるようにした。ただし、Cloud Functionsなしではホストパスワード検証や複雑なゲームルール検証をRulesだけで表現しきれない。</li>
+          <li>Firebase Spark前提では、サーバ側Cloud Functionsによる集計検証を意図的に先送りする。Sparkで開始するための制約だが、Hostブラウザを信頼する現行GAS版と同程度の信頼モデルが残る。</li>
         </ul>
       </section>
 
@@ -232,6 +254,10 @@
           <li>結果発表完了後は、Screenの再描画を続けると手動スクロール位置が戻るため、最終階到達後の自動再描画を止める設計にした。Skipやホスト操作の反映はフェーズ更新時の再取得で扱う。</li>
           <li>Playerランキングの<code>次へ</code>はサーバに進行要求を送る案もあったが、ホストだけがゲーム全体を進める方針を優先し、クライアント側のポーリング再開操作に変更した。GASの<code>/api/player/proceed-next</code>もフェーズを進めない確認APIへ変更した。</li>
           <li>GASのホストセッションはPropertiesServiceではなくCacheServiceに置いた。永続化よりも、期限切れと再認証を明確にする方を優先したため。</li>
+          <li>Firebase移行でBlazeを前提にすればCloud Functionsで強いサーバ検証を先に作れるが、今回の開始条件がSparkのため、初期版はRulesとクライアントtransaction中心にする。費用ゼロで始められる一方、複雑なフェーズ遷移検証は弱くなる。</li>
+          <li>Realtime Databaseの全体room購読は実装が簡単だが、50人本番ではダウンロード量が読みにくくなるため最終形では採用しない。現段階ではGAS互換adapterの実RTDB接続を優先し、次段階で画面別の小ノード購読へ分ける。</li>
+          <li>今回のFirebase実装は、Host操作は既存エンジンとUIを大きく壊さないためroom transactionで更新し、Player操作はRules粒度を優先して子ノード更新へ分けた。次段階ではHost操作も画面別ノード更新へ分割すると通信量をさらに減らせる。</li>
+          <li>GitHub Pages配信を維持する案とFirebase Hostingへ移す案を比較し、初期移行ではGitHub Pages維持を選んだ。Hosting移行は必要になった時に行えるが、今回の主要課題はバックエンド状態同期のため。</li>
         </ul>
       </section>
 
@@ -243,6 +269,11 @@
           <li>GAS実デプロイURLでのHost/Screen/Player複数端末疎通は、API URL提供後に確認が必要。</li>
           <li>100人規模のポーリング負荷、Spreadsheet書き込み時間、CacheServiceの実効TTLは現地または負荷試験で確認が必要。</li>
           <li>音声ファイル名とフェーズ対応表、Skip時のフェードアウト秒数を確定したい。</li>
+          <li>Firebase実接続では<code>elevator-game-live</code>、Realtime Database <code>asia-southeast1</code>、GitHub Pagesから使うWeb設定値を採用した。本番用に別プロジェクトや別roomIdを分けるかは確認が必要。</li>
+          <li>Sparkの100同時接続上限に対して、50人本番で許容する予備端末・見学端末・複数タブの運用ルールを決める必要がある。</li>
+          <li>Host権限を匿名Auth uidだけで運用するか、運営用パスワード/招待コードを併用するかを決める必要がある。</li>
+          <li>Firebase版でCloud FunctionsなしのHostブラウザ集計をどこまで許容するか、Blaze移行の判断基準を本番前に確認したい。</li>
+          <li>Firebase実RTDBの50人相当の負荷試験はまだ未実施。現在のroom単位transactionで十分か、子ノードtransactionへ分ける必要があるかを確認する必要がある。</li>
         </ul>
       </section>
     </main>
