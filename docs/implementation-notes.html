@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-05-25 / 対象: <code>docs/elevator-game-requirements.md</code> v1.17</p>
+      <p class="meta">更新日: 2026-05-31 / 対象: <code>docs/elevator-game-requirements.md</code> v1.18</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -127,6 +127,8 @@
           <li>2026-05-25追記: Playerの最終結果画面にも<code>次へ</code>を残し、押下時だけ最新状態を取得して次ゲーム開始済みなら新しい<code>gameId</code>へ追従するようにした。</li>
           <li>2026-05-25追記: <code>tool/stage-creator.html</code> に、複数ステージをGUIで作成し、Host importや<code>game_configs.configJson</code>へ貼り付け可能な設定JSONを生成する単一HTMLツールを追加した。</li>
           <li>2026-05-25追記: Hostが進行途中のゲームを中断し、集計済みステージ結果だけを保存して<code>game_configs</code>の次ゲームへ移行できるようにした。</li>
+          <li>2026-05-31追記: Host認証成功時に<code>hostToken</code>の期限時刻を保存し、期限切れ時またはGASの認証エラー時にパスワード入力画面へ戻れるようにした。</li>
+          <li>2026-05-31追記: Screen端末向けに、フェーズBGMとカウントダウン/結果発表SEのmp3再生トリガーを追加した。音声ファイルは<code>game/assets/audio/</code>へ配置する。</li>
         </ul>
       </section>
 
@@ -158,6 +160,8 @@
           <li>事前登録する次ゲーム候補は<code>stage_settings</code>ではなく<code>game_configs</code>に分離した。<code>stage_settings</code>は実際に走ったゲームのステージ設定履歴、<code>game_configs</code>は今後開始するテンプレートという役割にする。</li>
           <li><code>game_configs</code>の行は使用後も<code>ACTIVE</code>のまま残す。テンプレートを繰り返し使う運用を優先し、不要な候補はSpreadsheet上で<code>ARCHIVED</code>へ手動変更する。</li>
           <li>中断して次ゲームへ進む場合、保存対象は集計済みステージだけにした。未集計の投票や受付中ステージは確定結果ではないため、履歴には残さず破棄する。</li>
+          <li>音声ファイル名はすべて英小文字とアンダースコアのmp3に固定した。BGMは<code>bgm_フェーズ名.mp3</code>、SEは<code>se_イベント名.mp3</code>の形式にした。</li>
+          <li><code>se_ride.mp3</code>は、結果発表で1人以上が乗車中、かつその階で新規乗車・下車・強制下車が発生しない場合の上昇演出として扱う。</li>
           <li>GASの<code>players</code>シートは現在ゲーム参加者だけで上書きせず、既存UUIDを保持したまま現在参加者をマージする。過去UUID復元の起点を消さないため。</li>
           <li>ステージ制作支援ツールは、既存アプリと同じ<code>schemaVersion</code>、<code>gameMeta</code>、<code>stages[].params</code>、<code>stages[].events</code>形式を出力する単一HTMLにした。GitHub Pagesやローカルファイルでそのまま開けることを優先した。</li>
           <li>JSON書式変更に備え、制作ツールにはトップレベル、ステージ、イベントごとの「追加JSON」欄を置いた。GUIがまだ知らないキーはここで保持・出力できるようにする。</li>
@@ -181,6 +185,7 @@
           <li>完了済みゲームのローカル戦歴は<code>completedGames</code>に退避する。次ゲームのゲーム内スコアは0から始めるが、History画面では退避済み結果と現在ゲーム結果を合算して表示する。</li>
           <li>次ゲーム開始時は、現在ゲームのステージ結果が存在する場合に<code>save_data</code>、<code>stage_results</code>、<code>game_history</code>への保存を先に試みる。既存行がある場合は重複保存しない。</li>
           <li>中断保存されたゲームのサマリには<code>interrupted=true</code>と中断時の<code>finalPhase</code>を記録する。ランキングや個人戦歴では、集計済みステージだけを含む短縮ゲームとして扱う。</li>
+          <li>Screen音声は<code>準備完了</code>操作後に再生を試みる。ブラウザの自動再生制限や未配置ファイルで失敗した場合は、クライアント通信ログへ記録し、進行自体は止めない。</li>
           <li>Playerの結果表示解禁は、スクリーン演出の<code>animationStartedAt</code>とステージ階数から計算した最終階到達時刻で判定する。ホストのフェーズ遷移ではなく演出完了時刻に合わせる。</li>
           <li>GASの<code>save_data</code>に保存する12指標はゲーム終了時点の事前集計値とした。個別ステージ再計算に必要なStageSkillと結果詳細は<code>stage_results</code>へ保存する。</li>
           <li>GASのPlayer向け状態レスポンスは、UI表示に必要な参加者名と本人チケットを優先し、全チケットや発表前結果は返さない。Screen向け状態は投影表示のため全体チケットと結果を返す。</li>
@@ -198,6 +203,7 @@
           <li>Skip検知はGAS通信中の結果発表フェーズで低頻度フェッチと最上階到達時の最終確認として実装した。ローカルモードでは同一ブラウザのstorageイベントと再描画で追従する。</li>
           <li>同時ホストのボタンロックは、GASの<code>LockService</code>による先着処理を優先し、UI上のリアルタイムロック表示は未実装。</li>
           <li><code>game_configs</code>追加後の既存Spreadsheetでは、再度<code>setupElevatorGameSheets()</code>を実行して新シートと初期サンプル行を作る必要がある。</li>
+          <li>Skip時のBGM/SEフェードアウトは未実装。現状はフェーズBGM切替とSE発火トリガーの準備までで、フェード時間は引き続き未決定。</li>
           <li>制作ツールはゲーム進行中のHost画面には組み込まず、<code>tool/stage-creator.html</code>として独立させた。Host画面上での直接編集は未実装。</li>
         </ul>
       </section>
@@ -215,6 +221,7 @@
           <li>ランキング保持はGASに既読状態を保存せず、Player端末ごとのローカル状態に限定した。通信量とサーバ状態の複雑化を抑えるため。</li>
           <li>Playerの最終結果後の次ゲーム検知は自動ポーリングではなくボタン取得にした。切り替わりの即時性は落ちるが、ゲーム終了後に参加者端末が放置されてもGAS実行時間を消費し続けない。</li>
           <li>中断操作を許すと誤操作リスクが上がるため、Host画面では<code>中断して開始</code>という別ラベルと確認ダイアログで、未集計データが破棄されることを明示する。</li>
+          <li>音声ファイル未配置時に事前存在確認を行う案もあったが、追加通信が増えるため採用しない。実際に再生が必要になった時だけ<code>Audio</code>を生成し、失敗を一度だけログに残す。</li>
           <li>イベント仕様をすべて細かいGUIにする案もあったが、初版の設定GUIはJSON import/export中心にした。イベント種別が多く、先にスキーマ互換性を保つ方が安全なため。</li>
           <li>制作ツールでは全イベント種別の基本GUIを追加したが、将来追加される未知イベントは専用フォームではなく追加JSON欄で扱う設計にした。新仕様のたびにツールが壊れにくい一方、未知イベントの入力補助や検証は弱くなる。</li>
           <li>制作ツールをフレームワークなしの単一HTMLにしたため、ビルドや依存管理は不要になった。一方、今後フォームがさらに大きくなる場合は、保守性のためにJS/CSS分割を検討したい。</li>

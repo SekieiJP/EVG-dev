@@ -14,11 +14,33 @@
   const PLAYER_ENTRY_LOCKED = (!QUERY.has("view") && !QUERY.has("v")) || REQUESTED_ROLE === "player";
   const TEST_SLOT = String(QUERY.get("testSlot") || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
   const REMOTE_REVEAL_POLL_INTERVAL_MS = 15000;
+  const AUDIO_BASE_PATH = "assets/audio/";
+  const AUDIO_FILES = {
+    bgm: {
+      lobby: "bgm_lobby.mp3",
+      stage_intro: "bgm_stage_intro.mp3",
+      voting: "bgm_voting.mp3",
+      countdown: "bgm_countdown.mp3",
+      tallying: "bgm_tallying.mp3",
+      reveal: "bgm_reveal.mp3",
+      ranking: "bgm_ranking.mp3",
+      final: "bgm_final.mp3",
+    },
+    se: {
+      countdownStart: "se_countdown_start.mp3",
+      countdownEnd: "se_countdown_end.mp3",
+      board: "se_board.mp3",
+      ride: "se_ride.mp3",
+      exit: "se_exit.mp3",
+      forcedOff: "se_forced_off.mp3",
+    },
+  };
   const STORAGE_KEYS = {
     room: "evg.room.v1",
     playerUuid: "evg.playerUuid.v1",
     hostAuthed: "evg.hostAuthed.v1",
     hostToken: "evg.hostToken.v1",
+    hostTokenExpiresAt: "evg.hostTokenExpiresAt.v1",
     logs: "evg.logs.v1",
     screenReady: "evg.screenReady.v1",
     screenLocalSync: "evg.screenLocalSync.v1",
@@ -32,6 +54,7 @@
     playerUuid: localStorage.getItem(playerUuidStorageKey()) || "",
     hostAuthed: localStorage.getItem(STORAGE_KEYS.hostAuthed) === "true",
     hostToken: localStorage.getItem(STORAGE_KEYS.hostToken) || "",
+    hostTokenExpiresAt: localStorage.getItem(STORAGE_KEYS.hostTokenExpiresAt) || "",
     screenReady: localStorage.getItem(STORAGE_KEYS.screenReady) === "true",
     screenLocalSync: localStorage.getItem(STORAGE_KEYS.screenLocalSync) === "true" || QUERY.get("screenSync") === "local",
     logs: loadJson(STORAGE_KEYS.logs, []),
@@ -54,6 +77,17 @@
     nextRemoteFetchAt: 0,
     playerNextDisabledUntil: 0,
     serverTimeOffsetMs: 0,
+    audio: {
+      context: null,
+      bgmKey: "",
+      bgmElement: null,
+      elements: {},
+      missing: {},
+      playErrors: {},
+      triggered: {},
+      revealKey: "",
+      revealFloor: 0,
+    },
   };
   const localSyncChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(LOCAL_SYNC_CHANNEL) : null;
 
@@ -105,6 +139,7 @@
   function tick() {
     if (!state.room) return;
     let changed = false;
+    checkHostTokenExpiry();
     if (!isRemoteMode() && state.room.phase === Engine.PHASES.COUNTDOWN && state.room.countdownEndsAt) {
       const remaining = new Date(state.room.countdownEndsAt).getTime() - Date.now();
       if (remaining <= 0) {
@@ -145,6 +180,7 @@
     if (isRemoteMode()) maybeFetchRemoteAfterDeadline();
     maybeAutoHostTally();
     if (needsRevealRefresh || revealJustCompleted) checkRevealCompletionRemoteState();
+    syncScreenAudio();
     if (changed || needsCountdownRefresh || needsRevealRefresh || revealJustCompleted) render();
   }
 
@@ -201,7 +237,9 @@
         const result = await withBusy("認証中…", () => apiPost("/api/host/auth", { password }));
         if (!result.ok) return showToast(result.error || "パスワードが違います。");
         state.hostToken = result.hostToken || "";
+        state.hostTokenExpiresAt = result.expiresAt || "";
         localStorage.setItem(STORAGE_KEYS.hostToken, state.hostToken);
+        localStorage.setItem(STORAGE_KEYS.hostTokenExpiresAt, state.hostTokenExpiresAt);
       } else {
         const configured = getHostPassword(state.room);
         if (password !== configured) return showToast("パスワードが違います。");
@@ -429,6 +467,7 @@
       ${views[state.role] ? views[state.role]() : renderPlayerView()}
       ${state.busyMessage ? `<div class="loading-overlay" role="status" aria-live="polite"><div class="loading-box"><span></span><strong>${escapeHtml(state.busyMessage)}</strong></div></div>` : ""}
     `;
+    syncScreenAudio();
   }
 
   function isRoleBlocked(role) {
@@ -1655,15 +1694,17 @@
 
   async function apiGet(path, payload) {
     const url = apiUrl(path, payload);
-    return fetchJsonWithRetry(url.toString(), { method: "GET", cache: "no-store" });
+    const response = await fetchJsonWithRetry(url.toString(), { method: "GET", cache: "no-store" });
+    return handleHostAuthResponse(path, response);
   }
 
   async function apiPost(path, payload) {
-    return fetchJsonWithRetry(apiUrl(path).toString(), {
+    const response = await fetchJsonWithRetry(apiUrl(path).toString(), {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(withApiMeta(payload || {})),
     });
+    return handleHostAuthResponse(path, response);
   }
 
   async function fetchJsonWithRetry(url, options, attempt = 0) {
@@ -1756,6 +1797,40 @@
     };
   }
 
+  function handleHostAuthResponse(path, response) {
+    if (
+      path !== "/api/host/auth" &&
+      response &&
+      response.ok === false &&
+      response.code === "auth" &&
+      state.role === "host"
+    ) {
+      clearHostAuth(response.message || "ホスト認証の有効期限が切れました。再認証してください。");
+    }
+    return response;
+  }
+
+  function checkHostTokenExpiry() {
+    if (!isRemoteMode() || state.role !== "host" || !state.hostAuthed || !state.hostTokenExpiresAt) return;
+    const expiresAt = new Date(state.hostTokenExpiresAt).getTime();
+    if (Number.isFinite(expiresAt) && serverNow() >= expiresAt) {
+      clearHostAuth("ホスト認証の有効期限が切れました。再認証してください。");
+    }
+  }
+
+  function clearHostAuth(message) {
+    if (!state.hostAuthed && !state.hostToken) return;
+    state.hostAuthed = false;
+    state.hostToken = "";
+    state.hostTokenExpiresAt = "";
+    state.nextGameConfigs = [];
+    state.nextGameConfigsLoadedAt = "";
+    localStorage.removeItem(STORAGE_KEYS.hostAuthed);
+    localStorage.removeItem(STORAGE_KEYS.hostToken);
+    localStorage.removeItem(STORAGE_KEYS.hostTokenExpiresAt);
+    showToast(message || "ホスト認証が必要です。");
+  }
+
   function remoteHostPath(action) {
     return {
       "start-stage": "/api/host/start-stage",
@@ -1805,12 +1880,146 @@
   function startAudioContext() {
     try {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContext) return;
-      const context = new AudioContext();
-      context.resume();
+      if (AudioContext && !state.audio.context) state.audio.context = new AudioContext();
+      if (state.audio.context) state.audio.context.resume();
+      syncScreenAudio();
     } catch (error) {
       logClient("audio.error", error.message);
     }
+  }
+
+  function syncScreenAudio() {
+    if (!state.room || state.role !== "screen" || !state.screenReady) return;
+    syncPhaseBgm();
+    triggerPhaseSoundEffects();
+    triggerRevealSoundEffects();
+  }
+
+  function syncPhaseBgm() {
+    const phase = state.room.phase;
+    const filename = AUDIO_FILES.bgm[phase];
+    if (!filename) return;
+    const key = `bgm:${phase}`;
+    if (state.room.muted) {
+      if (state.audio.bgmElement) state.audio.bgmElement.pause();
+      return;
+    }
+    if (state.audio.bgmKey !== key) {
+      if (state.audio.bgmElement) state.audio.bgmElement.pause();
+      const element = getAudioElement(key, filename, true);
+      state.audio.bgmKey = key;
+      state.audio.bgmElement = element;
+      playAudioElement(element, key, true);
+      return;
+    }
+    if (state.audio.bgmElement) {
+      state.audio.bgmElement.volume = currentAudioVolume();
+      if (state.audio.bgmElement.paused) playAudioElement(state.audio.bgmElement, key, false);
+    }
+  }
+
+  function triggerPhaseSoundEffects() {
+    const stage = Engine.getCurrentStage(state.room);
+    const stageId = stage ? stage.stageId : "";
+    const base = `${state.room.gameId}:${stageId}`;
+    if (state.room.phase === Engine.PHASES.COUNTDOWN && state.room.countdownEndsAt && !isRemoteMoving()) {
+      triggerSoundOnce(`countdown-start:${base}:${state.room.countdownEndsAt}`, "countdownStart");
+    }
+    if (
+      state.room.countdownEndsAt &&
+      (state.room.phase === Engine.PHASES.TALLYING || (state.room.phase === Engine.PHASES.COUNTDOWN && isRemoteMoving()))
+    ) {
+      triggerSoundOnce(`countdown-end:${base}:${state.room.countdownEndsAt}`, "countdownEnd");
+    }
+  }
+
+  function triggerRevealSoundEffects() {
+    if (state.room.phase !== Engine.PHASES.REVEAL || state.room.animationSkippedAt) return;
+    const stage = Engine.getCurrentStage(state.room);
+    const result = getCurrentStageResult();
+    if (!stage || !result || !result.timeline) return;
+    const revealKey = `${state.room.gameId}:${stage.stageId}:${state.room.animationStartedAt || ""}`;
+    const currentFloor = getRevealFloor(stage, getRevealDuration(stage));
+    if (state.audio.revealKey !== revealKey) {
+      state.audio.revealKey = revealKey;
+      state.audio.revealFloor = Math.max(0, currentFloor - 1);
+    }
+    if (currentFloor <= state.audio.revealFloor) return;
+    const timelineByFloor = new Map(result.timeline.map((step) => [step.floor, step]));
+    for (let floor = state.audio.revealFloor + 1; floor <= currentFloor; floor += 1) {
+      const step = timelineByFloor.get(floor);
+      if (step) triggerFloorSoundEffects(revealKey, floor, step, result);
+    }
+    state.audio.revealFloor = currentFloor;
+  }
+
+  function triggerFloorSoundEffects(revealKey, floor, step, result) {
+    const forced = step.forcedOff || [];
+    const exiting = step.exiting || [];
+    const successfulBoarding = (step.boarding || []).filter((uuid) => {
+      const playerResult = result.players ? result.players[uuid] : null;
+      return !forced.includes(uuid) && playerResult && !["invalid", "not_boarded"].includes(playerResult.status);
+    });
+    if (successfulBoarding.length) triggerSoundOnce(`board:${revealKey}:${floor}`, "board");
+    if ((step.passengersAfterCheck || []).length && !successfulBoarding.length && !exiting.length && !forced.length) {
+      triggerSoundOnce(`ride:${revealKey}:${floor}`, "ride");
+    }
+    if (exiting.length) triggerSoundOnce(`exit:${revealKey}:${floor}`, "exit");
+    if (forced.length) triggerSoundOnce(`forced:${revealKey}:${floor}`, "forcedOff");
+  }
+
+  function triggerSoundOnce(triggerKey, soundKey) {
+    if (state.audio.triggered[triggerKey]) return;
+    state.audio.triggered[triggerKey] = true;
+    const filename = AUDIO_FILES.se[soundKey];
+    if (!filename || state.room.muted) return;
+    const element = getAudioElement(`se:${soundKey}`, filename, false);
+    playAudioElement(element, `se:${soundKey}`, true);
+  }
+
+  function getAudioElement(key, filename, loop) {
+    if (!state.audio.elements[key]) {
+      const element = new Audio(AUDIO_BASE_PATH + filename);
+      element.preload = "auto";
+      element.loop = loop;
+      element.addEventListener("error", () => {
+        if (!state.audio.missing[key]) {
+          state.audio.missing[key] = true;
+          logClient("audio.missing", filename);
+        }
+      });
+      state.audio.elements[key] = element;
+    }
+    const element = state.audio.elements[key];
+    element.loop = loop;
+    element.volume = currentAudioVolume();
+    return element;
+  }
+
+  function playAudioElement(element, key, restart) {
+    if (!element || state.room.muted) return;
+    try {
+      element.volume = currentAudioVolume();
+      if (restart) element.currentTime = 0;
+      const played = element.play();
+      if (played && typeof played.catch === "function") {
+        played.catch((error) => {
+          if (!state.audio.playErrors[key]) {
+            state.audio.playErrors[key] = true;
+            logClient("audio.play", error.message || "再生できませんでした。");
+          }
+        });
+      }
+    } catch (error) {
+      if (!state.audio.playErrors[key]) {
+        state.audio.playErrors[key] = true;
+        logClient("audio.play", error.message);
+      }
+    }
+  }
+
+  function currentAudioVolume() {
+    return Math.max(0, Math.min(1, Number(state.room.volume ?? 0.8)));
   }
 
   function getHistoryGames() {

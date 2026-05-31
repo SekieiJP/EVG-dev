@@ -45,6 +45,7 @@
 
 - 実GAS Web App URLで `text/plain` POST と `?path=` ルーティングが通ること。
 - Host認証後、`hostToken` なしのホストmutationが拒否され、認証済み操作だけ成功すること。
+- Host画面を開いたまま `hostToken` 期限が切れた場合、パスワード入力画面へ戻り再認証できること。
 - `config` シートの `hostPassword` が数値セルでもHost認証できること。
 - 参加登録前Player画面と未認証Host画面で定期ポーリングが発生しないこと。
 - Playerが投票受付中だけ10秒間隔で状態取得し、ランキング後は「次へ」押下時のみ確認すること。
@@ -56,6 +57,7 @@
 - 認証済みHost画面で自動集計commitが一度だけ実行されること。
 - Player入口URLからHost/Screenに遷移できないこと。
 - Player入力中にポーリング再描画で入力フォーカスや値が失われないこと。
+- Screen端末で `assets/audio/` のBGM/SE mp3が配置されている場合に、フェーズ変更と結果発表タイムラインに合わせて再生されること。
 - Apps Script実行ログに各API呼び出しのJSONログが残ること。
 - Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
 - 終了後に `save_data`, `stage_results`, `players`, `game_history`, `stage_settings` が更新されること。
