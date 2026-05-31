@@ -33,6 +33,7 @@
         },
         "players": {
           ".read": "auth != null",
+          ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
           "$uid": {
             ".write": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid)",
             "name": {
@@ -47,6 +48,7 @@
           }
         },
         "playerStats": {
+          ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
           "$uid": {
             ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid)",
             ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
@@ -59,6 +61,7 @@
           }
         },
         "tickets": {
+          ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
           "$stageId": {
             "$uid": {
               ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid)",
@@ -79,6 +82,7 @@
           }
         },
         "ticketPresence": {
+          ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
           "$stageId": {
             ".read": "auth != null",
             "$uid": {
@@ -93,6 +97,7 @@
           }
         },
         "results": {
+          ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
           "$stageId": {
             ".read": "auth != null",
             ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid"
@@ -104,10 +109,15 @@
         },
         "operations": {
           ".read": "auth != null",
+          ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
           "$operationId": {
             ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid",
             ".validate": "newData.hasChildren(['at', 'actorUid', 'action'])"
           }
+        },
+        "snapshot": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('rooms').child($roomId).child('meta').child('hostUid').val() === auth.uid"
         }
       }
     },

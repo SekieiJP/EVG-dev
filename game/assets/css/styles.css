@@ -294,6 +294,81 @@ code {
   flex: 1 1 92px;
 }
 
+.flow-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 16px;
+  align-items: center;
+}
+
+.flow-steps {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.flow-step {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  padding: 9px 8px;
+  text-align: center;
+}
+
+.flow-step span {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #dbe6e8;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.flow-step strong {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.flow-step.is-done {
+  border-color: #9fd3c7;
+  background: #e8f7f3;
+}
+
+.flow-step.is-current {
+  border-color: var(--primary);
+  background: #dff5ef;
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.flow-step.is-current span {
+  background: var(--primary);
+  color: #fff;
+}
+
+.flow-next {
+  display: grid;
+  gap: 4px;
+  border-left: 1px solid var(--line);
+  padding-left: 16px;
+}
+
+.flow-next span,
+.flow-next small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.flow-next strong {
+  font-size: 20px;
+}
+
 .split,
 .mini-row {
   display: flex;
@@ -977,6 +1052,17 @@ code {
 
   .dual-ranking {
     grid-template-columns: 1fr;
+  }
+
+  .flow-panel,
+  .flow-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-next {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding: 12px 0 0;
   }
 
   .game-config-item {
