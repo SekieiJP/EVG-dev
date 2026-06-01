@@ -140,6 +140,8 @@
           <li>2026-06-01追記: <code>tests/firebase-adapter.test.js</code>を追加し、Firebase分割ノードへ変換しても<code>snapshot</code>なしでroom状態を復元できることを確認した。</li>
           <li>2026-06-01追記: Firebase疎通テスト用にURLクエリ<code>room</code>/<code>roomId</code>で<code>FIREBASE_ROOM_ID</code>を上書きできるようにした。</li>
           <li>2026-06-01追記: Firebaseの<code>operations</code>は、既存idがある操作はそのidをキーにし、idがない操作だけ<code>op-0000</code>形式を付与するようにした。RTDB上で同一idの操作が別キーに重複することを避けるため。</li>
+          <li>2026-06-01追記: GitHub Pages上の既定バックエンドをFirebase RTDBへ切り替えた。旧GAS確認は<code>?backend=gas</code>、完全ローカル確認は<code>?backend=local</code>で明示的に選ぶ。</li>
+          <li>2026-06-01追記: Firebase版ではGAS向けの状態ポーリングを止め、RTDBの<code>onValue</code>通知を画面反映の主経路にした。Playerの締切カウントダウン開始や結果反映を10秒/30秒ポーリング待ちにしないため。</li>
         </ul>
       </section>
 
@@ -180,6 +182,7 @@
           <li>Firebase実接続に使うWeb API key、authDomain、databaseURLは<code>game/assets/js/config.js</code>に置いた。Firebase Web API keyは公開前提の識別子であり、秘匿情報として扱わない。</li>
           <li>Firebase adapterは既存UIとの接続面を小さくするため、画面側にはGAS互換APIを見せ、内部だけをRealtime Databaseの分割ノードへ変換する設計にした。</li>
           <li>Firebaseの匿名Authは、既存セッションが復元されるまで最大1秒待ってから新規匿名ログインする。ホスト認証済み端末のuidがリロードごとに変わると、hostTokenとDB上のhostUidがずれるため。</li>
+          <li>Firebase版の状態反映では<code>roomVersion</code>比較で古い通知を捨てないことにした。Playerの復元・参加など自分だけの子ノード更新ではpublic側のversionを進めないため、比較するとHostのフェーズ通知を誤って捨てる可能性がある。</li>
           <li>GASの<code>players</code>シートは現在ゲーム参加者だけで上書きせず、既存UUIDを保持したまま現在参加者をマージする。過去UUID復元の起点を消さないため。</li>
           <li>ステージ制作支援ツールは、既存アプリと同じ<code>schemaVersion</code>、<code>gameMeta</code>、<code>stages[].params</code>、<code>stages[].events</code>形式を出力する単一HTMLにした。GitHub Pagesやローカルファイルでそのまま開けることを優先した。</li>
           <li>JSON書式変更に備え、制作ツールにはトップレベル、ステージ、イベントごとの「追加JSON」欄を置いた。GUIがまだ知らないキーはここで保持・出力できるようにする。</li>
@@ -225,6 +228,7 @@
           <li>制作ツールはゲーム進行中のHost画面には組み込まず、<code>tool/stage-creator.html</code>として独立させた。Host画面上での直接編集は未実装。</li>
           <li>Firebase通信層は追加したが、既存画面との互換を優先してGAS API互換のadapterとして実装している。完全な画面別購読モデルへの置き換えは未完了。</li>
           <li>Firebase adapterは<code>snapshot</code>ノードを新規保存しない実装へ変更した。ただし購読はまだroomルート単位で、完全な画面別購読モデルへの置き換えは未完了。</li>
+          <li>Firebase版ではSpreadsheetの<code>game_configs</code>候補読み込みを行わない。次ゲームは当面Host画面の設定JSON Importで開始する。</li>
           <li>Firebase Security Rulesは、Host uidだけがroom全体を書けるようにし、Playerは自分の参加者ノードとチケットノードだけを書けるようにした。ただし、Cloud Functionsなしではホストパスワード検証や複雑なゲームルール検証をRulesだけで表現しきれない。</li>
           <li>Firebase Spark前提では、サーバ側Cloud Functionsによる集計検証を意図的に先送りする。Sparkで開始するための制約だが、Hostブラウザを信頼する現行GAS版と同程度の信頼モデルが残る。</li>
         </ul>

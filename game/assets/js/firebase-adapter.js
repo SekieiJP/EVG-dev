@@ -87,7 +87,12 @@
         return this.publicStatus(room, payload || {});
       }
       if (path === "/api/host/game-configs") {
-        return { ok: false, code: "not_supported", error: "Firebase Spark版ではgame_configsの取得は未実装です。" };
+        return {
+          ok: true,
+          configs: [],
+          serverTime: nowIso(),
+          message: "Firebase版では次ゲーム候補の読み込みは未対応です。設定JSON Importを使用してください。",
+        };
       }
       if (path === "/api/history/games") {
         return { ok: true, games: room.completedGames || [], players: publicPlayers(room.players || []) };

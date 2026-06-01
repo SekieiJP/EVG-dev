@@ -22,6 +22,14 @@
     BUILD_CONFIG.USE_FIREBASE_API = true;
     BUILD_CONFIG.USE_GAS_API = false;
     BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK = QUERY.get("backend") === "firebase-mock" || BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK;
+  } else if (QUERY.get("backend") === "gas") {
+    BUILD_CONFIG.USE_FIREBASE_API = false;
+    BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK = false;
+    BUILD_CONFIG.USE_GAS_API = true;
+  } else if (QUERY.get("backend") === "local") {
+    BUILD_CONFIG.USE_FIREBASE_API = false;
+    BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK = false;
+    BUILD_CONFIG.USE_GAS_API = false;
   }
   if (QUERY.get("room") || QUERY.get("roomId")) {
     BUILD_CONFIG.FIREBASE_ROOM_ID = QUERY.get("room") || QUERY.get("roomId");
@@ -1541,7 +1549,9 @@
   async function runMutation(localMutation, remotePath, payload) {
     if (!isRemoteMode()) return localMutation();
     try {
-      const response = await withBusy("読み込み中…", () => apiPost(remotePath, payload));
+      const response = isFirebaseMode()
+        ? await apiPost(remotePath, payload)
+        : await withBusy("読み込み中…", () => apiPost(remotePath, payload));
       return normalizeMutationResponse(response);
     } catch (error) {
       logClient("api.error", error.message);
@@ -1550,6 +1560,7 @@
   }
 
   function pollRemoteState() {
+    if (isFirebaseMode()) return;
     if (!isRemoteMode() || !state.room) return;
     if (!shouldPollRemoteState()) return;
     if (isPlayerRankingHeld()) return;
@@ -1578,6 +1589,7 @@
   }
 
   async function refreshRemoteState(options = {}) {
+    if (isFirebaseMode()) return;
     if (!isRemoteMode() || state.syncing) return;
     if (!options.force && !shouldPollRemoteState()) return;
     if (!options.force && isPlayerRankingHeld()) return;
@@ -1645,15 +1657,12 @@
       state.firebaseUnsubscribe = await firebaseAdapter.listen((room) => {
         if (!room) return;
         if (isPlayerRankingHeld()) return;
-        if (state.room && room.gameId === state.room.gameId && Number(room.roomVersion || 0) < Number(state.room.roomVersion || 0)) return;
         state.room = room;
         localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
         broadcastLocalRoom();
         render();
       });
       if (state.role === "player") await restoreRemotePlayer();
-      await refreshRemoteState({ force: true, full: true });
-      setInterval(() => refreshRemoteState({ force: true }), Math.max(30000, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 30000));
       logClient("firebase.ready", `${BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK ? "mock" : "rtdb"}:${BUILD_CONFIG.FIREBASE_ROOM_ID}`);
     } catch (error) {
       logClient("firebase.error", error.message);
@@ -1721,6 +1730,14 @@
 
   async function loadGameConfigs(showLoading) {
     if (!isRemoteMode()) return;
+    if (isFirebaseMode()) {
+      state.nextGameConfigs = [];
+      state.nextGameConfigsLoadedAt = "";
+      state.nextGameConfigError = "Firebase版では次ゲーム候補の読み込みは未対応です。設定JSON Importを使用してください。";
+      if (showLoading) showToast(state.nextGameConfigError);
+      render();
+      return;
+    }
     try {
       state.nextGameConfigError = "";
       const response = await maybeBusy(showLoading ? "次ゲーム候補を読み込み中…" : "", () => apiGet("/api/host/game-configs", {}));
