@@ -159,11 +159,13 @@
       const button = event.target.closest("[data-role]");
       if (!button) return;
       if (isRoleBlocked(button.dataset.role)) return;
+      const previousRole = state.role;
       state.role = button.dataset.role;
-      restorePlayerRankingHoldIfNeeded();
+      if (state.role === "player") restorePlayerRankingHoldIfNeeded();
       history.replaceState(null, "", `?view=${state.role}`);
       render();
       ensureVisibleHistoryCache();
+      if (isFirebaseMode() && previousRole !== state.role) restartFirebaseSync();
     });
     $("#app").addEventListener("submit", handleSubmit);
     $("#app").addEventListener("click", handleClick);
@@ -316,7 +318,10 @@
         remoteHostPath(hostAction),
         { hostName: "host" }
       );
-      if (!result.ok) return showToast(result.error || "操作できません。");
+      if (!result.ok) {
+        if (isRemoteMode()) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+        return showToast(result.error || "操作できません。");
+      }
       state.room = result.room;
       saveRoom(`host.${hostAction}`, "host");
       render();
@@ -1560,9 +1565,12 @@
       const response = isFirebaseMode()
         ? await apiPost(remotePath, payload)
         : await withBusy("読み込み中…", () => apiPost(remotePath, payload));
-      return normalizeMutationResponse(response);
+      const result = normalizeMutationResponse(response);
+      if (!result.ok && isFirebaseMode()) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+      return result;
     } catch (error) {
       logClient("api.error", error.message);
+      if (isFirebaseMode()) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
       return { ok: false, room: state.room, error: "通信に失敗しました。" };
     }
   }
@@ -1597,7 +1605,6 @@
   }
 
   async function refreshRemoteState(options = {}) {
-    if (isFirebaseMode()) return;
     if (!isRemoteMode() || state.syncing) return;
     if (!options.force && !shouldPollRemoteState()) return;
     if (!options.force && isPlayerRankingHeld()) return;
@@ -1612,10 +1619,7 @@
       if (response.ok && response.room) {
         if (options.revealOnly && !shouldApplyRevealRemoteRoom(state.room, response.room)) return;
         if (!options.force && isPlayerRankingHeld()) return;
-        state.room = response.room;
-        localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
-        broadcastLocalRoom();
-        render();
+        applyRemoteRoom(response.room, options);
       } else if (!response.ok) {
         logClient("api.state", response.error || response.message || "状態取得に失敗しました。");
       }
@@ -1665,15 +1669,7 @@
       state.firebaseUnsubscribe = await firebaseAdapter.listen((room) => {
         if (!room) return;
         if (isPlayerRankingHeld()) return;
-        if (
-          state.room &&
-          room.gameId === state.room.gameId &&
-          Number(room.roomVersion || 0) < Number(state.room.roomVersion || 0)
-        ) return;
-        state.room = room;
-        localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
-        broadcastLocalRoom();
-        render();
+        applyRemoteRoom(room);
       });
       if (state.role === "player") await restoreRemotePlayer();
       logClient("firebase.ready", `${BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK ? "mock" : "rtdb"}:${BUILD_CONFIG.FIREBASE_ROOM_ID}`);
@@ -1681,6 +1677,30 @@
       logClient("firebase.error", error.message);
       showToast("Firebase接続に失敗しました。設定を確認してください。");
     }
+  }
+
+  async function restartFirebaseSync() {
+    if (!isFirebaseMode()) return;
+    if (state.firebaseUnsubscribe) {
+      state.firebaseUnsubscribe();
+      state.firebaseUnsubscribe = null;
+    }
+    await startFirebaseSync();
+    await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+  }
+
+  function applyRemoteRoom(room, options = {}) {
+    if (!room) return;
+    if (
+      !options.ignoreLocalVersion &&
+      state.room &&
+      room.gameId === state.room.gameId &&
+      Number(room.roomVersion || 0) < Number(state.room.roomVersion || 0)
+    ) return;
+    state.room = room;
+    localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
+    broadcastLocalRoom();
+    render();
   }
 
   function shouldPollRemoteState() {

@@ -61,8 +61,7 @@
       const snapshot = await sdk.get(roomRef);
       const nodes = snapshot.exists() ? snapshot.val() : null;
       const room = roomFromFirebaseNodes(nodes, this.engine);
-      if (!room) await this.writeRestRoom(this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG));
-      else if (isLegacyRoomNodes(nodes)) await this.writeRestRoom(room);
+      if (room && isLegacyRoomNodes(nodes) && room.hostUid === this.auth.uid) await this.writeRestRoom(room);
       return { ok: true, uid: this.auth.uid };
     }
 
@@ -248,8 +247,17 @@
 
     async claimHost() {
       if (!this.mock) {
+        const roomRef = this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`);
+        const snapshot = await this.sdk.get(roomRef);
+        const needsInitialRoom = !snapshot.exists() || !snapshot.child("public").exists();
         await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta/hostUid`), this.auth.uid);
         await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta/updatedAt`), nowIso());
+        if (needsInitialRoom) {
+          const room = this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG);
+          room.hostUid = this.auth.uid;
+          room.updatedAt = nowIso();
+          await this.writeRestRoom(room);
+        }
         return;
       }
       const room = await this.readRoom();
