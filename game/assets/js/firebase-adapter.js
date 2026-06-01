@@ -17,9 +17,10 @@
       this.channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(CHANNEL_NAME) : null;
       this.roomId = cleanKey(this.config.FIREBASE_ROOM_ID || "elevator-game-live");
       this.auth = loadJson(AUTH_KEY, null);
-      this.mock = Boolean(this.config.FIREBASE_USE_LOCAL_MOCK || !this.config.FIREBASE_API_KEY || !this.config.FIREBASE_DATABASE_URL);
+      this.mock = Boolean(this.config.FIREBASE_USE_LOCAL_MOCK);
       this.readyPromise = null;
       this.unsubscribe = null;
+      this.debug = { basePaths: [], stagePaths: [], role: this.getRole(), currentStageId: "" };
     }
 
     async init() {
@@ -68,12 +69,19 @@
     async listen(callback) {
       await this.init();
       if (this.mock) {
+        this.debug = {
+          basePaths: ["mock-room"],
+          stagePaths: [],
+          role: this.getRole(),
+          currentStageId: "",
+        };
         const handler = (event) => {
           if (event.data && event.data.type === "room" && event.data.roomId === this.roomId) {
             callback(this.readMockRoom());
           }
         };
         if (this.channel) this.channel.addEventListener("message", handler);
+        callback(this.readMockRoom());
         return () => this.channel && this.channel.removeEventListener("message", handler);
       }
       this.unsubscribe = this.listenRest(callback);
@@ -86,6 +94,12 @@
       const initializedBasePaths = new Set();
       let stageUnsubscribers = [];
       let currentStageId = "";
+      this.debug = {
+        basePaths: firebaseBaseSubscriptionPaths(this.getRole(), this.auth.uid),
+        stagePaths: [],
+        role: this.getRole(),
+        currentStageId: "",
+      };
       const emit = () => {
         if (!initializedBasePaths.has("public")) return;
         callback(roomFromFirebaseNodes(nodes, this.engine));
@@ -112,13 +126,28 @@
         stageUnsubscribers.forEach((unsubscribe) => unsubscribe());
         stageUnsubscribers = [];
         currentStageId = stageId;
+        this.debug.currentStageId = stageId;
+        this.debug.stagePaths = [];
         if (!stageId) return;
-        firebaseStageSubscriptionPaths(this.getRole(), this.auth.uid, stageId).forEach(attachStage);
+        this.debug.stagePaths = firebaseStageSubscriptionPaths(this.getRole(), this.auth.uid, stageId);
+        this.debug.stagePaths.forEach(attachStage);
       };
-      firebaseBaseSubscriptionPaths(this.getRole(), this.auth.uid).forEach(attach);
+      this.debug.basePaths.forEach(attach);
       return () => {
         stageUnsubscribers.forEach((unsubscribe) => unsubscribe());
         unsubscribers.forEach((unsubscribe) => unsubscribe());
+      };
+    }
+
+    getDebugInfo() {
+      return {
+        uid: this.auth && this.auth.uid || "",
+        mock: this.mock,
+        roomId: this.roomId,
+        role: this.debug.role || this.getRole(),
+        basePaths: this.debug.basePaths || [],
+        stagePaths: this.debug.stagePaths || [],
+        currentStageId: this.debug.currentStageId || "",
       };
     }
 

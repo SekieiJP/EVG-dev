@@ -16,14 +16,14 @@ python3 -m http.server 8000 -d game
 - 戦歴: `http://localhost:8000/?view=history`
 - 設定: `http://localhost:8000/?view=settings`
 
-ホストパスワードのローカル既定値は `host` です。
+ホストパスワードの既定値は `host` です。
 
 ## 実装状況
 
-- 既定ではローカルストレージを使う単一ブラウザ検証モードです。
+- バックエンドはFirebase RTDBに固定しています。`backend=gas` と `backend=local` は使用しません。
+- `?backend=firebase-mock` は自動テスト・ローカル検証用のFirebase adapter mockです。
 - ゲームロジックは `assets/js/engine.js` に集約しています。
-- GAS APIの実装は `../gas/src/Code.gs` にあります。
-- GAS通信前に必要な接続情報は `assets/js/config.js` のビルド時定数で管理します。`USE_GAS_API` を `true` にし、`GAS_API_BASE_URL` にGAS Web App URLを設定すると、参加・投票・ホスト進行・状態ポーリングをGASへ送信します。
+- Firebase接続情報は `assets/js/config.js` のビルド時定数で管理します。
 
 ## 音声ファイル
 

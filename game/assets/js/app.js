@@ -5,7 +5,7 @@
       GAS_API_BASE_URL: "",
       GAS_API_KEY: "",
       USE_GAS_API: false,
-      USE_FIREBASE_API: false,
+      USE_FIREBASE_API: true,
       FIREBASE_USE_LOCAL_MOCK: false,
       FIREBASE_PROJECT_ID: "",
       FIREBASE_API_KEY: "",
@@ -18,25 +18,16 @@
     window.EVG_BUILD_CONFIG || {}
   );
   const QUERY = new URLSearchParams(location.search);
-  if (QUERY.get("backend") === "firebase" || QUERY.get("backend") === "firebase-mock") {
-    BUILD_CONFIG.USE_FIREBASE_API = true;
-    BUILD_CONFIG.USE_GAS_API = false;
-    BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK = QUERY.get("backend") === "firebase-mock" || BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK;
-  } else if (QUERY.get("backend") === "gas") {
-    BUILD_CONFIG.USE_FIREBASE_API = false;
-    BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK = false;
-    BUILD_CONFIG.USE_GAS_API = true;
-  } else if (QUERY.get("backend") === "local") {
-    BUILD_CONFIG.USE_FIREBASE_API = false;
-    BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK = false;
-    BUILD_CONFIG.USE_GAS_API = false;
-  }
+  BUILD_CONFIG.USE_FIREBASE_API = true;
+  BUILD_CONFIG.USE_GAS_API = false;
+  BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK = QUERY.get("backend") === "firebase-mock" || BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK;
   if (QUERY.get("room") || QUERY.get("roomId")) {
     BUILD_CONFIG.FIREBASE_ROOM_ID = QUERY.get("room") || QUERY.get("roomId");
   }
   const REQUESTED_ROLE = QUERY.get("view") || QUERY.get("v") || "player";
   const PLAYER_ENTRY_LOCKED = (!QUERY.has("view") && !QUERY.has("v")) || REQUESTED_ROLE === "player";
   const TEST_SLOT = String(QUERY.get("testSlot") || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
+  const DEBUG_VIEW = QUERY.get("debug") === "1";
   const REMOTE_REVEAL_POLL_INTERVAL_MS = 15000;
   const AUDIO_BASE_PATH = "assets/audio/";
   const AUDIO_FILES = {
@@ -103,6 +94,11 @@
     playerNextDisabledUntil: 0,
     serverTimeOffsetMs: 0,
     firebaseUnsubscribe: null,
+    firebaseStartedAt: "",
+    lastRemoteRoomAt: "",
+    lastRemoteSource: "",
+    lastApi: null,
+    lastHostAction: null,
     audio: {
       context: null,
       bgmKey: "",
@@ -129,26 +125,19 @@
   const $ = (selector) => document.querySelector(selector);
 
   document.addEventListener("DOMContentLoaded", () => {
-    state.room = loadRoom();
+    state.room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
     bindGlobalEvents();
     render();
     setInterval(tick, 1000);
-    if (isRemoteMode()) {
-      startRemoteSync();
-      ensureVisibleHistoryCache();
-    }
+    startRemoteSync();
+    ensureVisibleHistoryCache();
     if (localSyncChannel) {
       localSyncChannel.addEventListener("message", (event) => {
         if (event.data && event.data.type === "room") applyLocalScreenRoom(event.data.room);
       });
     }
     window.addEventListener("storage", (event) => {
-      if (!isRemoteMode() && event.key === STORAGE_KEYS.room) {
-        if (isPlayerRankingHeld()) return;
-        state.room = loadRoom();
-        render();
-      }
-      if (isRemoteMode() && event.key === STORAGE_KEYS.room) {
+      if (event.key === STORAGE_KEYS.room) {
         applyLocalScreenRoom(loadJson(STORAGE_KEYS.room, null));
       }
     });
@@ -309,7 +298,9 @@
     if (state.busyMessage) return;
     if (action === "host-action") {
       const hostAction = button.dataset.hostAction;
-      if (isRemoteMode() && hostAction === "tally") {
+      state.lastHostAction = hostDebugAction(hostAction, "start");
+      logClient("host.action.start", state.lastHostAction);
+      if (hostAction === "tally") {
         await commitHostTally("結果を保存中…");
         return;
       }
@@ -319,9 +310,13 @@
         { hostName: "host" }
       );
       if (!result.ok) {
-        if (isRemoteMode()) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+        state.lastHostAction = hostDebugAction(hostAction, "error", result);
+        logClient("host.action.error", state.lastHostAction);
+        await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
         return showToast(result.error || "操作できません。");
       }
+      state.lastHostAction = hostDebugAction(hostAction, "ok", result);
+      logClient("host.action.ok", state.lastHostAction);
       state.room = result.room;
       saveRoom(`host.${hostAction}`, "host");
       render();
@@ -363,12 +358,6 @@
       state.screenReady = true;
       localStorage.setItem(STORAGE_KEYS.screenReady, "true");
       startAudioContext();
-      render();
-    }
-    if (action === "screen-local-sync") {
-      state.screenLocalSync = !state.screenLocalSync;
-      localStorage.setItem(STORAGE_KEYS.screenLocalSync, state.screenLocalSync ? "true" : "false");
-      applyLocalScreenRoom(loadJson(STORAGE_KEYS.room, null));
       render();
     }
     if (action === "copy-uuid") {
@@ -440,12 +429,6 @@
       } catch (error) {
         showToast(`JSONを読み込めません: ${error.message}`);
       }
-    }
-    if (action === "reset-local") {
-      if (!confirm("ローカルの進行中データをリセットしますか？")) return;
-      state.room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
-      saveRoom("local.reset", "host");
-      render();
     }
     if (action === "select-history") {
       state.selectedHistoryUuid = button.dataset.uuid;
@@ -743,12 +726,12 @@
             <h2>参加者</h2>
             ${renderParticipantsTable()}
           </section>
+          ${renderInternalStatusPanel()}
           ${renderNextGamePanel()}
           <section class="panel wide">
             <h2>設定</h2>
             <div class="form-actions">
               <button type="button" data-action="export-config">Export</button>
-              <button type="button" data-action="reset-local">Reset</button>
             </div>
             <textarea id="configJson" rows="8" spellcheck="false">${escapeHtml(JSON.stringify(state.room.config, null, 2))}</textarea>
             <button type="button" data-action="import-config">Import</button>
@@ -758,6 +741,10 @@
           <section class="panel">
             <h2>操作ログ</h2>
             <div class="log-list">${state.room.operations.map((item) => `<p>${formatTime(item.at)} ${escapeHtml(item.actor)} ${escapeHtml(item.action)}</p>`).join("") || `<p class="muted">なし</p>`}</div>
+          </section>
+          <section class="panel wide">
+            <h2>通信ログ</h2>
+            ${renderClientLogs(30)}
           </section>
         </div>
       </section>
@@ -816,25 +803,87 @@
     `;
   }
 
+  function renderInternalStatusPanel() {
+    const stage = Engine.getCurrentStage(state.room);
+    const ticketCount = stage && state.room.tickets[stage.stageId] ? Object.keys(state.room.tickets[stage.stageId]).length : 0;
+    const resultCount = Object.keys(state.room.stageResults || {}).length;
+    const firebaseInfo = firebaseAdapter && firebaseAdapter.getDebugInfo ? firebaseAdapter.getDebugInfo() : {};
+    const rows = [
+      ["role", state.role],
+      ["backend", remoteModeLabel()],
+      ["roomId", BUILD_CONFIG.FIREBASE_ROOM_ID],
+      ["gameId", state.room.gameId],
+      ["phase", state.room.phase],
+      ["phaseLabel", phaseLabel(state.room.phase)],
+      ["currentStageIndex", state.room.currentStageIndex],
+      ["currentStageId", stage ? stage.stageId : ""],
+      ["roomVersion", state.room.roomVersion || 0],
+      ["players", state.room.players.length],
+      ["currentStageTickets", ticketCount],
+      ["stageResults", resultCount],
+      ["hostAuthed", state.hostAuthed],
+      ["hostToken", state.hostToken ? "present" : "empty"],
+      ["hostTokenExpiresAt", state.hostTokenExpiresAt || ""],
+      ["serverTimeOffsetMs", Math.round(state.serverTimeOffsetMs || 0)],
+      ["syncing", state.syncing],
+      ["busyMessage", state.busyMessage || ""],
+      ["firebaseStartedAt", state.firebaseStartedAt || ""],
+      ["lastRemoteRoomAt", state.lastRemoteRoomAt || ""],
+      ["lastRemoteSource", state.lastRemoteSource || ""],
+      ["firebaseUid", firebaseInfo.uid || ""],
+      ["firebaseMock", Boolean(firebaseInfo.mock)],
+      ["subscriptionRole", firebaseInfo.role || ""],
+      ["baseSubscriptions", (firebaseInfo.basePaths || []).join(", ")],
+      ["stageSubscriptions", (firebaseInfo.stagePaths || []).join(", ")],
+      ["lastApi", state.lastApi ? compactJson(state.lastApi) : ""],
+      ["lastHostAction", state.lastHostAction ? compactJson(state.lastHostAction) : ""],
+    ];
+    return `
+      <section id="internal-status" class="panel wide internal-status">
+        <h2>internal-status</h2>
+        <dl>
+          ${rows.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(formatDebugValue(value))}</dd></div>`).join("")}
+        </dl>
+      </section>
+    `;
+  }
+
+  function renderClientLogs(limit) {
+    const rows = state.logs.slice(0, limit || 50);
+    return `<div class="log-list debug-log-list">${rows.map((item) => `
+      <p>
+        <span>${formatTime(item.at)}</span>
+        <strong>${escapeHtml(item.kind)}</strong>
+        <code>${escapeHtml(item.message)}</code>
+      </p>
+    `).join("") || `<p class="muted">なし</p>`}</div>`;
+  }
+
+  function formatDebugValue(value) {
+    if (value === null || value === undefined) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    return compactJson(value);
+  }
+
+  function compactJson(value) {
+    try {
+      return JSON.stringify(value);
+    } catch (error) {
+      return String(value);
+    }
+  }
+
   function renderNextGamePanel() {
-    const canUseSheetConfigs = isGasMode();
-    const configs = state.nextGameConfigs || [];
-    const rows = configs.length
-      ? configs.map(renderGameConfigOption).join("")
-      : `<p class="muted">${state.nextGameConfigError ? escapeHtml(state.nextGameConfigError) : "Spreadsheetのgame_configsから候補を読み込んでください。"}</p>`;
     return `
       <section class="panel wide next-game-panel">
         <div class="panel-heading">
           <div>
             <h2>次ゲーム</h2>
-            <p class="muted">${isFirebaseMode() ? "Firebase Spark版では、次ゲーム設定は当面JSON Importで開始します。" : "game_configsシートのACTIVEな設定を開始します。参加者表示は次ゲーム開始後にアクセスした端末だけです。"}</p>
+            <p class="muted">Firebase版では、次ゲーム設定は当面JSON Importで開始します。</p>
           </div>
-          <button type="button" data-action="load-game-configs" ${canUseSheetConfigs ? "" : "disabled"}>候補を更新</button>
         </div>
-        ${canUseSheetConfigs ? `
-          <div class="game-config-list">${rows}</div>
-          ${state.nextGameConfigsLoadedAt ? `<p class="muted">更新 ${formatTime(state.nextGameConfigsLoadedAt)}</p>` : ""}
-        ` : `<p class="muted">ローカルモードでは手動JSON importを使用してください。</p>`}
+        <p class="muted">設定JSON Importを使用してください。</p>
       </section>
     `;
   }
@@ -872,6 +921,7 @@
           <span>${phaseLabel(state.room.phase)}</span>
         </div>
         ${renderScreenMain(stage, result)}
+        ${DEBUG_VIEW ? `<div class="screen-debug-panel">${renderClientLogs(12)}</div>` : ""}
       </section>
     `;
   }
@@ -1229,6 +1279,10 @@
             ${state.historyError ? `<p class="muted">${escapeHtml(state.historyError)}</p>` : ""}
             ${selected ? renderPlayerStats(selected, historyEntry ? historyEntry.data.summary : null) : `<p class="muted">なし</p>`}
           </section>
+          <section class="panel wide">
+            <h2>通信ログ</h2>
+            ${renderClientLogs(20)}
+          </section>
         </div>
       </section>
     `;
@@ -1258,7 +1312,7 @@
           </section>
           <section class="panel wide">
             <h2>通信ログ</h2>
-            <div class="log-list">${state.logs.map((item) => `<p>${formatTime(item.at)} ${escapeHtml(item.kind)} ${escapeHtml(item.message)}</p>`).join("") || `<p class="muted">なし</p>`}</div>
+            ${renderClientLogs(20)}
           </section>
         </div>
       </section>
@@ -1385,6 +1439,7 @@
   function nextHostAction() {
     const stage = Engine.getCurrentStage(state.room);
     const isLastStage = state.room.currentStageIndex >= (state.room.config.stages.length - 1);
+    if (!state.lastRemoteRoomAt) return { action: "", enabled: false, description: "Firebaseの状態同期を待っています。" };
     if (state.room.phase === Engine.PHASES.LOBBY) return { action: "start-stage", enabled: true, description: "ステージ説明へ進みます。" };
     if (state.room.phase === Engine.PHASES.STAGE_INTRO) return { action: "open-voting", enabled: true, description: "チケット購入受付を開始します。" };
     if (state.room.phase === Engine.PHASES.VOTING) return { action: "close-voting", enabled: true, description: "受付を締め切り、カウントダウンを開始します。" };
@@ -1404,6 +1459,25 @@
       };
     }
     return { action: "", enabled: false, description: "次ゲームを準備してください。" };
+  }
+
+  function hostDebugAction(hostAction, status, result) {
+    const stage = Engine.getCurrentStage(state.room);
+    return {
+      at: new Date().toISOString(),
+      status,
+      action: hostAction,
+      path: remoteHostPath(hostAction),
+      uiPhase: state.room ? state.room.phase : "",
+      uiPhaseLabel: state.room ? phaseLabel(state.room.phase) : "",
+      uiStageIndex: state.room ? state.room.currentStageIndex : "",
+      uiStageId: stage ? stage.stageId : "",
+      uiVersion: state.room ? Number(state.room.roomVersion || 0) : "",
+      responseOk: result ? result.ok !== false : "",
+      responseError: result ? result.error || "" : "",
+      responsePhase: result && result.room ? result.room.phase : "",
+      responseVersion: result && result.room ? Number(result.room.roomVersion || 0) : "",
+    };
   }
 
   function getCurrentPlayer() {
@@ -1542,35 +1616,30 @@
   }
 
   function isRemoteMode() {
-    return isGasMode() || isFirebaseMode();
+    return true;
   }
 
   function isGasMode() {
-    return Boolean(BUILD_CONFIG.USE_GAS_API && BUILD_CONFIG.GAS_API_BASE_URL);
+    return false;
   }
 
   function isFirebaseMode() {
-    return Boolean(BUILD_CONFIG.USE_FIREBASE_API);
+    return true;
   }
 
   function remoteModeLabel() {
-    if (isFirebaseMode()) return BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK ? "Firebase mock" : "Firebase RTDB";
-    if (isGasMode()) return "GAS";
-    return "Local";
+    return BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK ? "Firebase mock" : "Firebase RTDB";
   }
 
   async function runMutation(localMutation, remotePath, payload) {
-    if (!isRemoteMode()) return localMutation();
     try {
-      const response = isFirebaseMode()
-        ? await apiPost(remotePath, payload)
-        : await withBusy("読み込み中…", () => apiPost(remotePath, payload));
+      const response = await apiPost(remotePath, payload);
       const result = normalizeMutationResponse(response);
-      if (!result.ok && isFirebaseMode()) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+      if (!result.ok) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
       return result;
     } catch (error) {
       logClient("api.error", error.message);
-      if (isFirebaseMode()) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+      await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
       return { ok: false, room: state.room, error: "通信に失敗しました。" };
     }
   }
@@ -1619,7 +1688,7 @@
       if (response.ok && response.room) {
         if (options.revealOnly && !shouldApplyRevealRemoteRoom(state.room, response.room)) return;
         if (!options.force && isPlayerRankingHeld()) return;
-        applyRemoteRoom(response.room, options);
+        applyRemoteRoom(response.room, Object.assign({ source: "fetch" }, options));
       } else if (!response.ok) {
         logClient("api.state", response.error || response.message || "状態取得に失敗しました。");
       }
@@ -1650,13 +1719,7 @@
   }
 
   async function startRemoteSync() {
-    if (isFirebaseMode()) {
-      await startFirebaseSync();
-      return;
-    }
-    if (state.role === "player") await restoreRemotePlayer();
-    if (shouldPollRemoteState()) await refreshRemoteState({ force: true, full: true });
-    setInterval(pollRemoteState, Math.max(10000, Number(BUILD_CONFIG.POLL_INTERVAL_MS) || 10000));
+    await startFirebaseSync();
   }
 
   async function startFirebaseSync() {
@@ -1665,12 +1728,14 @@
       return;
     }
     try {
+      state.firebaseStartedAt = new Date().toISOString();
       await firebaseAdapter.init();
       state.firebaseUnsubscribe = await firebaseAdapter.listen((room) => {
         if (!room) return;
         if (isPlayerRankingHeld()) return;
         applyRemoteRoom(room);
       });
+      await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true, source: "startup-fetch" });
       if (state.role === "player") await restoreRemotePlayer();
       logClient("firebase.ready", `${BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK ? "mock" : "rtdb"}:${BUILD_CONFIG.FIREBASE_ROOM_ID}`);
     } catch (error) {
@@ -1697,6 +1762,15 @@
       room.gameId === state.room.gameId &&
       Number(room.roomVersion || 0) < Number(state.room.roomVersion || 0)
     ) return;
+    state.lastRemoteRoomAt = new Date().toISOString();
+    state.lastRemoteSource = options.source || (options.ignoreLocalVersion ? "forced-fetch" : "subscription");
+    logClient("room.apply", {
+      source: state.lastRemoteSource,
+      gameId: room.gameId || "",
+      phase: room.phase || "",
+      version: Number(room.roomVersion || 0),
+      role: state.role,
+    });
     state.room = room;
     localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
     broadcastLocalRoom();
@@ -1751,39 +1825,17 @@
   }
 
   async function loadGameConfigs(showLoading) {
-    if (!isRemoteMode()) return;
-    if (isFirebaseMode()) {
-      state.nextGameConfigs = [];
-      state.nextGameConfigsLoadedAt = "";
-      state.nextGameConfigError = "Firebase版では次ゲーム候補の読み込みは未対応です。設定JSON Importを使用してください。";
-      if (showLoading) showToast(state.nextGameConfigError);
-      render();
-      return;
-    }
-    try {
-      state.nextGameConfigError = "";
-      const response = await maybeBusy(showLoading ? "次ゲーム候補を読み込み中…" : "", () => apiGet("/api/host/game-configs", {}));
-      if (!response.ok) {
-        state.nextGameConfigError = response.error || response.message || "候補を取得できませんでした。";
-        showToast(state.nextGameConfigError);
-      } else {
-        state.nextGameConfigs = response.configs || [];
-        state.nextGameConfigsLoadedAt = response.serverTime || new Date().toISOString();
-        if (!state.nextGameConfigs.length) state.nextGameConfigError = "ACTIVEな次ゲーム候補がありません。";
-      }
-    } catch (error) {
-      state.nextGameConfigError = "候補の通信に失敗しました。";
-      logClient("game-configs.error", error.message);
-      showToast(state.nextGameConfigError);
-    }
+    state.nextGameConfigs = [];
+    state.nextGameConfigsLoadedAt = "";
+    state.nextGameConfigError = "Firebase版では次ゲーム候補の読み込みは未対応です。設定JSON Importを使用してください。";
+    if (showLoading) showToast(state.nextGameConfigError);
     render();
   }
 
   async function startGameConfig(configId) {
-    if (!isRemoteMode()) return;
     const beforeGameId = state.room.gameId;
     const result = await runMutation(
-      () => ({ ok: false, room: state.room, error: "ローカルモードでは使用できません。" }),
+      () => ({ ok: false, room: state.room, error: "Firebase版では使用できません。" }),
       "/api/host/start-game-config",
       { configId }
     );
@@ -1863,20 +1915,27 @@
   }
 
   async function apiGet(path, payload) {
-    if (isFirebaseMode()) return handleHostAuthResponse(path, await firebaseAdapter.get(path, withApiMeta(payload || {})));
-    const url = apiUrl(path, payload);
-    const response = await fetchJsonWithRetry(url.toString(), { method: "GET", cache: "no-store" });
-    return handleHostAuthResponse(path, response);
+    const startedAt = Date.now();
+    try {
+      const response = handleHostAuthResponse(path, await firebaseAdapter.get(path, withApiMeta(payload || {})));
+      recordApiDebug("GET", path, payload, response, startedAt);
+      return response;
+    } catch (error) {
+      recordApiDebug("GET", path, payload, { ok: false, error: error.message }, startedAt);
+      throw error;
+    }
   }
 
   async function apiPost(path, payload) {
-    if (isFirebaseMode()) return handleHostAuthResponse(path, await firebaseAdapter.post(path, withApiMeta(payload || {})));
-    const response = await fetchJsonWithRetry(apiUrl(path).toString(), {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(withApiMeta(payload || {})),
-    });
-    return handleHostAuthResponse(path, response);
+    const startedAt = Date.now();
+    try {
+      const response = handleHostAuthResponse(path, await firebaseAdapter.post(path, withApiMeta(payload || {})));
+      recordApiDebug("POST", path, payload, response, startedAt);
+      return response;
+    } catch (error) {
+      recordApiDebug("POST", path, payload, { ok: false, error: error.message }, startedAt);
+      throw error;
+    }
   }
 
   async function fetchJsonWithRetry(url, options, attempt = 0) {
@@ -1969,6 +2028,26 @@
     };
   }
 
+  function recordApiDebug(method, path, payload, response, startedAt) {
+    const room = response && response.room;
+    state.lastApi = {
+      at: new Date().toISOString(),
+      method,
+      path,
+      ok: response ? response.ok !== false : false,
+      code: response && response.code || "",
+      error: response && (response.error || response.message) || "",
+      elapsedMs: Date.now() - startedAt,
+      requestRole: state.role,
+      requestPhase: state.room ? state.room.phase : "",
+      requestVersion: state.room ? Number(state.room.roomVersion || 0) : 0,
+      responsePhase: room ? room.phase : "",
+      responseVersion: room ? Number(room.roomVersion || 0) : "",
+      hostAction: payload && payload.hostName ? path : "",
+    };
+    logClient(response && response.ok === false ? "api.response.error" : "api.response", state.lastApi);
+  }
+
   function handleHostAuthResponse(path, response) {
     if (
       path !== "/api/host/auth" &&
@@ -2032,8 +2111,8 @@
   }
 
   function logClient(kind, message) {
-    state.logs.unshift({ at: new Date().toISOString(), kind, message: String(message || "") });
-    state.logs = state.logs.slice(0, 80);
+    state.logs.unshift({ at: new Date().toISOString(), kind, message: typeof message === "string" ? message : compactJson(message || "") });
+    state.logs = state.logs.slice(0, 200);
     localStorage.setItem(STORAGE_KEYS.logs, JSON.stringify(state.logs));
   }
 

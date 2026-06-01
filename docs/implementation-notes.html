@@ -151,6 +151,8 @@
           <li>2026-06-01追記: Host再取得用Rulesはroom全体の書き換えではなく<code>meta/hostUid</code>だけを直接更新する形へ絞り、<code>elevator-game-live</code>へdeployした。</li>
           <li>2026-06-01追記: Firebaseロール切替時に画面別購読を張り直し、Host操作がフェーズ不一致で失敗した場合は実DBから強制再取得するようにした。Playerのランキング保持roomがHost/Screenへ持ち込まれることを避けるため。</li>
           <li>2026-06-01追記: Firebase実RTDBの全データを削除した。削除後は<code>null</code>を確認済み。初期roomはHost認証時に作成し、未認証Host/Player/Screenの初回アクセスではDBを作成しない。</li>
+          <li>2026-06-01追記: Host画面に<code>internal-status</code>セクションを追加し、phase、roomVersion、stageId、購読パス、直近API、直近Host操作、Firebase uidなどを確認できるようにした。</li>
+          <li>2026-06-01追記: クライアント実行モードをFirebaseに固定し、<code>backend=gas</code>と<code>backend=local</code>によるフォールバックを廃止した。Firebase設定不足時の自動mock化もやめ、ローカル検証は明示的な<code>backend=firebase-mock</code>だけを残す。</li>
         </ul>
       </section>
 
@@ -238,6 +240,7 @@
           <li>Firebase通信層は、既存画面との互換を優先してGAS API互換のadapterとして実装している。購読は画面別に分けたが、書き込みAPIの形はGAS互換を維持している。</li>
           <li>Firebase adapterは<code>snapshot</code>ノードを新規保存しない実装へ変更し、購読も画面別の子ノード購読へ移行した。ただしHost操作の書き込みは既存エンジン互換を優先し、room単位transactionを継続している。</li>
           <li>Firebase版ではScreenの「同一端末同期」ボタンを表示しない。RTDB購読が主経路のため、同一端末BroadcastChannel/localStorage同期で別画面の古い状態を取り込むリスクを避ける。</li>
+          <li>GASモードとlocalStorage進行モードは実行経路から外した。過去実装やテスト資産は残すが、画面の通常操作はFirebase adapter経由だけにする。</li>
           <li>Firebase版ではSpreadsheetの<code>game_configs</code>候補読み込みを行わない。次ゲームは当面Host画面の設定JSON Importで開始する。</li>
           <li>Firebase Security Rulesは、Host uidだけがroom全体を書けるようにし、Playerは自分の参加者ノードとチケットノードだけを書けるようにした。ただし、Cloud Functionsなしではホストパスワード検証やHost再取得の正当性、複雑なゲームルール検証をRulesだけで表現しきれない。</li>
           <li>Firebase Spark前提では、サーバ側Cloud Functionsによる集計検証を意図的に先送りする。Sparkで開始するための制約だが、Hostブラウザを信頼する現行GAS版と同程度の信頼モデルが残る。</li>
