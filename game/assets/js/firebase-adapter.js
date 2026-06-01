@@ -20,7 +20,15 @@
       this.mock = Boolean(this.config.FIREBASE_USE_LOCAL_MOCK);
       this.readyPromise = null;
       this.unsubscribe = null;
-      this.debug = { basePaths: [], stagePaths: [], role: this.getRole(), currentStageId: "" };
+      this.debug = {
+        basePaths: [],
+        stagePaths: [],
+        role: this.getRole(),
+        currentStageId: "",
+        isHostAllowed: false,
+        lastRulesError: "",
+        lastTransactionPublic: null,
+      };
     }
 
     async init() {
@@ -58,11 +66,9 @@
       this.auth = { uid: user.uid, idToken: await user.getIdToken(), mock: false };
       localStorage.setItem(AUTH_KEY, JSON.stringify(this.auth));
       this.firebaseDb = sdk.getDatabase(this.firebaseApp);
-      const roomRef = sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`);
-      const snapshot = await sdk.get(roomRef);
-      const nodes = snapshot.exists() ? snapshot.val() : null;
-      const room = roomFromFirebaseNodes(nodes, this.engine);
-      if (room && isLegacyRoomNodes(nodes) && room.hostUid === this.auth.uid) await this.writeRestRoom(room);
+      if (this.getRole() === "host") {
+        this.debug.isHostAllowed = await this.isHostAllowed();
+      }
       return { ok: true, uid: this.auth.uid };
     }
 
@@ -95,18 +101,22 @@
       let stageUnsubscribers = [];
       let currentStageId = "";
       this.debug = {
-        basePaths: firebaseBaseSubscriptionPaths(this.getRole(), this.auth.uid),
+        basePaths: firebaseBaseSubscriptionPaths(this.getRole(), this.auth.uid, this.mock || this.getRole() !== "host" || this.debug.isHostAllowed),
         stagePaths: [],
         role: this.getRole(),
         currentStageId: "",
+        isHostAllowed: Boolean(this.debug.isHostAllowed),
+        lastRulesError: this.debug.lastRulesError || "",
+        lastTransactionPublic: this.debug.lastTransactionPublic || null,
       };
       const emit = () => {
-        if (!initializedBasePaths.has("public")) return;
+        if (!initializedBasePaths.has("public") || !nodes.public) return;
         callback(roomFromFirebaseNodes(nodes, this.engine));
       };
       const attach = (path) => {
         const unsubscribe = this.sdk.onValue(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), (snapshot) => {
           setNestedNode(nodes, path, snapshot.val());
+          if (path === `roles/hosts/${this.auth.uid}`) this.debug.isHostAllowed = snapshot.val() === true;
           initializedBasePaths.add(path);
           updateStageSubscriptions();
           emit();
@@ -129,7 +139,12 @@
         this.debug.currentStageId = stageId;
         this.debug.stagePaths = [];
         if (!stageId) return;
-        this.debug.stagePaths = firebaseStageSubscriptionPaths(this.getRole(), this.auth.uid, stageId);
+        this.debug.stagePaths = firebaseStageSubscriptionPaths(
+          this.getRole(),
+          this.auth.uid,
+          stageId,
+          this.mock || this.getRole() !== "host" || this.debug.isHostAllowed
+        );
         this.debug.stagePaths.forEach(attachStage);
       };
       this.debug.basePaths.forEach(attach);
@@ -148,12 +163,18 @@
         basePaths: this.debug.basePaths || [],
         stagePaths: this.debug.stagePaths || [],
         currentStageId: this.debug.currentStageId || "",
+        isHostAllowed: Boolean(this.debug.isHostAllowed),
+        lastRulesError: this.debug.lastRulesError || "",
+        lastTransactionPublic: this.debug.lastTransactionPublic || null,
       };
     }
 
     async get(path, payload) {
       await this.init();
       const room = await this.readRoom();
+      if (!room) {
+        return { ok: false, code: "not_initialized", error: "ゲームルームがまだ初期化されていません。Hostで認証してください。" };
+      }
       if (path === "/api/status" || path === "/api/room/state" || path === "/api/screen/state") {
         return this.publicStatus(room, payload || {});
       }
@@ -181,7 +202,7 @@
       payload = payload || {};
       if (path === "/api/host/auth") return this.authHost(payload.password);
       if (!this.mock && isPlayerWritePath(path)) return this.postRestPlayer(path, payload);
-      if (!this.mock) return this.postRestTransaction(path, payload);
+      if (!this.mock) return this.postRestHost(path, payload);
       const room = await this.readRoom();
       const result = this.applyMutation(path, payload, room);
       if (!result.ok) return result;
@@ -224,39 +245,46 @@
       } else {
         result = { ok: false, code: "not_found", error: `Unknown endpoint: ${path}` };
       }
-      if (result.ok && result.room && path.indexOf("/api/host/") === 0) {
-        result.room.hostUid = this.auth.uid;
-      }
       return result;
     }
 
-    async postRestTransaction(path, payload) {
-      const roomRef = this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`);
-      let result = null;
-      const transaction = await this.sdk.runTransaction(roomRef, (currentNodes) => {
-        const room = roomFromFirebaseNodes(currentNodes, this.engine) || this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG);
-        result = this.applyMutation(path, payload, room);
-        if (!result.ok) return;
-        const nodes = roomToFirebaseNodes(result.room);
-        const currentHostUid = currentNodes && currentNodes.meta && currentNodes.meta.hostUid;
-        nodes.meta.hostUid = nodes.meta.hostUid || currentHostUid || this.auth.uid;
-        return nodes;
-      }, { applyLocally: false });
-      if (!result) return { ok: false, code: "transaction", error: "更新を開始できませんでした。" };
+    async postRestHost(path, payload) {
+      const hostAuth = this.verifyHost(payload.hostToken);
+      if (!hostAuth.ok) return hostAuth;
+      if (!(await this.isHostAllowed())) {
+        return { ok: false, code: "auth", error: "このFirebase uidはHost allowlistに登録されていません。" };
+      }
+      const room = await this.readRoom();
+      if (!room && path !== "/api/host/import-config" && path !== "/api/host/update-config") {
+        return { ok: false, code: "not_initialized", error: "ゲームルームがまだ初期化されていません。Host認証をやり直してください。" };
+      }
+      const currentRoom = room || initializedRoom(this.engine, this.roomId, payload.config);
+      const result = this.applyMutation(path, payload, currentRoom);
       if (!result.ok) return result;
-      if (!transaction.committed) return { ok: false, code: "version_conflict", error: "ルーム状態が更新されています。もう一度操作してください。" };
-      const nextRoom = roomFromFirebaseNodes(transaction.snapshot.val(), this.engine) || result.room;
-      return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload) });
+
+      if (path === "/api/host/import-config" || path === "/api/host/update-config") {
+        const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom);
+        await this.writeRestRoomChildren(nextRoom);
+        return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload).room });
+      }
+
+      const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom);
+      const transition = await this.commitPublicTransition(currentRoom, nextRoom);
+      if (!transition.ok) return transition;
+      await this.writeHostSideEffects(path, currentRoom, nextRoom);
+      const refreshed = await this.readRoom();
+      return Object.assign({}, result, { room: this.publicRoom(refreshed || nextRoom, payload).room });
     }
 
     async postRestPlayer(path, payload) {
       const room = await this.readRoom();
+      if (!room) return { ok: false, code: "not_initialized", error: "ゲームルームがまだ初期化されていません。" };
       const playerPayload = Object.assign({}, payload, { uuid: this.auth.uid });
       const result = this.applyMutation(path, playerPayload, room);
       if (!result.ok) return result;
       const updates = playerUpdates(path, result.room, this.auth.uid);
       if (!Object.keys(updates).length) return { ok: false, code: "not_supported", error: "この操作はFirebase Player更新に未対応です。" };
-      await this.sdk.update(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`), updates);
+      await this.writeRestChildUpdates(updates);
       return Object.assign({}, result, { room: this.publicRoom(result.room, playerPayload) });
     }
 
@@ -265,7 +293,17 @@
       if (String(password || "").trim() !== expected) {
         return { ok: false, code: "auth", error: "パスワードが違います。" };
       }
-      await this.claimHost();
+      try {
+        await this.claimHost();
+      } catch (error) {
+        return {
+          ok: false,
+          code: error.code || "auth",
+          error: error.message === "HOST_UID_NOT_ALLOWED"
+            ? "このFirebase uidはHost allowlistに登録されていません。"
+            : (error.message || "Host権限を確認できませんでした。"),
+        };
+      }
       return {
         ok: true,
         hostToken: `firebase-host:${this.auth.uid}:${Date.now()}`,
@@ -276,16 +314,17 @@
 
     async claimHost() {
       if (!this.mock) {
-        const roomRef = this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`);
-        const snapshot = await this.sdk.get(roomRef);
-        const needsInitialRoom = !snapshot.exists() || !snapshot.child("public").exists();
-        await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta/hostUid`), this.auth.uid);
-        await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta/updatedAt`), nowIso());
-        if (needsInitialRoom) {
-          const room = this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG);
-          room.hostUid = this.auth.uid;
-          room.updatedAt = nowIso();
-          await this.writeRestRoom(room);
+        const allowed = await this.isHostAllowed();
+        if (!allowed) {
+          const error = new Error("HOST_UID_NOT_ALLOWED");
+          error.code = "auth";
+          throw error;
+        }
+        const publicSnapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/public`));
+        if (!publicSnapshot.exists()) {
+          await this.writeRestRoomChildren(initializedRoom(this.engine, this.roomId));
+        } else {
+          await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta/updatedAt`), nowIso());
         }
         return;
       }
@@ -380,7 +419,7 @@
 
     async readRoom() {
       const room = this.mock ? this.readMockRoom() : await this.readRestRoom();
-      return room || this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG);
+      return room || (this.mock ? this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG) : null);
     }
 
     async writeRoom(room) {
@@ -403,15 +442,104 @@
     }
 
     async readRestRoom() {
-      const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`));
-      return snapshot.exists() ? roomFromFirebaseNodes(snapshot.val(), this.engine) : null;
+      const base = await this.readRestNodes(restBaseReadPaths(this.getRole(), this.auth.uid, this.mock || this.getRole() !== "host" || this.debug.isHostAllowed));
+      if (!base.public) return null;
+      if (base.roles && base.roles.hosts && base.roles.hosts[this.auth.uid]) this.debug.isHostAllowed = true;
+      const stageId = currentStageIdFromNodes(base);
+      if (stageId) {
+        const stage = await this.readRestNodes(firebaseStageSubscriptionPaths(
+          this.getRole(),
+          this.auth.uid,
+          stageId,
+          this.mock || this.getRole() !== "host" || this.debug.isHostAllowed
+        ));
+        mergeNodes(base, stage);
+      }
+      return roomFromFirebaseNodes(base, this.engine);
+    }
+
+    async readRestNodes(paths) {
+      const pairs = await Promise.all(paths.map(async (path) => {
+        const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`));
+        return [path, snapshot.exists() ? snapshot.val() : null];
+      }));
+      const nodes = {};
+      pairs.forEach(([path, value]) => setNestedNode(nodes, path, value));
+      return nodes;
     }
 
     async writeRestRoom(room) {
-      const nodes = roomToFirebaseNodes(room);
-      nodes.meta.hostUid = nodes.meta.hostUid || this.auth.uid;
-      await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`), nodes);
+      await this.writeRestRoomChildren(room);
       return { ok: true };
+    }
+
+    async writeRestRoomChildren(room) {
+      room.roomId = this.roomId;
+      const nodes = roomToFirebaseNodes(room);
+      delete nodes.roles;
+      await Promise.all(Object.keys(nodes).map((key) => {
+        return this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${key}`), emptyObjectToNull(nodes[key]));
+      }));
+      return { ok: true };
+    }
+
+    async writeRestChildUpdates(updates) {
+      await Promise.all(Object.keys(updates).map((path) => {
+        return this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), emptyObjectToNull(updates[path]));
+      }));
+    }
+
+    async isHostAllowed() {
+      if (this.mock) return true;
+      const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/roles/hosts/${this.auth.uid}`));
+      const allowed = snapshot.exists() && snapshot.val() === true;
+      this.debug.isHostAllowed = allowed;
+      return allowed;
+    }
+
+    async commitPublicTransition(currentRoom, nextRoom) {
+      const expected = compactStatus(currentRoom);
+      const nextPublic = compactStatus(nextRoom);
+      let transactionPublic = null;
+      try {
+        const transaction = await this.sdk.runTransaction(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/public`), (currentPublic) => {
+          transactionPublic = currentPublic;
+          this.debug.lastTransactionPublic = currentPublic || null;
+          if (!publicMatches(currentPublic, expected)) return;
+          return nextPublic;
+        }, { applyLocally: false });
+        if (!transaction.committed) {
+          return {
+            ok: false,
+            code: "version_conflict",
+            error: "DB上のフェーズまたはバージョンが更新されています。再読み込みしてください。",
+            debug: { expectedPublic: expected, transactionPublic },
+          };
+        }
+        return { ok: true };
+      } catch (error) {
+        this.debug.lastRulesError = error.message || String(error);
+        return { ok: false, code: "rules", error: error.message || "Firebase Rulesにより更新が拒否されました。" };
+      }
+    }
+
+    async writeHostSideEffects(path, currentRoom, nextRoom) {
+      const updates = {};
+      const nodes = roomToFirebaseNodes(nextRoom);
+      updates["meta"] = nodes.meta;
+      updates["operations"] = nodes.operations;
+      if (path === "/api/host/commit-result") {
+        const stage = this.engine.getCurrentStage(currentRoom);
+        const stageId = stage && stage.stageId;
+        if (stageId) updates[`results/${stageId}`] = nodes.results && nodes.results[stageId] || null;
+        updates["scores"] = nodes.scores;
+        updates["playerStats"] = nodes.playerStats;
+      }
+      if (path === "/api/host/start-stage" || path === "/api/host/advance") {
+        updates["players"] = nodes.players;
+        updates["playerStats"] = nodes.playerStats;
+      }
+      await this.writeRestChildUpdates(updates);
     }
   }
 
@@ -421,10 +549,10 @@
       meta: {
         roomId: room.roomId || "",
         title: room.config && room.config.gameMeta ? room.config.gameMeta.title : "エレベーターゲーム",
-        schemaVersion: "firebase-spark-v1",
+        schemaVersion: "firebase-rtdb-v2",
         activeGameId: room.gameId || "",
-        hostUid: room.hostUid || "",
         status: room.phase === "final" ? "finished" : "active",
+        createdAt: room.createdAt || nowIso(),
         updatedAt: room.updatedAt || nowIso(),
       },
       public: compactStatus(room),
@@ -444,6 +572,7 @@
         volume: room.volume !== undefined ? room.volume : 0.8,
         muted: Boolean(room.muted),
       },
+      archive: room.archive || null,
     };
   }
 
@@ -477,7 +606,7 @@
     const settings = nodes.roomSettings || {};
     return normalizeRoomShape({
       roomId: nodes.meta && nodes.meta.roomId || fallback.roomId,
-      hostUid: nodes.meta && nodes.meta.hostUid || "",
+      hostUid: firstHostUid(nodes.roles) || (nodes.meta && nodes.meta.hostUid) || "",
       gameId: status.gameId || (nodes.meta && nodes.meta.activeGameId) || fallback.gameId,
       config: nodes.config || fallback.config,
       phase: status.phase || fallback.phase,
@@ -493,6 +622,8 @@
       animationStartedAt: status.animationStartedAt || null,
       animationSkippedAt: status.animationSkippedAt || null,
       roomVersion: Number(status.roomVersion || 0),
+      ticketPresence: nodes.ticketPresence || {},
+      archive: nodes.archive || null,
       volume: settings.volume !== undefined ? Number(settings.volume) : fallback.volume,
       muted: Boolean(settings.muted),
       createdAt: nodes.meta && nodes.meta.createdAt || fallback.createdAt,
@@ -515,25 +646,37 @@
     return Boolean(nodes && !nodes.public && (nodes.phase || Array.isArray(nodes.players) || nodes.stageResults || nodes.currentStageIndex !== undefined));
   }
 
-  function firebaseBaseSubscriptionPaths(role, uid) {
+  function firebaseBaseSubscriptionPaths(role, uid, hostAllowed = true) {
     const common = ["meta", "public", "config", "roomSettings"];
     if (role === "host") {
-      return common.concat(["players", "playerStats", "tickets", "ticketPresence", "results", "scores", "completedGames", "operations"]);
+      if (!hostAllowed) return common.concat([`roles/hosts/${uid}`]);
+      return common.concat([`roles/hosts/${uid}`, "players", "playerStats", "scores", "completedGames", "operations", "archive"]);
     }
     if (role === "screen") {
-      return common.concat(["players", "playerStats", "tickets", "ticketPresence", "results", "scores"]);
+      return common.concat(["players", "scores"]);
     }
     if (role === "history") {
-      return common.concat(["players", "playerStats", "results", "scores", "completedGames"]);
+      return common.concat(["players", `playerStats/${uid}`, "scores", "completedGames"]);
     }
-    return common.concat(["players", `playerStats/${uid}`, `scores/${uid}`, "completedGames"]);
+    return common.concat(["players", `players/${uid}`, `playerStats/${uid}`, `scores/${uid}`, "completedGames"]);
   }
 
-  function firebaseStageSubscriptionPaths(role, uid, stageId) {
+  function firebaseStageSubscriptionPaths(role, uid, stageId, hostAllowed = true) {
+    if (role === "host") {
+      if (!hostAllowed) return [];
+      return [`ticketPresence/${stageId}`, `tickets/${stageId}`, `results/${stageId}`];
+    }
+    if (role === "screen") {
+      return [`ticketPresence/${stageId}`, `results/${stageId}`];
+    }
     if (role === "player") {
-      return [`tickets/${stageId}/${uid}`, `results/${stageId}`];
+      return [`ticketPresence/${stageId}/${uid}`, `tickets/${stageId}/${uid}`, `results/${stageId}/players/${uid}`, `results/${stageId}/rankings`];
     }
     return [];
+  }
+
+  function restBaseReadPaths(role, uid, hostAllowed) {
+    return firebaseBaseSubscriptionPaths(role, uid, hostAllowed);
   }
 
   function setNestedNode(target, path, value) {
@@ -547,6 +690,65 @@
     if (!key) return;
     if (value === null || value === undefined) delete cursor[key];
     else cursor[key] = value;
+  }
+
+  function mergeNodes(target, source) {
+    Object.keys(source || {}).forEach((key) => {
+      if (source[key] && typeof source[key] === "object" && !Array.isArray(source[key])) {
+        target[key] = target[key] || {};
+        mergeNodes(target[key], source[key]);
+      } else {
+        target[key] = source[key];
+      }
+    });
+    return target;
+  }
+
+  function currentStageIdFromNodes(nodes) {
+    if (nodes.public && nodes.public.currentStageId) return nodes.public.currentStageId;
+    const index = nodes.public ? Number(nodes.public.currentStageIndex || 0) : 0;
+    const stages = nodes.config && nodes.config.stages ? nodes.config.stages : [];
+    const stage = stages[index] || null;
+    return stage && stage.stageId || "";
+  }
+
+  function initializedRoom(engine, roomId, config) {
+    const room = engine.createInitialRoom(config || engine.DEFAULT_CONFIG);
+    room.roomId = roomId;
+    room.updatedAt = nowIso();
+    return room;
+  }
+
+  function stampHostRoom(room, roomId, previousRoom) {
+    const next = room || {};
+    next.roomId = roomId;
+    if (previousRoom && next.gameId === previousRoom.gameId) {
+      next.roomVersion = Number(previousRoom.roomVersion || 0) + 1;
+      next.createdAt = previousRoom.createdAt || next.createdAt;
+    } else {
+      next.roomVersion = Number(next.roomVersion || 0);
+    }
+    next.updatedAt = nowIso();
+    return next;
+  }
+
+  function publicMatches(actual, expected) {
+    if (!actual || !expected) return false;
+    return String(actual.gameId || "") === String(expected.gameId || "") &&
+      String(actual.phase || "") === String(expected.phase || "") &&
+      String(actual.currentStageId || "") === String(expected.currentStageId || "") &&
+      Number(actual.currentStageIndex || 0) === Number(expected.currentStageIndex || 0) &&
+      Number(actual.roomVersion || 0) === Number(expected.roomVersion || 0);
+  }
+
+  function emptyObjectToNull(value) {
+    if (value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) return null;
+    return value;
+  }
+
+  function firstHostUid(roles) {
+    const hosts = roles && roles.hosts ? roles.hosts : {};
+    return Object.keys(hosts).find((uid) => hosts[uid] === true) || "";
   }
 
   function playerUpdates(path, room, uid) {
@@ -660,6 +862,8 @@
     room.operations = Array.isArray(room.operations) ? room.operations : Object.values(room.operations || {});
     room.roomVersion = Number(room.roomVersion || 0);
     room.hostUid = room.hostUid || "";
+    room.ticketPresence = room.ticketPresence || {};
+    room.archive = room.archive || null;
     room.volume = room.volume !== undefined ? room.volume : fallback.volume;
     room.muted = Boolean(room.muted);
     return room;

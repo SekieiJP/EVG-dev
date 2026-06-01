@@ -254,7 +254,8 @@
       state.hostAuthed = true;
       state.hostPasswordDraft = "";
       localStorage.setItem(STORAGE_KEYS.hostAuthed, "true");
-      if (isRemoteMode()) await refreshRemoteState({ force: true, full: true, showLoading: true });
+      if (isFirebaseMode()) await restartFirebaseSync();
+      else if (isRemoteMode()) await refreshRemoteState({ force: true, full: true, showLoading: true });
       render();
     }
     if (form.id === "renameForm") {
@@ -339,7 +340,7 @@
       render();
       setTimeout(render, 5000);
       if (![Engine.PHASES.RANKING, Engine.PHASES.FINAL].includes(state.room.phase)) return showToast("ホストの操作待ちです。");
-      const heldRoom = state.playerRankingHold ? Engine.deepClone(state.playerRankingHold.room) : null;
+      const heldRoom = null;
       const beforeGameId = state.room.gameId;
       const beforePhase = state.room.phase;
       const beforeVersion = state.room.roomVersion || 0;
@@ -693,6 +694,7 @@
             <label>パスワード<input name="password" type="password" value="${escapeAttr(state.hostPasswordDraft)}" required></label>
             <button class="primary" type="submit">認証</button>
           </form>
+          ${renderHostAuthDebugPanel()}
         </section>
       `;
     }
@@ -832,14 +834,38 @@
       ["lastRemoteSource", state.lastRemoteSource || ""],
       ["firebaseUid", firebaseInfo.uid || ""],
       ["firebaseMock", Boolean(firebaseInfo.mock)],
+      ["isHostAllowed", Boolean(firebaseInfo.isHostAllowed)],
       ["subscriptionRole", firebaseInfo.role || ""],
       ["baseSubscriptions", (firebaseInfo.basePaths || []).join(", ")],
       ["stageSubscriptions", (firebaseInfo.stagePaths || []).join(", ")],
+      ["lastRulesError", firebaseInfo.lastRulesError || ""],
+      ["lastTransactionPublic", firebaseInfo.lastTransactionPublic ? compactJson(firebaseInfo.lastTransactionPublic) : ""],
       ["lastApi", state.lastApi ? compactJson(state.lastApi) : ""],
       ["lastHostAction", state.lastHostAction ? compactJson(state.lastHostAction) : ""],
     ];
     return `
       <section id="internal-status" class="panel wide internal-status">
+        <h2>internal-status</h2>
+        <dl>
+          ${rows.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(formatDebugValue(value))}</dd></div>`).join("")}
+        </dl>
+      </section>
+    `;
+  }
+
+  function renderHostAuthDebugPanel() {
+    const firebaseInfo = firebaseAdapter && firebaseAdapter.getDebugInfo ? firebaseAdapter.getDebugInfo() : {};
+    const rows = [
+      ["backend", remoteModeLabel()],
+      ["roomId", BUILD_CONFIG.FIREBASE_ROOM_ID],
+      ["firebaseUid", firebaseInfo.uid || ""],
+      ["isHostAllowed", Boolean(firebaseInfo.isHostAllowed)],
+      ["baseSubscriptions", (firebaseInfo.basePaths || []).join(", ")],
+      ["lastRulesError", firebaseInfo.lastRulesError || ""],
+      ["lastApi", state.lastApi ? compactJson(state.lastApi) : ""],
+    ];
+    return `
+      <section id="internal-status" class="panel internal-status">
         <h2>internal-status</h2>
         <dl>
           ${rows.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(formatDebugValue(value))}</dd></div>`).join("")}
@@ -1034,7 +1060,10 @@
 
   function renderTicketProgress() {
     const tickets = Object.values(getStageTickets());
-    const purchased = tickets.filter((ticket) => ticket && !ticket.abstained).length;
+    const presence = getStageTicketPresence();
+    const purchased = tickets.length
+      ? tickets.filter((ticket) => ticket && !ticket.abstained).length
+      : Object.values(presence).filter((item) => item && item.status === "submitted").length;
     const total = state.room.players.length;
     const degrees = total > 0 ? Math.round((purchased / total) * 360) : 0;
     return `
@@ -1099,9 +1128,9 @@
         uuid: state.playerUuid,
         gameId: state.room.gameId,
         stageId: stage ? stage.stageId : "",
+        phase: state.room.phase,
         currentStageIndex: state.room.currentStageIndex || 0,
         savedAt: new Date().toISOString(),
-        room: Engine.deepClone(state.room),
       };
       persistPlayerRankingHold();
     }
@@ -1110,8 +1139,7 @@
   function hasPlayerRankingHold() {
     return Boolean(
       state.playerRankingHold &&
-        state.playerRankingHold.room &&
-        state.playerRankingHold.room.phase === Engine.PHASES.RANKING &&
+        state.playerRankingHold.phase === Engine.PHASES.RANKING &&
         state.playerRankingHold.uuid === state.playerUuid
     );
   }
@@ -1123,13 +1151,10 @@
       clearPlayerRankingHold();
       return;
     }
-    if (!state.room || state.room.phase !== Engine.PHASES.RANKING || state.room.gameId !== state.playerRankingHold.gameId) {
-      state.room = Engine.deepClone(state.playerRankingHold.room);
-    }
   }
 
   function isPlayerRankingHeld() {
-    return state.role === "player" && hasPlayerRankingHold();
+    return false;
   }
 
   function playerRankingHoldKey(room, stage) {
@@ -1144,17 +1169,16 @@
   function loadPlayerRankingHold() {
     if (state.playerRankingHold || state.role !== "player" || !state.playerUuid) return;
     const saved = loadJson(STORAGE_KEYS.playerRankingHold, null);
-    if (saved && saved.uuid === state.playerUuid && saved.room && saved.room.phase === Engine.PHASES.RANKING) {
+    if (saved && saved.uuid === state.playerUuid && saved.phase === Engine.PHASES.RANKING) {
       state.playerRankingHold = saved;
     }
   }
 
   function shouldDiscardPlayerRankingHold() {
-    if (!state.playerRankingHold || !state.playerRankingHold.room) return true;
+    if (!state.playerRankingHold) return true;
     if (state.playerRankingHold.uuid !== state.playerUuid) return true;
-    if (state.playerRankingHold.room.phase === Engine.PHASES.FINAL) return true;
-    const heldStage = Engine.getCurrentStage(state.playerRankingHold.room);
-    const expectedKey = playerRankingHoldKey(state.playerRankingHold.room, heldStage);
+    if (state.playerRankingHold.phase === Engine.PHASES.FINAL) return true;
+    const expectedKey = [state.playerRankingHold.uuid || "", state.playerRankingHold.gameId || "", state.playerRankingHold.stageId || "", state.playerRankingHold.currentStageIndex || 0].join(":");
     return state.playerRankingHold.key !== expectedKey;
   }
 
@@ -1489,6 +1513,11 @@
     return stage ? state.room.tickets[stage.stageId] || {} : {};
   }
 
+  function getStageTicketPresence() {
+    const stage = Engine.getCurrentStage(state.room);
+    return stage ? (state.room.ticketPresence || {})[stage.stageId] || {} : {};
+  }
+
   function getCurrentStageResult() {
     const stage = Engine.getCurrentStage(state.room);
     return stage ? state.room.stageResults[stage.stageId] : null;
@@ -1578,6 +1607,8 @@
     room.scores = room.scores || {};
     room.completedGames = Array.isArray(room.completedGames) ? room.completedGames : Object.values(room.completedGames || {});
     room.operations = Array.isArray(room.operations) ? room.operations : Object.values(room.operations || {});
+    room.ticketPresence = room.ticketPresence || {};
+    room.archive = room.archive || null;
     room.phase = room.phase || Engine.PHASES.LOBBY;
     room.currentStageIndex = Number(room.currentStageIndex || 0);
     room.roomVersion = Number(room.roomVersion || 0);
@@ -1592,8 +1623,6 @@
 
   function saveRoom(kind, actor) {
     if (!isRemoteMode()) state.room.updatedAt = new Date().toISOString();
-    localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
-    broadcastLocalRoom();
     if (kind) logClient(kind, actor || "");
   }
 
@@ -1729,7 +1758,12 @@
     }
     try {
       state.firebaseStartedAt = new Date().toISOString();
-      await firebaseAdapter.init();
+      const init = await firebaseAdapter.init();
+      if (state.role === "player" && init && init.uid && state.playerUuid !== init.uid) {
+        state.playerUuid = init.uid;
+        localStorage.setItem(playerUuidStorageKey(), state.playerUuid);
+      }
+      render();
       state.firebaseUnsubscribe = await firebaseAdapter.listen((room) => {
         if (!room) return;
         if (isPlayerRankingHeld()) return;
@@ -1772,8 +1806,6 @@
       role: state.role,
     });
     state.room = room;
-    localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
-    broadcastLocalRoom();
     render();
   }
 
@@ -1863,7 +1895,6 @@
     );
     if (response.ok && response.room) {
       state.room = response.room;
-      localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
       render();
     }
   }

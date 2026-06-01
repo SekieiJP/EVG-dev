@@ -1,6 +1,6 @@
 # Firebaseセットアップ手順
 
-更新日: 2026-06-01
+更新日: 2026-06-02
 
 ## 現在のセットアップ結果
 
@@ -15,8 +15,9 @@ Firebase CLIで以下を確認・実行済み。
 - Web App display name: `Elevator Game Live`
 - Web App ID: `1:672500393326:web:babf3d5e5ec49a8f0e8d7f`
 - Database URL: `https://elevator-game-live-default-rtdb.asia-southeast1.firebasedatabase.app`
-- Security Rules: `firebase/database.rules.json` をdeploy済み
+- Security Rules: 初期版はdeploy済み。2026-06-02のallowlist版 `firebase/database.rules.json` はFirebase CLI再認証後にdeployが必要
 - Authentication: Anonymous providerを有効化済み
+- Host権限: `rooms/{roomId}/roles/hosts/{uid}: true` のallowlist方式へ変更
 
 このリポジトリには以下のFirebase設定を追加済み。
 
@@ -97,13 +98,33 @@ FIREBASE_DATABASE_URL: "https://...firebasedatabase.app",
 FIREBASE_ROOM_ID: "elevator-game-live",
 ```
 
-7. Rulesをdeployする。
+7. Host端末のFirebase uidをallowlistへ登録する。
+
+Host画面を開くと、未認証状態でも `internal-status` に `firebaseUid` が表示される。その値をRealtime Databaseに登録する。
+
+```json
+{
+  "rooms": {
+    "elevator-game-live": {
+      "roles": {
+        "hosts": {
+          "<host-firebase-uid>": true
+        }
+      }
+    }
+  }
+}
+```
+
+Firebase Consoleで該当パスへ追加するか、CLIで既存データを壊さない形で更新する。クライアントからHost roleを自己取得する経路は用意しない。
+
+8. Rulesをdeployする。
 
 ```sh
 firebase deploy --only database --project elevator-game-live
 ```
 
-8. Anonymous Authを有効化する。
+9. Anonymous Authを有効化する。
 
 ```sh
 firebase init auth --project elevator-game-live
@@ -136,6 +157,7 @@ http://localhost:8000/?view=screen&backend=firebase
 ## 注意点
 
 - Firebase Web API keyはブラウザ公開前提の識別子で、秘密情報ではない。ただしRealtime Database Rulesを必ずdeployし、匿名Auth必須にする。
+- Hostパスワードは誤操作防止のUIロックで、サーバ側のHost権限は `roles/hosts/{uid}` で判定する。uid未登録の端末では正しいパスワードでもHost操作できない。
 - Sparkの同時接続上限は100。50人本番では複数タブ、見学端末、予備端末の運用ルールを決める。
 - 初期Firebase版はSpark前提のためCloud Functionsを使わない。Hostブラウザ集計を信頼する設計が残る。
 - 本番前に `backend=firebase` でHost/Player/Screenの複数端末確認と、50人相当の負荷試験を行う。

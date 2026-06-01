@@ -7,9 +7,10 @@ Firebaseプロジェクト `elevator-game-live` の初期セットアップはFi
 ## 初期方針
 
 - Hostingは必須ではない。GitHub Pages配信を継続し、Realtime DatabaseだけFirebaseへ切り替えられる構成にする。
-- Firebase Authは匿名ログインを使う。既存のゲームUUIDは、復旧用のプレイヤーIDとして維持する。
+- Firebase Authは匿名ログインを使う。RTDB書き込み権限の主体は `auth.uid` とし、既存UUIDの復旧は将来の復旧コード設計へ分離する。
 - Realtime Databaseは `rooms/{roomId}` と `players/{uid}` に分割し、画面ごとに必要なノードだけを購読する。
-- SparkではCloud Functionsを前提にしない。Host操作と集計は初期版ではクライアント + Rules + transactionで扱う。
+- Host権限は `rooms/{roomId}/roles/hosts/{uid}: true` のallowlistで付与する。クライアント内パスワードはサーバ権限として扱わない。
+- SparkではCloud Functionsを前提にしない。Host操作と集計は初期版ではクライアント + Rules + `public` ノードtransactionで扱う。
 
 ## ファイル
 
