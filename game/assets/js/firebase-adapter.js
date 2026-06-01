@@ -135,7 +135,7 @@
       } else if (path === "/api/host/commit-result") {
         result = this.commitHostResult(room, payload.room, payload.baseVersion);
       } else if (path === "/api/host/import-config") {
-        result = { ok: true, room: room.players.length ? this.engine.createNextGameRoom(room, payload.config) : this.engine.createInitialRoom(payload.config) };
+        result = { ok: true, room: room.players.length || Object.keys(room.stageResults || {}).length ? this.engine.createNextGameRoom(room, payload.config) : this.engine.createInitialRoom(payload.config) };
       } else if (path === "/api/host/update-config") {
         const next = this.engine.deepClone(room);
         next.config = this.engine.normalizeConfig(payload.config);

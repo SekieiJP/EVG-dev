@@ -263,21 +263,6 @@ function createNextGameRoom_(room, config) {
   const next = createInitialRoom_(config);
   const archived = archiveCurrentGame_(room);
   next.completedGames = archived ? (room.completedGames || []).concat([archived]) : clone_(room.completedGames || []);
-  next.players = (room.players || []).map(function(player) {
-    return {
-      uuid: player.uuid,
-      name: player.pendingName || player.name,
-      joinedAt: player.joinedAt || new Date().toISOString(),
-      connected: player.connected !== false,
-      lastSeenAt: new Date().toISOString(),
-      skill: Number(player.skill || 0),
-      stageSkillHistory: clone_(player.stageSkillHistory || []),
-      pendingName: null,
-    };
-  });
-  next.players.forEach(function(player) {
-    next.scores[player.uuid] = 0;
-  });
   next.volume = room.volume !== undefined ? room.volume : next.volume;
   next.muted = Boolean(room.muted);
   addOperation_(next, 'host', 'next-game');
@@ -845,8 +830,9 @@ function recalculate_(room) {
 }
 
 function importConfig_(room, config, preservePlayers) {
-  if (preservePlayers && room.players && room.players.length) persistCurrentGameIfNeeded_(room);
-  return { ok: true, room: preservePlayers && room.players && room.players.length ? createNextGameRoom_(room, config) : createInitialRoom_(config) };
+  const hasCurrentGameProgress = (room.players && room.players.length) || (room.stageResults && Object.keys(room.stageResults).length);
+  if (preservePlayers && hasCurrentGameProgress) persistCurrentGameIfNeeded_(room);
+  return { ok: true, room: preservePlayers && hasCurrentGameProgress ? createNextGameRoom_(room, config) : createInitialRoom_(config) };
 }
 
 function listGameConfigs_(payload) {

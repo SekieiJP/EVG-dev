@@ -209,7 +209,7 @@ run("GAS prediction metric takes precedence over explicit correct answer", () =>
   assert.strictEqual(result.players.bob.predictionBreakdown[0].matched, false);
 });
 
-run("GAS import config can preserve players for the next game", () => {
+run("GAS import config archives results and starts next game with no displayed players", () => {
   const gas = loadGas();
   let room = gas.createInitialRoom_(config());
   room = addPlayer(gas, room, "Alice", "alice");
@@ -231,8 +231,8 @@ run("GAS import config can preserve players for the next game", () => {
   nextConfig.gameMeta.title = "next-gas-game";
   const imported = gas.importConfig_(room, nextConfig, true);
   assert.strictEqual(imported.ok, true, imported.message);
-  assert.deepStrictEqual(Array.from(imported.room.players, (player) => player.uuid), ["alice", "bob"]);
-  assert.strictEqual(imported.room.scores.alice, 0);
+  assert.strictEqual(imported.room.players.length, 0);
+  assert.deepStrictEqual(Object.assign({}, imported.room.scores), {});
   assert.strictEqual(imported.room.stageResults["stage-001"], undefined);
   assert.strictEqual(imported.room.completedGames.length, 1);
   assert.strictEqual(imported.room.completedGames[0].scores.alice, 32);

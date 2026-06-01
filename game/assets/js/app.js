@@ -224,7 +224,7 @@
     const form = event.target;
     if (form.id === "joinForm") {
       const name = form.elements.name.value;
-      const carryUuid = form.elements.restoreUuid.value.trim();
+      const carryUuid = form.elements.restoreUuid.value.trim() || state.playerUuid;
       const result = await runMutation(
         () => Engine.registerPlayer(state.room, name, carryUuid || undefined),
         "/api/player/join",
@@ -394,7 +394,8 @@
       const textarea = $("#configJson");
       try {
         const config = Engine.normalizeConfig(JSON.parse(textarea.value));
-        const nextRoom = state.room.players.length ? Engine.createNextGameRoom(state.room, config) : Engine.createInitialRoom(config);
+        const hasCurrentGameProgress = state.room.players.length || Object.keys(state.room.stageResults || {}).length;
+        const nextRoom = hasCurrentGameProgress ? Engine.createNextGameRoom(state.room, config) : Engine.createInitialRoom(config);
         if (isRemoteMode()) {
           const result = await runMutation(
             () => ({ ok: true, room: nextRoom }),
@@ -408,7 +409,7 @@
         }
         saveRoom("host.config.import", "host");
         clearPlayerRankingHold();
-        showToast(state.room.players.length ? "参加者を保持して次のゲームを読み込みました。" : "設定を読み込みました。");
+        showToast("次ゲームを開始しました。参加者はアクセス後に表示されます。");
         render();
       } catch (error) {
         showToast(`JSONを読み込めません: ${error.message}`);
@@ -424,7 +425,7 @@
       const completedStages = Object.keys(state.room.stageResults || {}).length;
       const message = interrupted
         ? `進行中のゲームを中断し、集計済み${completedStages}ステージ分を保存して次ゲームを開始します。未集計の投票や現在ステージの途中経過は破棄されます。`
-        : "接続中の参加者を保持して次ゲームを開始しますか？";
+        : "次ゲームを開始しますか？参加者は次ゲーム開始後にアクセスした端末だけ表示されます。";
       if (!confirm(message)) return;
       await startGameConfig(configId);
     }
@@ -835,7 +836,7 @@
         <div class="panel-heading">
           <div>
             <h2>次ゲーム</h2>
-            <p class="muted">${isFirebaseMode() ? "Firebase Spark版では、次ゲーム設定は当面JSON Importで開始します。" : "game_configsシートのACTIVEな設定を、参加者保持で開始します。途中中断時は集計済みステージだけ保存します。"}</p>
+            <p class="muted">${isFirebaseMode() ? "Firebase Spark版では、次ゲーム設定は当面JSON Importで開始します。" : "game_configsシートのACTIVEな設定を開始します。参加者表示は次ゲーム開始後にアクセスした端末だけです。"}</p>
           </div>
           <button type="button" data-action="load-game-configs" ${canUseSheetConfigs ? "" : "disabled"}>候補を更新</button>
         </div>

@@ -31,7 +31,7 @@ node tests/gas-logic.test.js
 - GAS版では、`current_game` を複数行チャンクで保存でき、同名ゲームIDに連番を付ける。
 - GAS版では、Player向け状態から他人のチケットと発表前の現在ステージ結果を隠す。
 - GAS版では、`save_data` に12指標、`stage_results` にStageSkill込みのステージ結果を保存する。
-- GAS版では、`game_configs` のACTIVE候補から参加者保持の次ゲームを開始できる。
+- GAS版では、`game_configs` のACTIVE候補から次ゲームを開始できる。前ゲーム参加者はセーブデータに保持し、次ゲーム画面にはアクセス後に復元されたプレイヤーだけを表示する。
 - GAS版では、進行途中の中断時に集計済みステージだけを履歴保存して次ゲームへ移行できる。
 - Host画面は、保存済み `hostToken` の期限切れ時にパスワード入力画面へ戻り、再認証できる。
 - Screen端末は、`assets/audio/` のBGM/SE mp3をフェーズ変更と結果発表タイムラインに応じて再生する。
@@ -85,7 +85,7 @@ Apps Script上で以下を確認する。
 8. ホスト進行APIで集計後、`current_game` のチャンクJSONと `players` シートが更新される。
 9. 最終結果後、`save_data`、`stage_results`、`stage_settings`、`game_history` が更新される。
 10. `game_configs` のACTIVE候補だけがHostに表示される。
-11. `configId` 指定で参加者保持の次ゲームが開始され、同じ候補を再利用してもgameId衝突時に `_2`, `_3` が付く。
+11. `configId` 指定で次ゲームが開始され、前ゲーム参加者は画面に自動表示されず、同じ候補を再利用してもgameId衝突時に `_2`, `_3` が付く。
 12. 進行途中で「中断して開始」を実行すると、集計済みステージだけが履歴保存され、サマリに `interrupted=true` が残る。
 13. Host画面を開いたまま `hostToken` 期限が切れると、パスワード入力画面に戻り再認証できる。
 14. UUID復元で、現在ゲーム外の過去UUIDから名前とSkill履歴を復元できる。

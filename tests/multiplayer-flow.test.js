@@ -160,7 +160,7 @@ run("pending name changes apply on the next stage without mutating current resul
   assert.strictEqual(room.players.find((player) => player.uuid === "alice").pendingName, null);
 });
 
-run("next game import preserves connected players and archives current results", () => {
+run("next game import archives current results and starts with no displayed players", () => {
   let room = Engine.createInitialRoom(config());
   room = addPlayer(room, "Alice", "alice");
   room = addPlayer(room, "Bob", "bob");
@@ -181,11 +181,9 @@ run("next game import preserves connected players and archives current results",
   nextConfig.gameMeta.title = "next-game";
   const nextRoom = Engine.createNextGameRoom(room, nextConfig);
   assert.strictEqual(nextRoom.config.gameMeta.title, "next-game");
-  assert.deepStrictEqual(nextRoom.players.map((player) => player.uuid), ["alice", "bob"]);
-  assert.strictEqual(nextRoom.scores.alice, 0);
-  assert.strictEqual(nextRoom.scores.bob, 0);
+  assert.deepStrictEqual(nextRoom.players, []);
+  assert.deepStrictEqual(nextRoom.scores, {});
   assert.strictEqual(nextRoom.stageResults["stage-001"], undefined);
   assert.strictEqual(nextRoom.completedGames.length, 1);
   assert.strictEqual(nextRoom.completedGames[0].scores.alice, 32);
-  assert.strictEqual(nextRoom.players.find((player) => player.uuid === "alice").skill, room.players.find((player) => player.uuid === "alice").skill);
 });

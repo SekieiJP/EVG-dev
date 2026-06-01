@@ -125,19 +125,6 @@
     const next = createInitialRoom(config);
     const archived = archiveCurrentGame(room);
     next.completedGames = archived ? (room.completedGames || []).concat(archived) : deepClone(room.completedGames || []);
-    next.players = (room.players || []).map((player) => ({
-      uuid: player.uuid,
-      name: player.pendingName || player.name,
-      joinedAt: player.joinedAt || nowIso(),
-      connected: player.connected !== false,
-      lastSeenAt: nowIso(),
-      skill: Number(player.skill || 0),
-      stageSkillHistory: deepClone(player.stageSkillHistory || []),
-      pendingName: null,
-    }));
-    next.players.forEach((player) => {
-      next.scores[player.uuid] = 0;
-    });
     next.volume = room.volume !== undefined ? room.volume : next.volume;
     next.muted = Boolean(room.muted);
     next.operations.unshift({ at: nowIso(), actor: "host", action: "next-game" });

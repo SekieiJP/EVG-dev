@@ -28,7 +28,7 @@
 - 認証済みHost画面は、締切カウントダウンと移動中演出の終了後に自動で集計commitを開始する。
 - Player入口URLではHost/Screenタブを無効化し、Player入力中は状態ポーリングによる再描画を抑制する。
 - GASロジックテストで、認証、チャンク保存、gameId連番、公開範囲、12指標保存を確認する。
-- `/api/host/game-configs` と `/api/host/start-game-config` で、Spreadsheet上の候補から参加者保持の次ゲームを開始できる。
+- `/api/host/game-configs` と `/api/host/start-game-config` で、Spreadsheet上の候補から次ゲームを開始できる。前ゲーム参加者は戦歴・セーブデータに保持し、次ゲームの画面にはアクセス後に復元されたプレイヤーだけを表示する。
 - 進行途中でも集計済みステージがある場合は、中断ゲームとして履歴保存して次ゲームへ移行できる。
 
 ## デプロイ前チェック
@@ -62,7 +62,7 @@
 - Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
 - 終了後に `save_data`, `stage_results`, `players`, `game_history`, `stage_settings` が更新されること。
 - Host最終結果画面で `game_configs` 候補を読み込み、ACTIVEな候補だけが表示されること。
-- Hostが `configId` を選んで次ゲームを開始すると、参加者・UUID・現在Skillが保持され、スコア・チケット・ステージ結果がリセットされること。
+- Hostが `configId` を選んで次ゲームを開始すると、前ゲーム参加者・UUID・現在SkillはSpreadsheetに保持されるが、次ゲームの画面上の参加者一覧は空で始まり、アクセス後に復元されたプレイヤーだけが表示されること。
 - 進行途中で「中断して開始」を実行した場合、集計済みステージだけが `save_data`、`stage_results`、`game_history` に保存され、未集計ステージは保存されないこと。
 - 同じ `game_configs` 行を再利用しても、gameId衝突時に `_2`, `_3` が付くこと。
 - Player最終結果画面では自動遷移せず、「次へ」押下時だけ次ゲームへ追従すること。

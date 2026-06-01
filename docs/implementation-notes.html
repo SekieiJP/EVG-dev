@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-06-01 / 対象: <code>docs/elevator-game-requirements.md</code> v1.18</p>
+      <p class="meta">更新日: 2026-06-01 / 対象: <code>docs/elevator-game-requirements.md</code> v1.19</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -123,7 +123,7 @@
           <li>2026-05-25追記: History画面のランキングは全員分を表示するが、個人詳細は本人UUIDの端末だけ表示できるようにした。他人の個人統計ボタンは無効化する。</li>
           <li>2026-05-25追記: Playerの中間ランキング保持を<code>localStorage</code>へ永続化し、リロード後も同じランキング画面へ戻れるようにした。</li>
           <li>2026-05-25追記: 「次へ」を押さないPlayerは自動追従も自動棄権もせず、本人が押すまでランキング画面に置き去りにする仕様に固定した。</li>
-          <li>2026-05-25追記: GASの<code>game_configs</code>シートを追加し、HostがSpreadsheetに事前登録したACTIVEなゲーム設定を選んで、参加者を保持したまま次ゲームを開始できるようにした。</li>
+          <li>2026-05-25追記: GASの<code>game_configs</code>シートを追加し、HostがSpreadsheetに事前登録したACTIVEなゲーム設定を選んで次ゲームを開始できるようにした。</li>
           <li>2026-05-25追記: Playerの最終結果画面にも<code>次へ</code>を残し、押下時だけ最新状態を取得して次ゲーム開始済みなら新しい<code>gameId</code>へ追従するようにした。</li>
           <li>2026-05-25追記: <code>tool/stage-creator.html</code> に、複数ステージをGUIで作成し、Host importや<code>game_configs.configJson</code>へ貼り付け可能な設定JSONを生成する単一HTMLツールを追加した。</li>
           <li>2026-05-25追記: Hostが進行途中のゲームを中断し、集計済みステージ結果だけを保存して<code>game_configs</code>の次ゲームへ移行できるようにした。</li>
@@ -142,6 +142,7 @@
           <li>2026-06-01追記: Firebaseの<code>operations</code>は、既存idがある操作はそのidをキーにし、idがない操作だけ<code>op-0000</code>形式を付与するようにした。RTDB上で同一idの操作が別キーに重複することを避けるため。</li>
           <li>2026-06-01追記: GitHub Pages上の既定バックエンドをFirebase RTDBへ切り替えた。旧GAS確認は<code>?backend=gas</code>、完全ローカル確認は<code>?backend=local</code>で明示的に選ぶ。</li>
           <li>2026-06-01追記: Firebase版ではGAS向けの状態ポーリングを止め、RTDBの<code>onValue</code>通知を画面反映の主経路にした。Playerの締切カウントダウン開始や結果反映を10秒/30秒ポーリング待ちにしないため。</li>
+          <li>2026-06-01追記: 次ゲーム開始時に前ゲーム参加者を<code>room.players</code>へ自動コピーしない仕様へ変更した。<code>players</code>/<code>save_data</code>には過去ユーザーを保持し、Host/Screen等の現在ゲーム表示にはゲーム開始後にアクセスまたは復元したプレイヤーだけを出す。</li>
         </ul>
       </section>
 
@@ -168,7 +169,7 @@
           <li><code>topPlayer</code>予想の正解は、予想イベント得点を加える前のステージ得点1位にした。予想得点によって正解が変わる自己参照を避けるため。</li>
           <li>予想イベントで<code>metric</code>と<code>correctAnswer</code>が両方指定された場合は、ゲーム結果から得られる<code>metric</code>を正解にする。<code>correctAnswer</code>は固定正解や暫定設定用のフォールバックに限定した。</li>
           <li>複数プレイヤーブラウザハーネスでは、<code>testSlot</code>クエリをUUID保存キーのサフィックスとして使う。同一ブラウザ内でもプレイヤーごとのUUIDを分離して、実端末を複数用意しなくても参加フローを確認できるようにした。</li>
-          <li>次ゲームへの移行は、設定JSON importを「参加者保持の新ゲーム開始」として扱うことにした。参加者を破棄する用途は既存のResetに分ける。</li>
+          <li>次ゲームへの移行は、前ゲームの結果とプレイヤー情報を戦歴・セーブデータへ退避したうえで、現在ゲームの表示参加者は空から始めることにした。各プレイヤーはアクセスまたは復元操作後に現在ゲームへ表示される。</li>
           <li>Playerの中間ランキング保持は<code>localStorage</code>内のスナップショットで実装した。ホストが次ステージへ進めても、本人が<code>次へ</code>を押すまでPlayerタブはランキングのまま残る。</li>
           <li>事前登録する次ゲーム候補は<code>stage_settings</code>ではなく<code>game_configs</code>に分離した。<code>stage_settings</code>は実際に走ったゲームのステージ設定履歴、<code>game_configs</code>は今後開始するテンプレートという役割にする。</li>
           <li><code>game_configs</code>の行は使用後も<code>ACTIVE</code>のまま残す。テンプレートを繰り返し使う運用を優先し、不要な候補はSpreadsheet上で<code>ARCHIVED</code>へ手動変更する。</li>
