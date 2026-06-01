@@ -1,5 +1,7 @@
 # Architecture
 
+> Note: この文書は、GitHub Pages + GAS + Spreadsheet中心だった既存実装の構成メモです。Firebase RTDB + Rules + GAS archive only への抜本的リファクタリングでは、[Firebase RTDB 目標アーキテクチャ](./firebase-rtdb-target-architecture.md)を優先してください。
+
 ## 構成
 
 ```text

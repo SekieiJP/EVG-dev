@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-06-01 / 対象: <code>docs/elevator-game-requirements.md</code> v1.19</p>
+      <p class="meta">更新日: 2026-06-02 / 対象: <code>docs/elevator-game-requirements.md</code> v1.19</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -153,6 +153,7 @@
           <li>2026-06-01追記: Firebase実RTDBの全データを削除した。削除後は<code>null</code>を確認済み。初期roomはHost認証時に作成し、未認証Host/Player/Screenの初回アクセスではDBを作成しない。</li>
           <li>2026-06-01追記: Host画面に<code>internal-status</code>セクションを追加し、phase、roomVersion、stageId、購読パス、直近API、直近Host操作、Firebase uidなどを確認できるようにした。</li>
           <li>2026-06-01追記: クライアント実行モードをFirebaseに固定し、<code>backend=gas</code>と<code>backend=local</code>によるフォールバックを廃止した。Firebase設定不足時の自動mock化もやめ、ローカル検証は明示的な<code>backend=firebase-mock</code>だけを残す。</li>
+          <li>2026-06-02追記: 抜本的リファクタリングの設計基準として、<code>docs/firebase-rtdb-target-architecture.md</code>を追加した。Firebase RTDBを進行中ゲームのSingle Source of Truthにし、Rulesで権限と書き込み境界を絞り、GASはSpreadsheetアーカイブだけに限定する構成を整理した。</li>
         </ul>
       </section>
 
@@ -198,6 +199,7 @@
           <li>ステージ制作支援ツールは、既存アプリと同じ<code>schemaVersion</code>、<code>gameMeta</code>、<code>stages[].params</code>、<code>stages[].events</code>形式を出力する単一HTMLにした。GitHub Pagesやローカルファイルでそのまま開けることを優先した。</li>
           <li>JSON書式変更に備え、制作ツールにはトップレベル、ステージ、イベントごとの「追加JSON」欄を置いた。GUIがまだ知らないキーはここで保持・出力できるようにする。</li>
           <li>予想イベントの範囲選択肢は<code>ranges</code>、<code>options</code>、<code>choices</code>から出力キーを選べるようにした。既存エンジンが3種類を受け付けるため、Spreadsheet運用側の表記に合わせられるようにする。</li>
+          <li>次段階の目標構成では、既存UIや<code>engine.js</code>互換よりもRTDBの小ノード購読、Host role allowlist、<code>public</code>単位のフェーズtransactionを優先することにした。既存のGAS互換adapterは移行足場として扱い、最終形では画面別command/query APIへ置き換える。</li>
         </ul>
       </section>
 
@@ -244,6 +246,7 @@
           <li>Firebase版ではSpreadsheetの<code>game_configs</code>候補読み込みを行わない。次ゲームは当面Host画面の設定JSON Importで開始する。</li>
           <li>Firebase Security Rulesは、Host uidだけがroom全体を書けるようにし、Playerは自分の参加者ノードとチケットノードだけを書けるようにした。ただし、Cloud Functionsなしではホストパスワード検証やHost再取得の正当性、複雑なゲームルール検証をRulesだけで表現しきれない。</li>
           <li>Firebase Spark前提では、サーバ側Cloud Functionsによる集計検証を意図的に先送りする。Sparkで開始するための制約だが、Hostブラウザを信頼する現行GAS版と同程度の信頼モデルが残る。</li>
+          <li>目標アーキテクチャ文書では、現行コードに残るroot room materialization、root room transaction、GAS/local進行分岐を廃止対象として明記した。現時点の実装とは一致しないが、次のリファクタリングで解消する前提の意図的な設計差分である。</li>
         </ul>
       </section>
 
@@ -277,6 +280,8 @@
           <li>Firebase Spark構成ではCloud Functionsでパスワード検証できないため、正しいパスワードを知っているHostが匿名uid変更後に<code>hostUid</code>を再取得できるRulesを採用した。運用上の復旧性を優先する一方、強い権限検証が必要ならBlaze + Cloud Functionsへ移す必要がある。</li>
           <li>Hostの自動集計は廃止し、締切後の結果発表遷移もHostの<code>次へ</code>操作に寄せた。運営者の意図しない自動進行を避けられる一方、Hostが押し忘れると結果発表に進まない。</li>
           <li>GitHub Pages配信を維持する案とFirebase Hostingへ移す案を比較し、初期移行ではGitHub Pages維持を選んだ。Hosting移行は必要になった時に行えるが、今回の主要課題はバックエンド状態同期のため。</li>
+          <li>Host権限はクライアント内パスワードではなく<code>rooms/{roomId}/roles/hosts/{uid}</code>のallowlistを正にする方針へ寄せた。Spark + Rulesだけでは秘密値検証ができないためで、招待コードやCustom Claimsが必要ならBlaze + Cloud Functionsへ移す。</li>
+          <li>GASをアーカイブ専用に限定することで、進行中ゲームの遅延やロック競合をRTDB側へ寄せられる。一方、Spreadsheet保存の失敗はゲーム進行と切り離されるため、Host画面にアーカイブ未完了状態と再送操作を明示する必要がある。</li>
         </ul>
       </section>
 
@@ -293,6 +298,8 @@
           <li>Host権限を匿名Auth uidだけで運用するか、運営用パスワード/招待コードを併用するかを決める必要がある。</li>
           <li>Firebase版でCloud FunctionsなしのHostブラウザ集計をどこまで許容するか、Blaze移行の判断基準を本番前に確認したい。</li>
           <li>Firebase実RTDBの50人相当の負荷試験はまだ未実施。現在のroom単位transactionで十分か、子ノードtransactionへ分ける必要があるかを確認する必要がある。</li>
+          <li>本番運用で<code>roomId</code>をイベントごとにどう発行し、Host uid allowlistを誰がどの手順で登録するかを確定する必要がある。</li>
+          <li>GAS archive APIのpayload schemaとSpreadsheet upsertキーは、<code>archiveId</code>/<code>gameId</code>を正にする方針でよいか確認したい。</li>
         </ul>
       </section>
     </main>
