@@ -15,7 +15,7 @@ Firebase CLIで以下を確認・実行済み。
 - Web App display name: `Elevator Game Live`
 - Web App ID: `1:672500393326:web:babf3d5e5ec49a8f0e8d7f`
 - Database URL: `https://elevator-game-live-default-rtdb.asia-southeast1.firebasedatabase.app`
-- Security Rules: 初期版はdeploy済み。2026-06-02のallowlist版 `firebase/database.rules.json` はFirebase CLI再認証後にdeployが必要
+- Security Rules: 2026-06-02のallowlist版 `firebase/database.rules.json` をdeploy済み
 - Authentication: Anonymous providerを有効化済み
 - Host権限: `rooms/{roomId}/roles/hosts/{uid}: true` のallowlist方式へ変更
 

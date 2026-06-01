@@ -308,7 +308,7 @@
           <li>本番運用で<code>roomId</code>をイベントごとにどう発行し、Host uid allowlistを誰がどの手順で登録するかを確定する必要がある。</li>
           <li>GAS archive APIのpayload schemaとSpreadsheet upsertキーは、<code>archiveId</code>/<code>gameId</code>を正にする方針でよいか確認したい。</li>
           <li>本番Host端末のFirebase uidをallowlistへ登録する運用手順を確定し、GitHub Pagesで使うroomIdごとに登録漏れがないか確認する必要がある。</li>
-          <li>2026-06-02時点でFirebase CLIの認証期限切れにより、allowlist版Rulesのdeployは未完了。<code>firebase login --reauth</code>後に<code>firebase deploy --only database --project elevator-game-live</code>を実行する必要がある。</li>
+          <li>2026-06-02追記: 再認証後、allowlist版Firebase Rulesを<code>elevator-game-live-default-rtdb</code>へdeployした。deploy時にRules構文チェックとrelease成功を確認済み。</li>
         </ul>
       </section>
     </main>
