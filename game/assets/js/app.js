@@ -244,16 +244,21 @@
     if (form.id === "hostAuthForm") {
       const password = form.elements.password.value;
       state.hostPasswordDraft = password;
-      if (isRemoteMode()) {
-        const result = await withBusy("認証中…", () => apiPost("/api/host/auth", { password }));
-        if (!result.ok) return showToast(result.error || "パスワードが違います。");
-        state.hostToken = result.hostToken || "";
-        state.hostTokenExpiresAt = result.expiresAt || "";
-        localStorage.setItem(STORAGE_KEYS.hostToken, state.hostToken);
-        localStorage.setItem(STORAGE_KEYS.hostTokenExpiresAt, state.hostTokenExpiresAt);
-      } else {
-        const configured = getHostPassword(state.room);
-        if (password !== configured) return showToast("パスワードが違います。");
+      try {
+        if (isRemoteMode()) {
+          const result = await withBusy("認証中…", () => apiPost("/api/host/auth", { password }));
+          if (!result.ok) return showToast(result.error || "パスワードが違います。");
+          state.hostToken = result.hostToken || "";
+          state.hostTokenExpiresAt = result.expiresAt || "";
+          localStorage.setItem(STORAGE_KEYS.hostToken, state.hostToken);
+          localStorage.setItem(STORAGE_KEYS.hostTokenExpiresAt, state.hostTokenExpiresAt);
+        } else {
+          const configured = getHostPassword(state.room);
+          if (password !== configured) return showToast("パスワードが違います。");
+        }
+      } catch (error) {
+        logClient("host.auth.error", error.message);
+        return showToast(authErrorMessage(error));
       }
       state.hostAuthed = true;
       state.hostPasswordDraft = "";
@@ -1955,6 +1960,14 @@
       clearHostAuth(response.message || "ホスト認証の有効期限が切れました。再認証してください。");
     }
     return response;
+  }
+
+  function authErrorMessage(error) {
+    const message = String(error && error.message || "");
+    if (/permission|denied|PERMISSION_DENIED/i.test(message)) {
+      return "FirebaseでHost権限を取得できませんでした。Rulesの更新後に再試行してください。";
+    }
+    return "認証に失敗しました。通信状態を確認してください。";
   }
 
   function checkHostTokenExpiry() {
