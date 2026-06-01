@@ -57,8 +57,12 @@
       this.auth = { uid: user.uid, idToken: await user.getIdToken(), mock: false };
       localStorage.setItem(AUTH_KEY, JSON.stringify(this.auth));
       this.firebaseDb = sdk.getDatabase(this.firebaseApp);
-      const room = await this.readRestRoom();
+      const roomRef = sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`);
+      const snapshot = await sdk.get(roomRef);
+      const nodes = snapshot.exists() ? snapshot.val() : null;
+      const room = roomFromFirebaseNodes(nodes, this.engine);
       if (!room) await this.writeRestRoom(this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG));
+      else if (isLegacyRoomNodes(nodes)) await this.writeRestRoom(room);
       return { ok: true, uid: this.auth.uid };
     }
 
@@ -80,20 +84,26 @@
     listenRest(callback) {
       const nodes = {};
       const unsubscribers = [];
+      const initializedBasePaths = new Set();
       let stageUnsubscribers = [];
       let currentStageId = "";
+      const emit = () => {
+        if (!initializedBasePaths.has("public")) return;
+        callback(roomFromFirebaseNodes(nodes, this.engine));
+      };
       const attach = (path) => {
         const unsubscribe = this.sdk.onValue(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), (snapshot) => {
           setNestedNode(nodes, path, snapshot.val());
+          initializedBasePaths.add(path);
           updateStageSubscriptions();
-          callback(roomFromFirebaseNodes(nodes, this.engine));
+          emit();
         });
         unsubscribers.push(unsubscribe);
       };
       const attachStage = (path) => {
         const unsubscribe = this.sdk.onValue(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), (snapshot) => {
           setNestedNode(nodes, path, snapshot.val());
-          callback(roomFromFirebaseNodes(nodes, this.engine));
+          emit();
         });
         stageUnsubscribers.push(unsubscribe);
       };
@@ -398,6 +408,9 @@
   function roomFromFirebaseNodes(nodes, engine) {
     if (!nodes) return null;
     if (nodes.snapshot && !nodes.public && !nodes.players) return normalizeRoomShape(nodes.snapshot, engine);
+    if (isLegacyRoomNodes(nodes)) {
+      return normalizeRoomShape(nodes, engine);
+    }
     const fallback = engine.createInitialRoom(nodes.config || engine.DEFAULT_CONFIG);
     const status = nodes.public || {};
     const players = Object.keys(nodes.players || {}).map((uuid) => {
@@ -454,6 +467,10 @@
       "/api/ticket/submit",
       "/api/ticket/abstain",
     ].includes(path);
+  }
+
+  function isLegacyRoomNodes(nodes) {
+    return Boolean(nodes && !nodes.public && (nodes.phase || Array.isArray(nodes.players) || nodes.stageResults || nodes.currentStageIndex !== undefined));
   }
 
   function firebaseBaseSubscriptionPaths(role, uid) {

@@ -56,6 +56,18 @@ run("firebase operation nodes use stable unique keys", () => {
   assert.strictEqual(nodes.operations["op-custom"].id, "op-custom");
 });
 
+run("firebase reads legacy root-shaped room nodes without resetting phase", () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.phase = Engine.PHASES.REVEAL;
+  room.currentStageIndex = 1;
+  room.roomVersion = 12;
+  const restored = EVGFirebaseAdapter.roomFromFirebaseNodes(room, Engine);
+
+  assert.strictEqual(restored.phase, Engine.PHASES.REVEAL);
+  assert.strictEqual(restored.currentStageIndex, 1);
+  assert.strictEqual(restored.roomVersion, 12);
+});
+
 run("firebase subscriptions are scoped by screen role", () => {
   const hostPaths = EVGFirebaseAdapter.firebaseBaseSubscriptionPaths("host", "host-uid");
   const playerPaths = EVGFirebaseAdapter.firebaseBaseSubscriptionPaths("player", "player-uid");

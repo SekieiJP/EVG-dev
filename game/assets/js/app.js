@@ -83,8 +83,10 @@
     screenLocalSync: localStorage.getItem(STORAGE_KEYS.screenLocalSync) === "true" || QUERY.get("screenSync") === "local",
     logs: loadJson(STORAGE_KEYS.logs, []),
     toast: "",
+    toastId: 0,
     busyMessage: "",
     busyCount: 0,
+    hostPasswordDraft: QUERY.get("password") || "",
     selectedHistoryUuid: "",
     personalHistoryCache: loadJson(STORAGE_KEYS.personalHistoryCache, {}),
     historyLoadingUuid: "",
@@ -241,6 +243,7 @@
     }
     if (form.id === "hostAuthForm") {
       const password = form.elements.password.value;
+      state.hostPasswordDraft = password;
       if (isRemoteMode()) {
         const result = await withBusy("認証中…", () => apiPost("/api/host/auth", { password }));
         if (!result.ok) return showToast(result.error || "パスワードが違います。");
@@ -253,6 +256,7 @@
         if (password !== configured) return showToast("パスワードが違います。");
       }
       state.hostAuthed = true;
+      state.hostPasswordDraft = "";
       localStorage.setItem(STORAGE_KEYS.hostAuthed, "true");
       if (isRemoteMode()) await refreshRemoteState({ force: true, full: true, showLoading: true });
       render();
@@ -449,6 +453,9 @@
   }
 
   function handleInput(event) {
+    if (event.target.name === "password" && event.target.closest("#hostAuthForm")) {
+      state.hostPasswordDraft = event.target.value;
+    }
     if (event.target.id === "volumeRange") {
       state.room.volume = Number(event.target.value);
       saveRoom("screen.volume", "host");
@@ -690,7 +697,7 @@
         <section class="shell narrow">
           <header class="view-header"><div><p class="eyebrow">Host</p><h1>認証</h1></div></header>
           <form id="hostAuthForm" class="panel form-grid">
-            <label>パスワード<input name="password" type="password" value="${escapeAttr(QUERY.get("password") || "")}" required></label>
+            <label>パスワード<input name="password" type="password" value="${escapeAttr(state.hostPasswordDraft)}" required></label>
             <button class="primary" type="submit">認証</button>
           </form>
         </section>
@@ -849,7 +856,7 @@
     return `
       <section class="screen-shell ${reviewMode ? "is-review" : ""}">
         ${!state.screenReady ? `<button class="ready-button" data-action="screen-ready">準備完了</button>` : ""}
-        ${isRemoteMode() && state.role === "screen" ? `<button class="screen-sync-button" data-action="screen-local-sync">${state.screenLocalSync ? "同一端末同期中" : "同一端末同期"}</button>` : ""}
+        ${isGasMode() && state.role === "screen" ? `<button class="screen-sync-button" data-action="screen-local-sync">${state.screenLocalSync ? "同一端末同期中" : "同一端末同期"}</button>` : ""}
         <div class="screen-top">
           <p>${escapeHtml(state.room.config.gameMeta.title)}</p>
           <span>${phaseLabel(state.room.phase)}</span>
@@ -1513,6 +1520,7 @@
   }
 
   function applyLocalScreenRoom(room) {
+    if (isFirebaseMode()) return;
     if (!isRemoteMode() || state.role !== "screen" || !state.screenLocalSync || !room) return;
     if (
       state.room &&
@@ -1652,6 +1660,11 @@
       state.firebaseUnsubscribe = await firebaseAdapter.listen((room) => {
         if (!room) return;
         if (isPlayerRankingHeld()) return;
+        if (
+          state.room &&
+          room.gameId === state.room.gameId &&
+          Number(room.roomVersion || 0) < Number(state.room.roomVersion || 0)
+        ) return;
         state.room = room;
         localStorage.setItem(STORAGE_KEYS.room, JSON.stringify(state.room));
         broadcastLocalRoom();
@@ -1992,9 +2005,12 @@
   }
 
   function showToast(message) {
+    const toastId = state.toastId + 1;
+    state.toastId = toastId;
     state.toast = message;
     render();
     setTimeout(() => {
+      if (state.toastId !== toastId) return;
       state.toast = "";
       render();
     }, 2200);
