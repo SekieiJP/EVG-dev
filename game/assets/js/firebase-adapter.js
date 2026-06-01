@@ -247,6 +247,11 @@
     }
 
     async claimHost() {
+      if (!this.mock) {
+        await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta/hostUid`), this.auth.uid);
+        await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta/updatedAt`), nowIso());
+        return;
+      }
       const room = await this.readRoom();
       room.hostUid = this.auth.uid;
       room.updatedAt = nowIso();

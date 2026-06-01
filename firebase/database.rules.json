@@ -5,11 +5,12 @@
     "rooms": {
       "$roomId": {
         ".read": "auth != null",
-        ".write": "auth != null && newData.child('meta').child('hostUid').val() === auth.uid",
+        ".write": "auth != null && ((!data.exists() && newData.child('meta').child('hostUid').val() === auth.uid) || data.child('meta').child('hostUid').val() === auth.uid)",
         "meta": {
           ".read": "auth != null",
-          ".write": "auth != null && newData.child('hostUid').val() === auth.uid",
+          ".write": "auth != null && (!data.exists() || data.child('hostUid').val() === auth.uid)",
           "hostUid": {
+            ".write": "auth != null && newData.val() === auth.uid",
             ".validate": "newData.isString() && newData.val() === auth.uid"
           },
           "$other": {

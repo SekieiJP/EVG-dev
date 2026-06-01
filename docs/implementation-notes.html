@@ -148,6 +148,7 @@
           <li>2026-06-01追記: Host認証フォームのパスワード入力はDOM値ではなくクライアント状態に保持し、busy表示や通知の消去で全体再描画が走っても入力途中の値を破棄しないようにした。</li>
           <li>2026-06-01追記: Firebase購読は<code>public</code>ノードの初回取得前にroomを復元しない。部分ノードだけで初期roomへフォールバックすると、Screenだけが参加者受付中に戻るため。</li>
           <li>2026-06-01追記: Firebase RTDB Rulesを、正しいパスワードを入力したHost端末が現在の匿名Auth uidで<code>meta.hostUid</code>を再取得できる形に変更した。匿名uidが変わった後もHost認証できるようにするため。</li>
+          <li>2026-06-01追記: Host再取得用Rulesはroom全体の書き換えではなく<code>meta/hostUid</code>だけを直接更新する形へ絞り、<code>elevator-game-live</code>へdeployした。</li>
         </ul>
       </section>
 
