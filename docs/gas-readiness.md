@@ -54,12 +54,12 @@
 - 参加登録、Host認証、投票、戦績取得で読み込み表示が出ること。
 - 同一ステージ内でHistoryを再表示しても、本人戦績APIが再取得されずキャッシュ表示になること。
 - Host/Screen表示で `/api/player/restore` が発生しないこと。
-- 認証済みHost画面で自動集計commitが一度だけ実行されること。
+- 認証済みHost画面で、締切カウントダウンと移動中演出終了後に単一の「次へ」ボタンで集計commitを実行できること。
 - Player入口URLからHost/Screenに遷移できないこと。
 - Player入力中にポーリング再描画で入力フォーカスや値が失われないこと。
 - Screen端末で `assets/audio/` のBGM/SE mp3が配置されている場合に、フェーズ変更と結果発表タイムラインに合わせて再生されること。
 - Apps Script実行ログに各API呼び出しのJSONログが残ること。
-- Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、Skip、ランキング、最終結果まで通すこと。
+- Host/Screen/Playerの3端末相当で、参加、受付、締切、移動中、集計、ランキング、最終結果まで通すこと。
 - 終了後に `save_data`, `stage_results`, `players`, `game_history`, `stage_settings` が更新されること。
 - Host最終結果画面で `game_configs` 候補を読み込み、ACTIVEな候補だけが表示されること。
 - Hostが `configId` を選んで次ゲームを開始すると、前ゲーム参加者・UUID・現在SkillはSpreadsheetに保持されるが、次ゲームの画面上の参加者一覧は空で始まり、アクセス後に復元されたプレイヤーだけが表示されること。

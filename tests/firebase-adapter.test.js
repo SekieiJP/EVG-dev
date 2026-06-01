@@ -55,3 +55,16 @@ run("firebase operation nodes use stable unique keys", () => {
   assert.strictEqual(nodes.operations["op-0000"].id, "op-0000");
   assert.strictEqual(nodes.operations["op-custom"].id, "op-custom");
 });
+
+run("firebase subscriptions are scoped by screen role", () => {
+  const hostPaths = EVGFirebaseAdapter.firebaseBaseSubscriptionPaths("host", "host-uid");
+  const playerPaths = EVGFirebaseAdapter.firebaseBaseSubscriptionPaths("player", "player-uid");
+  const playerStagePaths = EVGFirebaseAdapter.firebaseStageSubscriptionPaths("player", "player-uid", "stage-001");
+
+  assert.strictEqual(hostPaths.includes(""), false);
+  assert.strictEqual(playerPaths.includes(""), false);
+  assert.strictEqual(hostPaths.includes("tickets"), true);
+  assert.strictEqual(playerPaths.includes("tickets"), false);
+  assert.strictEqual(playerPaths.includes("scores/player-uid"), true);
+  assert.deepStrictEqual(playerStagePaths, ["tickets/stage-001/player-uid", "results/stage-001"]);
+});

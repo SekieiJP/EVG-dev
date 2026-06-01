@@ -73,11 +73,44 @@
         if (this.channel) this.channel.addEventListener("message", handler);
         return () => this.channel && this.channel.removeEventListener("message", handler);
       }
-      const roomRef = this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`);
-      this.unsubscribe = this.sdk.onValue(roomRef, (snapshot) => {
-        callback(roomFromFirebaseNodes(snapshot.val(), this.engine));
-      });
+      this.unsubscribe = this.listenRest(callback);
       return this.unsubscribe;
+    }
+
+    listenRest(callback) {
+      const nodes = {};
+      const unsubscribers = [];
+      let stageUnsubscribers = [];
+      let currentStageId = "";
+      const attach = (path) => {
+        const unsubscribe = this.sdk.onValue(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), (snapshot) => {
+          setNestedNode(nodes, path, snapshot.val());
+          updateStageSubscriptions();
+          callback(roomFromFirebaseNodes(nodes, this.engine));
+        });
+        unsubscribers.push(unsubscribe);
+      };
+      const attachStage = (path) => {
+        const unsubscribe = this.sdk.onValue(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), (snapshot) => {
+          setNestedNode(nodes, path, snapshot.val());
+          callback(roomFromFirebaseNodes(nodes, this.engine));
+        });
+        stageUnsubscribers.push(unsubscribe);
+      };
+      const updateStageSubscriptions = () => {
+        const stageId = nodes.public && nodes.public.currentStageId ? nodes.public.currentStageId : "";
+        if (stageId === currentStageId) return;
+        stageUnsubscribers.forEach((unsubscribe) => unsubscribe());
+        stageUnsubscribers = [];
+        currentStageId = stageId;
+        if (!stageId) return;
+        firebaseStageSubscriptionPaths(this.getRole(), this.auth.uid, stageId).forEach(attachStage);
+      };
+      firebaseBaseSubscriptionPaths(this.getRole(), this.auth.uid).forEach(attach);
+      return () => {
+        stageUnsubscribers.forEach((unsubscribe) => unsubscribe());
+        unsubscribers.forEach((unsubscribe) => unsubscribe());
+      };
     }
 
     async get(path, payload) {
@@ -147,7 +180,9 @@
       } else if (path.indexOf("/api/host/") === 0) {
         const hostAuth = this.verifyHost(payload.hostToken);
         if (!hostAuth.ok) return hostAuth;
-        result = this.engine.advancePhase(room, hostActionFromPath(path), payload.hostName || "host");
+        const hostAction = hostActionFromPath(path);
+        if (!hostAction) return { ok: false, code: "not_found", error: `Unknown endpoint: ${path}` };
+        result = this.engine.advancePhase(room, hostAction, payload.hostName || "host");
       } else {
         result = { ok: false, code: "not_found", error: `Unknown endpoint: ${path}` };
       }
@@ -421,6 +456,40 @@
     ].includes(path);
   }
 
+  function firebaseBaseSubscriptionPaths(role, uid) {
+    const common = ["meta", "public", "config", "roomSettings"];
+    if (role === "host") {
+      return common.concat(["players", "playerStats", "tickets", "ticketPresence", "results", "scores", "completedGames", "operations"]);
+    }
+    if (role === "screen") {
+      return common.concat(["players", "playerStats", "tickets", "ticketPresence", "results", "scores"]);
+    }
+    if (role === "history") {
+      return common.concat(["players", "playerStats", "results", "scores", "completedGames"]);
+    }
+    return common.concat(["players", `playerStats/${uid}`, `scores/${uid}`, "completedGames"]);
+  }
+
+  function firebaseStageSubscriptionPaths(role, uid, stageId) {
+    if (role === "player") {
+      return [`tickets/${stageId}/${uid}`, `results/${stageId}`];
+    }
+    return [];
+  }
+
+  function setNestedNode(target, path, value) {
+    const parts = String(path || "").split("/").filter(Boolean);
+    let cursor = target;
+    for (let index = 0; index < parts.length - 1; index += 1) {
+      cursor[parts[index]] = cursor[parts[index]] || {};
+      cursor = cursor[parts[index]];
+    }
+    const key = parts[parts.length - 1];
+    if (!key) return;
+    if (value === null || value === undefined) delete cursor[key];
+    else cursor[key] = value;
+  }
+
   function playerUpdates(path, room, uid) {
     const nodes = roomToFirebaseNodes(room);
     const updates = {};
@@ -556,10 +625,9 @@
       "/api/host/close-voting": "close-voting",
       "/api/host/reveal-result": "tally",
       "/api/host/show-ranking": "show-ranking",
-      "/api/host/skip-animation": "skip-animation",
       "/api/host/advance": "next-stage",
       "/api/host/recalculate": "tally",
-    }[path] || "noop";
+    }[path] || "";
   }
 
   function touch(room) {
@@ -617,5 +685,11 @@
     return credential.user;
   }
 
-  root.EVGFirebaseAdapter = { createFirebaseAdapter, roomToFirebaseNodes, roomFromFirebaseNodes };
+  root.EVGFirebaseAdapter = {
+    createFirebaseAdapter,
+    roomToFirebaseNodes,
+    roomFromFirebaseNodes,
+    firebaseBaseSubscriptionPaths,
+    firebaseStageSubscriptionPaths,
+  };
 })(typeof self !== "undefined" ? self : this);

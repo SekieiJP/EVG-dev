@@ -97,7 +97,6 @@
     nextGameConfigs: [],
     nextGameConfigsLoadedAt: "",
     nextGameConfigError: "",
-    autoTallyKey: "",
     nextRemoteFetchAt: 0,
     playerNextDisabledUntil: 0,
     serverTimeOffsetMs: 0,
@@ -172,31 +171,7 @@
 
   function tick() {
     if (!state.room) return;
-    let changed = false;
     checkHostTokenExpiry();
-    if (!isRemoteMode() && state.room.phase === Engine.PHASES.COUNTDOWN && state.room.countdownEndsAt) {
-      const remaining = new Date(state.room.countdownEndsAt).getTime() - Date.now();
-      if (remaining <= 0) {
-        state.room = Engine.deepClone(state.room);
-        state.room.phase = Engine.PHASES.TALLYING;
-        state.room.tallyingEndsAt = new Date(Date.now() + 3000).toISOString();
-        logClient("state", "締切後の移動中フェーズに入りました。");
-        saveRoom();
-        changed = true;
-      }
-    }
-    if (!isRemoteMode() && state.room.phase === Engine.PHASES.TALLYING && state.room.tallyingEndsAt) {
-      const remaining = new Date(state.room.tallyingEndsAt).getTime() - Date.now();
-      if (remaining <= 0) {
-        const tallied = Engine.tallyCurrentStage(state.room);
-        if (tallied.ok) {
-          state.room = tallied.room;
-          logClient("state", "移動中フェーズ後に自動集計しました。");
-          saveRoom();
-          changed = true;
-        }
-      }
-    }
     const needsCountdownRefresh =
       [Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase) &&
       (state.role === "screen" || (state.role === "player" && !isEditingPlayerText()));
@@ -212,10 +187,9 @@
       Boolean(revealPlaybackIncomplete) &&
       ((state.role === "screen" && state.room.phase === Engine.PHASES.REVEAL) || state.role === "player");
     if (isRemoteMode()) maybeFetchRemoteAfterDeadline();
-    maybeAutoHostTally();
     if (needsRevealRefresh || revealJustCompleted) checkRevealCompletionRemoteState();
     syncScreenAudio();
-    if (changed || needsCountdownRefresh || needsRevealRefresh || revealJustCompleted) render();
+    if (needsCountdownRefresh || needsRevealRefresh || revealJustCompleted) render();
   }
 
   async function handleSubmit(event) {
@@ -738,18 +712,7 @@
         </header>
         <div class="host-grid">
           ${renderHostFlowPanel()}
-          <section class="panel">
-            <h2>進行</h2>
-            <div class="button-grid">
-              ${hostButton("start-stage", "説明", state.room.phase === Engine.PHASES.LOBBY)}
-              ${hostButton("open-voting", "受付", state.room.phase === Engine.PHASES.STAGE_INTRO)}
-              ${hostButton("close-voting", "締切", state.room.phase === Engine.PHASES.VOTING)}
-              ${hostButton("tally", "集計", canTally())}
-              ${hostButton("show-ranking", "順位", state.room.phase === Engine.PHASES.REVEAL)}
-              ${hostButton("skip-animation", "Skip", state.room.phase === Engine.PHASES.REVEAL)}
-              ${hostButton("next-stage", "次", state.room.phase === Engine.PHASES.RANKING)}
-            </div>
-          </section>
+          ${renderHostNextPanel()}
           <section class="panel">
             <h2>音量</h2>
             <label class="inline"><input id="muteToggle" type="checkbox" ${state.room.muted ? "checked" : ""}>Mute</label>
@@ -800,8 +763,8 @@
       lobby: "説明へ",
       stage_intro: "受付開始",
       voting: "締切",
-      countdown: "自動集計待ち",
-      tallying: "自動集計待ち",
+      countdown: "移動完了待ち",
+      tallying: "移動完了待ち",
       reveal: "順位発表へ",
       ranking: "次ステージへ",
       final: "次ゲーム準備",
@@ -821,6 +784,17 @@
           <strong>${escapeHtml(nextAction)}</strong>
           <small>${remoteModeLabel()}</small>
         </div>
+      </section>
+    `;
+  }
+
+  function renderHostNextPanel() {
+    const next = nextHostAction();
+    return `
+      <section class="panel host-next-panel">
+        <h2>進行</h2>
+        <button class="primary host-next-button" type="button" data-action="host-action" data-host-action="${escapeAttr(next.action || "")}" ${next.enabled ? "" : "disabled"}>次へ</button>
+        <p class="muted">${escapeHtml(next.description)}</p>
       </section>
     `;
   }
@@ -1391,8 +1365,28 @@
     `;
   }
 
-  function hostButton(hostAction, label, enabled) {
-    return `<button type="button" data-action="host-action" data-host-action="${hostAction}" ${enabled ? "" : "disabled"}>${label}</button>`;
+  function nextHostAction() {
+    const stage = Engine.getCurrentStage(state.room);
+    const isLastStage = state.room.currentStageIndex >= (state.room.config.stages.length - 1);
+    if (state.room.phase === Engine.PHASES.LOBBY) return { action: "start-stage", enabled: true, description: "ステージ説明へ進みます。" };
+    if (state.room.phase === Engine.PHASES.STAGE_INTRO) return { action: "open-voting", enabled: true, description: "チケット購入受付を開始します。" };
+    if (state.room.phase === Engine.PHASES.VOTING) return { action: "close-voting", enabled: true, description: "受付を締め切り、カウントダウンを開始します。" };
+    if (state.room.phase === Engine.PHASES.COUNTDOWN || state.room.phase === Engine.PHASES.TALLYING) {
+      return {
+        action: "tally",
+        enabled: canTally(),
+        description: canTally() ? "集計して結果発表へ進みます。" : `移動中です。あと${movingSeconds()}秒で結果発表へ進めます。`,
+      };
+    }
+    if (state.room.phase === Engine.PHASES.REVEAL) return { action: "show-ranking", enabled: true, description: "順位表示へ進みます。" };
+    if (state.room.phase === Engine.PHASES.RANKING) {
+      return {
+        action: "next-stage",
+        enabled: true,
+        description: isLastStage ? "最終結果へ進みます。" : `${stage ? "次ステージ" : "次"}へ進みます。`,
+      };
+    }
+    return { action: "", enabled: false, description: "次ゲームを準備してください。" };
   }
 
   function getCurrentPlayer() {
@@ -1415,7 +1409,7 @@
 
   function canTally() {
     if (state.room.phase === Engine.PHASES.TALLYING) return movingSeconds() <= 0;
-    return isRemoteMode() && state.room.phase === Engine.PHASES.COUNTDOWN && isRemoteMoving() && movingSeconds() <= 0;
+    return state.room.phase === Engine.PHASES.COUNTDOWN && isRemoteMoving() && movingSeconds() <= 0;
   }
 
   function countdownSeconds() {
@@ -1687,17 +1681,6 @@
     if (Date.now() < state.nextRemoteFetchAt) return;
     state.nextRemoteFetchAt = Date.now() + 10000;
     refreshRemoteState({ force: true });
-  }
-
-  async function maybeAutoHostTally() {
-    if (!isRemoteMode() || state.role !== "host" || !state.hostAuthed || !state.hostToken) return;
-    if (state.busyMessage || state.syncing || !canTally()) return;
-    const stage = Engine.getCurrentStage(state.room);
-    if (!stage) return;
-    const key = `${state.room.gameId}:${stage.stageId}:${state.room.countdownEndsAt || ""}:${state.room.tallyingEndsAt || ""}`;
-    if (state.autoTallyKey === key) return;
-    state.autoTallyKey = key;
-    await commitHostTally("自動集計中…");
   }
 
   async function commitHostTally(message) {
@@ -1989,7 +1972,6 @@
       "close-voting": "/api/host/close-voting",
       tally: "/api/host/reveal-result",
       "show-ranking": "/api/host/show-ranking",
-      "skip-animation": "/api/host/skip-animation",
       "next-stage": "/api/host/advance",
     }[action] || "/api/room/state";
   }

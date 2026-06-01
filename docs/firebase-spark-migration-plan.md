@@ -153,7 +153,7 @@ Firebase版ではGAS負荷対策のための待ちを減らす。
 - 投票中は自分の送信状態と全体の提出人数を即時表示する。
 - 中間ランキング後の「次へ」は、サーバ再取得ボタンではなく本人画面の閲覧状態解除ボタンにする。Hostが次ステージへ進めた場合は購読により自動で次フェーズへ入れる。
 - Screen別端末でもHost操作に即時追従する。同一端末BroadcastChannelは補助最適化として残せるが必須ではない。
-- 結果発表Skipは `public/animationSkippedAt` の購読で即時反映する。
+- Host画面の結果発表Skipは廃止し、演出完了後に単一の「次へ」ボタンで順位表示へ進める。
 
 ## 段階移行
 
@@ -161,7 +161,7 @@ Firebase版ではGAS負荷対策のための待ちを減らす。
 2. 既存 `engine.js` を維持し、通信層をGAS adapterとFirebase adapterに分ける。
 3. Firebase Auth匿名ログインを追加し、既存UUIDをAuth uidとは別の表示用/復旧用IDとして扱う移行方針を決める。
 4. `room` 全体保存をやめ、上記ノードへ分割してjoin/submit/host advanceを実装する。
-5. Host/Screen/Playerの購読単位を画面別に分ける。
+5. Host/Screen/Player/Historyの購読単位を画面別に分ける。
 6. GAS版とFirebase版をビルド時定数で切り替え、同じUIで比較できるようにする。
 7. 50人相当のブラウザ負荷試験を追加し、ダウンロード量と操作遅延を測る。
 8. 必要に応じてBlaze + Cloud Functions版のサーバ検証へ進む。

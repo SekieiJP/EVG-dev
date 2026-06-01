@@ -79,7 +79,7 @@
           <li>2026-05-23追記: 得点計算を、物理移動区間ではなく、乗車階と降車階を両端含みで数える成功階数・申告階数へ変更した。</li>
           <li>2026-05-23追記: Player画面で棄権済みチケットを「棄権」と表示し、択一式予想の未回答選択肢を「回答しない」と明示した。</li>
           <li>2026-05-23追記: GAS側のE4特別階加点をブラウザエンジンと同じ人数判定通過階ベースで実装した。</li>
-          <li>2026-05-23追記: GAS通信中の結果発表フェーズでは、スクリーン・プレイヤー端末のみ低頻度でSkip検知を行い、スクリーンは最上階到達時に最終確認フェッチを行うようにした。</li>
+          <li>2026-05-23追記: GAS通信中の結果発表フェーズでは、スクリーン・プレイヤー端末のみ低頻度でフェーズ更新を確認し、スクリーンは最上階到達時に最終確認フェッチを行うようにした。</li>
           <li>2026-05-23追記: 予想イベントの範囲選択、プレイヤー指名、<code>forcedOffCount</code>/<code>totalBoarded</code>/<code>allSucceeded</code>/<code>topPlayer</code>メトリクスによる自動正誤判定をブラウザエンジンとGASに実装した。</li>
           <li>2026-05-24追記: 複数プレイヤーの参加・投票・棄権・集計・次ステージ名前反映を確認する<code>tests/multiplayer-flow.test.js</code>を追加した。</li>
           <li>2026-05-24追記: GASロジックをローカルNode VMで読み込み、不正フェーズ操作・締切後送信・二重集計を確認する<code>tests/gas-logic.test.js</code>を追加した。</li>
@@ -143,6 +143,8 @@
           <li>2026-06-01追記: GitHub Pages上の既定バックエンドをFirebase RTDBへ切り替えた。旧GAS確認は<code>?backend=gas</code>、完全ローカル確認は<code>?backend=local</code>で明示的に選ぶ。</li>
           <li>2026-06-01追記: Firebase版ではGAS向けの状態ポーリングを止め、RTDBの<code>onValue</code>通知を画面反映の主経路にした。Playerの締切カウントダウン開始や結果反映を10秒/30秒ポーリング待ちにしないため。</li>
           <li>2026-06-01追記: 次ゲーム開始時に前ゲーム参加者を<code>room.players</code>へ自動コピーしない仕様へ変更した。<code>players</code>/<code>save_data</code>には過去ユーザーを保持し、Host/Screen等の現在ゲーム表示にはゲーム開始後にアクセスまたは復元したプレイヤーだけを出す。</li>
+          <li>2026-06-01追記: Firebase RTDBの購読をroomルートから、Host/Screen/Player/History別の子ノード購読へ変更した。Playerは全チケットを購読せず、自分の現在ステージチケットと現在ステージ結果だけを追加購読する。</li>
+          <li>2026-06-01追記: Host画面の進行操作を単一の<code>次へ</code>ボタンへ簡素化し、Host画面の結果発表Skipボタンを廃止した。締切後は移動時間が終わるまで<code>次へ</code>を無効化し、以後はHostが手動で結果発表へ進める。</li>
         </ul>
       </section>
 
@@ -222,13 +224,13 @@
           <li>GAS通信は<code>USE_GAS_API</code>有効時のfetch接続、hostToken連携、serverTime補正まで実装した。ただし、実GASデプロイURLでの現地疎通、同時接続負荷、CORS挙動のブラウザ横断確認は未実施。</li>
           <li>BGM/SEファイルは同梱していない。音声ファイル名規約が未確定で、素材も未提供のため、スクリーンの初回「準備完了」とAudioContext起動のみ実装した。</li>
           <li>GASの<code>current_game</code>は完全正規化ではなく、状態JSONを複数行チャンクで保存する実装にした。初版の整合性と競合制御を優先しつつ、1セル上限を避けるため。</li>
-          <li>Skip検知はGAS通信中の結果発表フェーズで低頻度フェッチと最上階到達時の最終確認として実装した。ローカルモードでは同一ブラウザのstorageイベントと再描画で追従する。</li>
+          <li>結果発表中のフェーズ更新検知は、GAS通信中は低頻度フェッチと最上階到達時の最終確認として残している。Firebase通信中はRTDB購読でフェーズ更新を受け取る。</li>
           <li>同時ホストのボタンロックは、GASの<code>LockService</code>による先着処理を優先し、UI上のリアルタイムロック表示は未実装。</li>
           <li><code>game_configs</code>追加後の既存Spreadsheetでは、再度<code>setupElevatorGameSheets()</code>を実行して新シートと初期サンプル行を作る必要がある。</li>
-          <li>Skip時のBGM/SEフェードアウトは未実装。現状はフェーズBGM切替とSE発火トリガーの準備までで、フェード時間は引き続き未決定。</li>
+          <li>結果発表終了時のBGM/SEフェードアウトは未実装。現状はフェーズBGM切替とSE発火トリガーの準備までで、フェード時間は引き続き未決定。</li>
           <li>制作ツールはゲーム進行中のHost画面には組み込まず、<code>tool/stage-creator.html</code>として独立させた。Host画面上での直接編集は未実装。</li>
-          <li>Firebase通信層は追加したが、既存画面との互換を優先してGAS API互換のadapterとして実装している。完全な画面別購読モデルへの置き換えは未完了。</li>
-          <li>Firebase adapterは<code>snapshot</code>ノードを新規保存しない実装へ変更した。ただし購読はまだroomルート単位で、完全な画面別購読モデルへの置き換えは未完了。</li>
+          <li>Firebase通信層は、既存画面との互換を優先してGAS API互換のadapterとして実装している。購読は画面別に分けたが、書き込みAPIの形はGAS互換を維持している。</li>
+          <li>Firebase adapterは<code>snapshot</code>ノードを新規保存しない実装へ変更し、購読も画面別の子ノード購読へ移行した。ただしHost操作の書き込みは既存エンジン互換を優先し、room単位transactionを継続している。</li>
           <li>Firebase版ではSpreadsheetの<code>game_configs</code>候補読み込みを行わない。次ゲームは当面Host画面の設定JSON Importで開始する。</li>
           <li>Firebase Security Rulesは、Host uidだけがroom全体を書けるようにし、Playerは自分の参加者ノードとチケットノードだけを書けるようにした。ただし、Cloud Functionsなしではホストパスワード検証や複雑なゲームルール検証をRulesだけで表現しきれない。</li>
           <li>Firebase Spark前提では、サーバ側Cloud Functionsによる集計検証を意図的に先送りする。Sparkで開始するための制約だが、Hostブラウザを信頼する現行GAS版と同程度の信頼モデルが残る。</li>
@@ -256,12 +258,13 @@
           <li><code>topPlayer</code>を最終得点ベースにする案もあったが、予想イベント得点を含めると循環参照になるため、予想イベント加算前の基礎得点ベースを採用した。</li>
           <li>ブラウザ複数プレイヤーテストは、まず依存追加なしのHTMLハーネスにした。Playwright等の追加導入よりも、会場運用者がすぐ手動再現できることを優先した。</li>
           <li>結果発表のスクロールは、DOMを保持して細かく差分更新する案もあったが、既存の全体再描画構造を保ち、CSSアニメーションの負の遅延で現在時刻に追従させる実装にした。</li>
-          <li>結果発表完了後は、Screenの再描画を続けると手動スクロール位置が戻るため、最終階到達後の自動再描画を止める設計にした。Skipやホスト操作の反映はフェーズ更新時の再取得で扱う。</li>
+          <li>結果発表完了後は、Screenの再描画を続けると手動スクロール位置が戻るため、最終階到達後の自動再描画を止める設計にした。ホスト操作の反映はフェーズ更新時の再取得で扱う。</li>
           <li>Playerランキングの<code>次へ</code>はサーバに進行要求を送る案もあったが、ホストだけがゲーム全体を進める方針を優先し、クライアント側のポーリング再開操作に変更した。GASの<code>/api/player/proceed-next</code>もフェーズを進めない確認APIへ変更した。</li>
           <li>GASのホストセッションはPropertiesServiceではなくCacheServiceに置いた。永続化よりも、期限切れと再認証を明確にする方を優先したため。</li>
           <li>Firebase移行でBlazeを前提にすればCloud Functionsで強いサーバ検証を先に作れるが、今回の開始条件がSparkのため、初期版はRulesとクライアントtransaction中心にする。費用ゼロで始められる一方、複雑なフェーズ遷移検証は弱くなる。</li>
-          <li>Realtime Databaseの全体room購読は実装が簡単だが、50人本番ではダウンロード量が読みにくくなるため最終形では採用しない。現段階ではGAS互換adapterの実RTDB接続を優先し、次段階で画面別の小ノード購読へ分ける。</li>
+          <li>Realtime Databaseの全体room購読は実装が簡単だが、50人本番ではダウンロード量が読みにくくなるため採用せず、画面別の小ノード購読へ分けた。</li>
           <li>今回のFirebase実装は、Host操作は既存エンジンとUIを大きく壊さないためroom transactionで更新し、Player操作はRules粒度を優先して子ノード更新へ分けた。次段階ではHost操作も画面別ノード更新へ分割すると通信量をさらに減らせる。</li>
+          <li>Hostの自動集計は廃止し、締切後の結果発表遷移もHostの<code>次へ</code>操作に寄せた。運営者の意図しない自動進行を避けられる一方、Hostが押し忘れると結果発表に進まない。</li>
           <li>GitHub Pages配信を維持する案とFirebase Hostingへ移す案を比較し、初期移行ではGitHub Pages維持を選んだ。Hosting移行は必要になった時に行えるが、今回の主要課題はバックエンド状態同期のため。</li>
         </ul>
       </section>
@@ -273,7 +276,7 @@
           <li>制作ツールの出力項目名は現行<code>engine.js</code>とGAS実装に合わせた。今後JSONスキーマを変更する場合、追加JSONで暫定運用できるが、頻出項目は専用フォームへ昇格する必要がある。</li>
           <li>GAS実デプロイURLでのHost/Screen/Player複数端末疎通は、API URL提供後に確認が必要。</li>
           <li>100人規模のポーリング負荷、Spreadsheet書き込み時間、CacheServiceの実効TTLは現地または負荷試験で確認が必要。</li>
-          <li>音声ファイル名とフェーズ対応表、Skip時のフェードアウト秒数を確定したい。</li>
+          <li>音声ファイル名とフェーズ対応表、結果発表終了時のフェードアウト秒数を確定したい。</li>
           <li>Firebase実接続では<code>elevator-game-live</code>、Realtime Database <code>asia-southeast1</code>、GitHub Pagesから使うWeb設定値を採用した。本番用に別プロジェクトや別roomIdを分けるかは確認が必要。</li>
           <li>Sparkの100同時接続上限に対して、50人本番で許容する予備端末・見学端末・複数タブの運用ルールを決める必要がある。</li>
           <li>Host権限を匿名Auth uidだけで運用するか、運営用パスワード/招待コードを併用するかを決める必要がある。</li>

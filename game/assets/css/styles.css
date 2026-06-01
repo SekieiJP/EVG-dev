@@ -294,6 +294,17 @@ code {
   flex: 1 1 92px;
 }
 
+.host-next-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.host-next-button {
+  min-height: 56px;
+  font-size: 18px;
+  font-weight: 900;
+}
+
 .flow-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 180px;
