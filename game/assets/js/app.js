@@ -86,6 +86,9 @@
     lastRevealPollAt: 0,
     revealCompletionCheckedFor: "",
     revealWasIncomplete: false,
+    hostAutoTallyKey: "",
+    hostAutoTallyInFlight: false,
+    hostAutoTallyRetryAt: 0,
     playerRankingHold: null,
     nextGameConfigs: [],
     nextGameConfigsLoadedAt: "",
@@ -180,6 +183,7 @@
       Boolean(revealPlaybackIncomplete) &&
       ((state.role === "screen" && state.room.phase === Engine.PHASES.REVEAL) || state.role === "player");
     if (isRemoteMode()) maybeFetchRemoteAfterDeadline();
+    maybeAutoCommitHostTally();
     if (needsRevealRefresh || revealJustCompleted) checkRevealCompletionRemoteState();
     syncScreenAudio();
     if (needsCountdownRefresh || needsRevealRefresh || revealJustCompleted) render();
@@ -985,7 +989,7 @@
       <div class="screen-stage">
         <h1>${escapeHtml(stage.name)}</h1>
         ${renderStageSummary(stage)}
-        ${renderTicketProgress()}
+        ${state.room.phase === Engine.PHASES.STAGE_INTRO ? "" : renderTicketProgress()}
       </div>
     `;
   }
@@ -1825,6 +1829,36 @@
     if (Date.now() < state.nextRemoteFetchAt) return;
     state.nextRemoteFetchAt = Date.now() + 10000;
     refreshRemoteState({ force: true });
+  }
+
+  function maybeAutoCommitHostTally() {
+    if (state.role !== "host" || !state.hostAuthed || !state.hostToken) return;
+    if (state.busyMessage || state.hostAutoTallyInFlight) return;
+    if (Date.now() < state.hostAutoTallyRetryAt) return;
+    if (!canTally()) return;
+    const stage = Engine.getCurrentStage(state.room);
+    if (!stage || state.room.stageResults[stage.stageId]) return;
+    const key = [
+      state.room.gameId || "",
+      stage.stageId || "",
+      state.room.roomVersion || 0,
+      state.room.tallyingEndsAt || state.room.countdownEndsAt || "",
+    ].join(":");
+    if (state.hostAutoTallyKey === key) return;
+    state.hostAutoTallyKey = key;
+    state.hostAutoTallyInFlight = true;
+    logClient("host.auto-tally.start", { stageId: stage.stageId, roomVersion: state.room.roomVersion || 0 });
+    commitHostTally("自動集計中…")
+      .then((ok) => {
+        logClient(ok ? "host.auto-tally.ok" : "host.auto-tally.failed", { stageId: stage.stageId, roomVersion: state.room.roomVersion || 0 });
+        if (!ok) {
+          state.hostAutoTallyKey = "";
+          state.hostAutoTallyRetryAt = Date.now() + 10000;
+        }
+      })
+      .finally(() => {
+        state.hostAutoTallyInFlight = false;
+      });
   }
 
   async function commitHostTally(message) {

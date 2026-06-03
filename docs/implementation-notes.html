@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-06-02 / 対象: <code>docs/elevator-game-requirements.md</code> v1.19</p>
+      <p class="meta">更新日: 2026-06-03 / 対象: <code>docs/elevator-game-requirements.md</code> v1.19</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -144,7 +144,7 @@
           <li>2026-06-01追記: Firebase版ではGAS向けの状態ポーリングを止め、RTDBの<code>onValue</code>通知を画面反映の主経路にした。Playerの締切カウントダウン開始や結果反映を10秒/30秒ポーリング待ちにしないため。</li>
           <li>2026-06-01追記: 次ゲーム開始時に前ゲーム参加者を<code>room.players</code>へ自動コピーしない仕様へ変更した。<code>players</code>/<code>save_data</code>には過去ユーザーを保持し、Host/Screen等の現在ゲーム表示にはゲーム開始後にアクセスまたは復元したプレイヤーだけを出す。</li>
           <li>2026-06-01追記: Firebase RTDBの購読をroomルートから、Host/Screen/Player/History別の子ノード購読へ変更した。Playerは全チケットを購読せず、自分の現在ステージチケットと現在ステージ結果だけを追加購読する。</li>
-          <li>2026-06-01追記: Host画面の進行操作を単一の<code>次へ</code>ボタンへ簡素化し、Host画面の結果発表Skipボタンを廃止した。締切後は移動時間が終わるまで<code>次へ</code>を無効化し、以後はHostが手動で結果発表へ進める。</li>
+          <li>2026-06-01追記: Host画面の進行操作を単一の<code>次へ</code>ボタンへ簡素化し、Host画面の結果発表Skipボタンを廃止した。締切後は移動時間が終わるまで<code>次へ</code>を無効化する。2026-06-03の仕様変更後は、移動完了時にHost画面が自動集計も試みる。</li>
           <li>2026-06-01追記: Host認証フォームのパスワード入力はDOM値ではなくクライアント状態に保持し、busy表示や通知の消去で全体再描画が走っても入力途中の値を破棄しないようにした。</li>
           <li>2026-06-01追記: Firebase購読は<code>public</code>ノードの初回取得前にroomを復元しない。部分ノードだけで初期roomへフォールバックすると、Screenだけが参加者受付中に戻るため。</li>
           <li>2026-06-01追記: Firebase RTDB Rulesを、正しいパスワードを入力したHost端末が現在の匿名Auth uidで<code>meta.hostUid</code>を再取得できる形に変更した。匿名uidが変わった後もHost認証できるようにするため。</li>
@@ -231,6 +231,8 @@
           <li>制作ツールの検証では、E1予想イベントは仕様通り1ステージ最大2問をエラー扱いにした。一方、イベント総数は現行エンジンが先頭10件に丸めるため、エラーではなく警告にしてJSON出力自体は可能にした。</li>
           <li>2026-06-02追記: 締切後のHost画面はRTDB上のフェーズ自動書き換えではなく、<code>countdownEndsAt</code>/<code>tallyingEndsAt</code>を使ったローカル時刻表示として扱う。Hostも1秒tickで再描画し、移動完了後に<code>次へ</code>を押せるようにした。</li>
           <li>2026-06-02追記: Firebase RTDBから返る配列はオブジェクト形になることがあるため、<code>stageResults</code>と<code>completedGames</code>復元時に<code>timeline</code>、各階イベント内の乗車リスト、<code>rankings</code>、各プレイヤーの内訳配列を正規化する。</li>
+          <li>2026-06-03追記: Host画面が開いていて認証済みの場合、移動完了後に手動の<code>次へ</code>と同じ<code>commitHostTally()</code>経路を自動起動する。失敗時は10秒後に再試行し、同一ステージの二重集計は既存結果の存在とキーで抑止する。</li>
+          <li>2026-06-03追記: Screen画面のステージ説明フェーズでは、購入受付前で誤解を招くためチケット購入人数の円グラフを表示しない。投票受付中以降は従来通り表示する。</li>
         </ul>
       </section>
 
@@ -286,7 +288,7 @@
           <li>Realtime Databaseの全体room購読は実装が簡単だが、50人本番ではダウンロード量が読みにくくなるため採用せず、画面別の小ノード購読へ分けた。</li>
           <li>今回のFirebase実装は、Host操作は既存エンジンとUIを大きく壊さないためroom transactionで更新し、Player操作はRules粒度を優先して子ノード更新へ分けた。次段階ではHost操作も画面別ノード更新へ分割すると通信量をさらに減らせる。</li>
           <li>Firebase Spark構成ではCloud Functionsでパスワード検証できないため、正しいパスワードを知っているHostが匿名uid変更後に<code>hostUid</code>を再取得できるRulesを採用した。運用上の復旧性を優先する一方、強い権限検証が必要ならBlaze + Cloud Functionsへ移す必要がある。</li>
-          <li>Hostの自動集計は廃止し、締切後の結果発表遷移もHostの<code>次へ</code>操作に寄せた。運営者の意図しない自動進行を避けられる一方、Hostが押し忘れると結果発表に進まない。</li>
+          <li>Hostの自動集計は一度廃止したが、2026-06-03の仕様変更で復帰した。Cloud Functionsではなく認証済みHost画面のtickから起動するため、Host端末が閉じている場合は自動進行しない。一方、既存の手動<code>次へ</code>と同じcommit経路を使うため、二重実装は避けられる。</li>
           <li>GitHub Pages配信を維持する案とFirebase Hostingへ移す案を比較し、初期移行ではGitHub Pages維持を選んだ。Hosting移行は必要になった時に行えるが、今回の主要課題はバックエンド状態同期のため。</li>
           <li>Host権限はクライアント内パスワードではなく<code>rooms/{roomId}/roles/hosts/{uid}</code>のallowlistを正にする方針へ寄せた。Spark + Rulesだけでは秘密値検証ができないためで、招待コードやCustom Claimsが必要ならBlaze + Cloud Functionsへ移す。</li>
           <li>GASをアーカイブ専用に限定することで、進行中ゲームの遅延やロック競合をRTDB側へ寄せられる。一方、Spreadsheet保存の失敗はゲーム進行と切り離されるため、Host画面にアーカイブ未完了状態と再送操作を明示する必要がある。</li>
