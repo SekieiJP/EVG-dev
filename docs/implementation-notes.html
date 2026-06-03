@@ -229,6 +229,8 @@
           <li>GASのPlayer向け状態レスポンスは、UI表示に必要な参加者名と本人チケットを優先し、全チケットや発表前結果は返さない。Screen向け状態は投影表示のため全体チケットと結果を返す。</li>
           <li>制作ツールのステージ単体インポートは、既存HostのStage Importと同じく現在の末尾へ追加する挙動にした。差し替えや挿入位置指定は、追加後の並べ替えで対応する。</li>
           <li>制作ツールの検証では、E1予想イベントは仕様通り1ステージ最大2問をエラー扱いにした。一方、イベント総数は現行エンジンが先頭10件に丸めるため、エラーではなく警告にしてJSON出力自体は可能にした。</li>
+          <li>2026-06-02追記: 締切後のHost画面はRTDB上のフェーズ自動書き換えではなく、<code>countdownEndsAt</code>/<code>tallyingEndsAt</code>を使ったローカル時刻表示として扱う。Hostも1秒tickで再描画し、移動完了後に<code>次へ</code>を押せるようにした。</li>
+          <li>2026-06-02追記: Firebase RTDBから返る配列はオブジェクト形になることがあるため、<code>stageResults</code>と<code>completedGames</code>復元時に<code>timeline</code>、各階イベント内の乗車リスト、<code>rankings</code>、各プレイヤーの内訳配列を正規化する。</li>
         </ul>
       </section>
 
@@ -289,6 +291,7 @@
           <li>Host権限はクライアント内パスワードではなく<code>rooms/{roomId}/roles/hosts/{uid}</code>のallowlistを正にする方針へ寄せた。Spark + Rulesだけでは秘密値検証ができないためで、招待コードやCustom Claimsが必要ならBlaze + Cloud Functionsへ移す。</li>
           <li>GASをアーカイブ専用に限定することで、進行中ゲームの遅延やロック競合をRTDB側へ寄せられる。一方、Spreadsheet保存の失敗はゲーム進行と切り離されるため、Host画面にアーカイブ未完了状態と再送操作を明示する必要がある。</li>
           <li>RTDB RulesではScreenとPlayerを区別できないため、現時点の<code>results/{stageId}</code>は認証済みクライアントに読める範囲を広めに残した。Screen専用の集約済み結果だけを公開するには、結果ノードの再分割が必要になる。</li>
+          <li>2026-06-02追記: JSON Import時のRTDB書き換えは、Rulesで親書き込みを閉じている<code>tickets</code>、<code>ticketPresence</code>、<code>results</code>を親ノード単位で上書きしない。過去ステージ分はステージIDごとの削除にし、RTDBのmulti-location updateで<code>public</code>を含めて一括更新する。SDKが一括更新できない場合のみ、<code>public</code>を最後に書くfallbackにする。</li>
         </ul>
       </section>
 

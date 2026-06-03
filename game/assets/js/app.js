@@ -167,7 +167,7 @@
     checkHostTokenExpiry();
     const needsCountdownRefresh =
       [Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase) &&
-      (state.role === "screen" || (state.role === "player" && !isEditingPlayerText()));
+      (state.role === "host" || state.role === "screen" || (state.role === "player" && !isEditingPlayerText()));
     const stage = Engine.getCurrentStage(state.room);
     const revealPlaybackIncomplete =
       stage &&

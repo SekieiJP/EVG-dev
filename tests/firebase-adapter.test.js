@@ -67,6 +67,109 @@ run("firebase operation nodes use stable unique keys", () => {
   assert.strictEqual(nodes.operations["op-custom"].id, "op-custom");
 });
 
+run("firebase restores RTDB object arrays in stage results", () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  const stage = Engine.getCurrentStage(room);
+  const result = Engine.calculateStage(stage, [{ uuid: "alice", name: "Alice", skill: 0, stageSkillHistory: [] }], {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {}, submittedAt: "2026-06-01T00:00:00.000Z" },
+  });
+  const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(room);
+  const timeline = Object.assign({}, result.timeline);
+  timeline[0] = Object.assign({}, timeline[0], {
+    boarding: { 0: "alice" },
+    exiting: {},
+    passengersBeforeCheck: {},
+    passengersAfterCheck: { 0: "alice" },
+    forcedOff: {},
+  });
+  nodes.results = {
+    [stage.stageId]: {
+      stageId: result.stageId,
+      params: result.params,
+      players: {
+        alice: Object.assign({}, result.players.alice, {
+          successfulIntervals: { 0: result.players.alice.successfulIntervals[0] },
+          predictionBreakdown: {},
+          eventBreakdown: {},
+        }),
+      },
+      timeline,
+      rankings: Object.assign({}, result.rankings),
+      totalBoarded: result.totalBoarded,
+      forcedOffCount: result.forcedOffCount,
+    },
+  };
+  nodes.completedGames = {
+    previous: {
+      gameId: "previous",
+      rankings: { 0: { uuid: "alice", name: "Alice", rank: 1, score: 12 } },
+      stageResults: nodes.results,
+    },
+  };
+
+  const restored = EVGFirebaseAdapter.roomFromFirebaseNodes(nodes, Engine);
+  const restoredResult = restored.stageResults[stage.stageId];
+  assert.strictEqual(Array.isArray(restoredResult.timeline), true);
+  assert.strictEqual(Array.isArray(restoredResult.rankings), true);
+  assert.strictEqual(Array.isArray(restoredResult.timeline[0].boarding), true);
+  assert.strictEqual(Array.isArray(restoredResult.timeline[0].forcedOff), true);
+  assert.strictEqual(Array.isArray(restoredResult.players.alice.successfulIntervals), true);
+  assert.strictEqual(restoredResult.timeline.length > 0, true);
+  assert.strictEqual(Array.isArray(restored.completedGames[0].rankings), true);
+  assert.strictEqual(Array.isArray(restored.completedGames[0].stageResults[stage.stageId].timeline), true);
+});
+
+runAsync("firebase room rewrite uses atomic update and avoids rules-closed volatile parent nodes", async () => {
+  const previousRoom = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  previousRoom.tickets = {
+    "stage-001": {
+      alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {}, submittedAt: "2026-06-01T00:00:00.000Z" },
+    },
+  };
+  previousRoom.ticketPresence = {
+    "stage-001": {
+      alice: { status: "submitted", updatedAt: "2026-06-01T00:00:00.000Z" },
+    },
+  };
+  previousRoom.stageResults = {
+    "stage-001": { stageId: "stage-001", timeline: [], rankings: [], players: {} },
+  };
+  const nextRoom = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  const writes = [];
+  const updateCalls = [];
+  global.BroadcastChannel = undefined;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+    getUuid: () => "host-uid",
+  });
+  adapter.firebaseDb = {};
+  adapter.sdk = {
+    ref: (_db, path) => ({ path }),
+    update: async (ref, updates) => {
+      updateCalls.push([ref.path, updates]);
+    },
+    set: async (ref, value) => {
+      writes.push([ref.path, value]);
+    },
+  };
+
+  await adapter.writeRestRoomChildren(nextRoom, { previousRoom, clearVolatile: true });
+
+  assert.strictEqual(writes.length, 0);
+  assert.strictEqual(updateCalls.length, 1);
+  assert.strictEqual(updateCalls[0][0], "/rooms/unit-room");
+  const paths = Object.keys(updateCalls[0][1]);
+  assert.strictEqual(paths.includes("tickets"), false);
+  assert.strictEqual(paths.includes("ticketPresence"), false);
+  assert.strictEqual(paths.includes("results"), false);
+  assert.strictEqual(updateCalls[0][1]["tickets/stage-001"], null);
+  assert.strictEqual(updateCalls[0][1]["ticketPresence/stage-001"], null);
+  assert.strictEqual(updateCalls[0][1]["results/stage-001"], null);
+  assert.strictEqual(Boolean(updateCalls[0][1].public), true);
+});
+
 run("firebase legacy helper remains isolated from serializer output", () => {
   const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   room.phase = Engine.PHASES.REVEAL;

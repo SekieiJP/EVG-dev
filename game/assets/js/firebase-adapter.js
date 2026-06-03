@@ -264,7 +264,10 @@
 
       if (path === "/api/host/import-config" || path === "/api/host/update-config") {
         const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom);
-        await this.writeRestRoomChildren(nextRoom);
+        await this.writeRestRoomChildren(nextRoom, {
+          previousRoom: currentRoom,
+          clearVolatile: path === "/api/host/import-config",
+        });
         return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload).room });
       }
 
@@ -473,13 +476,38 @@
       return { ok: true };
     }
 
-    async writeRestRoomChildren(room) {
+    async writeRestRoomChildren(room, options = {}) {
       room.roomId = this.roomId;
       const nodes = roomToFirebaseNodes(room);
       delete nodes.roles;
-      await Promise.all(Object.keys(nodes).map((key) => {
-        return this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${key}`), emptyObjectToNull(nodes[key]));
-      }));
+      const writes = [];
+      const publicNode = nodes.public;
+      delete nodes.public;
+      delete nodes.tickets;
+      delete nodes.ticketPresence;
+      delete nodes.results;
+      if (options.clearVolatile && options.previousRoom) {
+        volatileStageIds(options.previousRoom).forEach((stageId) => {
+          writes.push([`tickets/${stageId}`, null]);
+          writes.push([`ticketPresence/${stageId}`, null]);
+          writes.push([`results/${stageId}`, null]);
+        });
+      }
+      Object.keys(nodes).forEach((key) => {
+        writes.push([key, emptyObjectToNull(nodes[key])]);
+      });
+      if (publicNode) writes.push(["public", publicNode]);
+      if (this.sdk.update) {
+        const updates = writes.reduce((acc, [path, value]) => {
+          acc[path] = value;
+          return acc;
+        }, {});
+        await this.sdk.update(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`), updates);
+        return { ok: true };
+      }
+      for (const [path, value] of writes) {
+        await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), value);
+      }
       return { ok: true };
     }
 
@@ -613,9 +641,9 @@
       currentStageIndex: Number(status.currentStageIndex || 0),
       players,
       tickets: nodes.tickets || {},
-      stageResults: nodes.results || {},
+      stageResults: normalizeStageResults(nodes.results || {}),
       scores,
-      completedGames: Object.values(nodes.completedGames || {}),
+      completedGames: normalizeCompletedGames(nodes.completedGames || {}),
       operations: Object.values(nodes.operations || {}).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))),
       countdownEndsAt: status.countdownEndsAt || null,
       tallyingEndsAt: status.tallyingEndsAt || null,
@@ -677,6 +705,67 @@
 
   function restBaseReadPaths(role, uid, hostAllowed) {
     return firebaseBaseSubscriptionPaths(role, uid, hostAllowed);
+  }
+
+  function volatileStageIds(room) {
+    const ids = new Set(Object.keys(room.tickets || {}));
+    Object.keys(room.ticketPresence || {}).forEach((stageId) => ids.add(stageId));
+    Object.keys(room.stageResults || {}).forEach((stageId) => ids.add(stageId));
+    const stages = room.config && room.config.stages ? room.config.stages : [];
+    stages.forEach((stage) => {
+      if (stage && stage.stageId) ids.add(stage.stageId);
+    });
+    return Array.from(ids).filter(Boolean);
+  }
+
+  function normalizeStageResults(results) {
+    return Object.keys(results || {}).reduce((acc, stageId) => {
+      acc[stageId] = normalizeStageResult(results[stageId]);
+      return acc;
+    }, {});
+  }
+
+  function normalizeCompletedGames(games) {
+    return Object.values(games || {}).map((game) => {
+      if (!game || typeof game !== "object") return game;
+      const next = Object.assign({}, game);
+      next.rankings = arrayFromFirebase(next.rankings);
+      next.stageResults = normalizeStageResults(next.stageResults || {});
+      return next;
+    });
+  }
+
+  function normalizeStageResult(result) {
+    if (!result || typeof result !== "object") return result;
+    const next = Object.assign({}, result);
+    next.timeline = arrayFromFirebase(next.timeline).map(normalizeTimelineStep);
+    next.rankings = arrayFromFirebase(next.rankings);
+    next.players = Object.keys(next.players || {}).reduce((acc, uuid) => {
+      const player = Object.assign({}, next.players[uuid]);
+      player.successfulIntervals = arrayFromFirebase(player.successfulIntervals);
+      player.predictionBreakdown = arrayFromFirebase(player.predictionBreakdown);
+      player.eventBreakdown = arrayFromFirebase(player.eventBreakdown);
+      acc[uuid] = player;
+      return acc;
+    }, {});
+    return next;
+  }
+
+  function normalizeTimelineStep(step) {
+    if (!step || typeof step !== "object") return step;
+    const next = Object.assign({}, step);
+    ["boarding", "exiting", "passengersBeforeCheck", "passengersAfterCheck", "forcedOff"].forEach((key) => {
+      next[key] = arrayFromFirebase(next[key]);
+    });
+    return next;
+  }
+
+  function arrayFromFirebase(value) {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== "object") return [];
+    return Object.keys(value)
+      .sort((a, b) => Number(a) - Number(b))
+      .map((key) => value[key]);
   }
 
   function setNestedNode(target, path, value) {
