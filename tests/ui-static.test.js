@@ -42,3 +42,17 @@ run("screen reveal score boxes occupy the side panel", () => {
   assert.strictEqual(revealScoreboard.includes("grid-column: 1 / -1"), false);
   assert.strictEqual(revealScoreboard.includes("max-height: calc(100vh - 145px)"), true);
 });
+
+run("long reveal animation compresses empty floors", () => {
+  assert.strictEqual(appSource.includes("const REVEAL_SKIP_EMPTY_MIN_FLOORS = 30"), true);
+  assert.strictEqual(appSource.includes("const REVEAL_EMPTY_FLOOR_FACTOR = 0.3"), true);
+  assert.strictEqual(appSource.includes("function shouldCompressRevealFloor"), true);
+  assert.strictEqual(appSource.includes("function hasRevealBonusAtFloor"), true);
+});
+
+run("reveal camera position is driven by computed schedule", () => {
+  const revealRenderer = section(appSource, "function renderElevatorAnimation", "function renderFloorEvent");
+  assert.strictEqual(revealRenderer.includes("getRevealSchedule(stage, result)"), true);
+  assert.strictEqual(revealRenderer.includes("--reveal-shift"), true);
+  assert.strictEqual(cssSource.includes("animation: cameraClimb"), false);
+});

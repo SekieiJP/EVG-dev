@@ -874,8 +874,12 @@ code {
   display: flex;
   flex-direction: column;
   height: var(--track-height, 840px);
-  animation: cameraClimb var(--travel-duration, 12s) steps(var(--floor-count), end) both;
-  animation-delay: var(--reveal-delay, 0s);
+  transform: translateY(var(--reveal-shift, 0px));
+  transition: transform 0.24s linear;
+}
+
+.shaft-track.has-compressed-floors {
+  transition-duration: 0.14s;
 }
 
 .elevator-camera.reveal-complete .shaft-track {
@@ -931,15 +935,6 @@ code {
 
 .elevator-camera.reveal-complete .car {
   display: none;
-}
-
-@keyframes cameraClimb {
-  from {
-    transform: translateY(0);
-  }
-  to {
-    transform: translateY(var(--travel-shift, 0px));
-  }
 }
 
 @keyframes movingPulse {

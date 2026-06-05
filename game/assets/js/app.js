@@ -29,6 +29,11 @@
   const TEST_SLOT = String(QUERY.get("testSlot") || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
   const DEBUG_VIEW = QUERY.get("debug") === "1";
   const REMOTE_REVEAL_POLL_INTERVAL_MS = 15000;
+  const REVEAL_SECONDS_PER_FLOOR = 1.6;
+  const REVEAL_MIN_SECONDS = 12;
+  const REVEAL_SKIP_EMPTY_MIN_FLOORS = 30;
+  const REVEAL_EMPTY_FLOOR_FACTOR = 0.3;
+  const REVEAL_FLOOR_HEIGHT_PX = 84;
   const AUDIO_BASE_PATH = "assets/audio/";
   const AUDIO_FILES = {
     bgm: {
@@ -1004,15 +1009,17 @@
     const forcedFloors = new Set(result.timeline.filter((step) => step.forcedOff.length).map((step) => step.floor));
     const timelineByFloor = new Map(result.timeline.map((step) => [step.floor, step]));
     const tickets = state.room.tickets[result.stageId] || {};
-    const duration = getRevealDuration(stage);
+    const revealSchedule = getRevealSchedule(stage, result);
+    const duration = revealSchedule.totalSeconds;
     const elapsed = getRevealElapsedSeconds();
-    const currentFloor = getRevealFloor(stage, duration);
+    const currentFloor = getRevealFloor(stage, result);
     const reviewMode = isRevealComplete(stage);
     const scoreRows = buildRevealScoreRows(stage, result, currentFloor);
+    const revealShift = Math.max(0, currentFloor - 1) * REVEAL_FLOOR_HEIGHT_PX;
     return `
       <div class="elevator-board">
-        <div class="elevator-camera ${reviewMode ? "reveal-complete" : ""}" style="--floor-count:${stage.params.N}; --track-height:${stage.params.N * 84}px; --travel-shift:${Math.max(0, stage.params.N - 1) * 84}px; --travel-duration:${duration}s; --reveal-delay:-${Math.min(elapsed, duration)}s">
-          <div class="shaft-track">
+        <div class="elevator-camera ${reviewMode ? "reveal-complete" : ""}" style="--floor-count:${stage.params.N}; --track-height:${stage.params.N * REVEAL_FLOOR_HEIGHT_PX}px; --reveal-shift:${revealShift}px; --travel-duration:${duration}s; --reveal-delay:-${Math.min(elapsed, duration)}s">
+          <div class="shaft-track ${revealSchedule.hasCompressedFloors ? "has-compressed-floors" : ""}">
             ${floors.map((floor) => renderFloorEvent(floor, timelineByFloor.get(floor), result, tickets, forcedFloors.has(floor), currentFloor)).join("")}
           </div>
           <div class="car"><span>EV</span></div>
@@ -1095,8 +1102,8 @@
     }
   }
 
-  function getRevealDuration(stage) {
-    return Math.max(12, stage.params.N * 1.6);
+  function getRevealDuration(stage, result = getCurrentStageResult()) {
+    return getRevealSchedule(stage, result).totalSeconds;
   }
 
   function getRevealElapsedSeconds() {
@@ -1105,11 +1112,78 @@
     return Math.max(0, (serverNow() - started) / 1000);
   }
 
-  function getRevealFloor(stage, duration) {
+  function getRevealFloor(stage, result = getCurrentStageResult()) {
     if (state.room.animationSkippedAt) return stage.params.N;
     const elapsedSeconds = getRevealElapsedSeconds();
-    const floor = Math.floor(elapsedSeconds / (duration / stage.params.N)) + 1;
-    return Math.max(1, Math.min(stage.params.N, floor));
+    return getRevealSchedule(stage, result).floorAt(elapsedSeconds);
+  }
+
+  function getRevealSchedule(stage, result = getCurrentStageResult()) {
+    const floorCount = Math.max(1, Number(stage && stage.params ? stage.params.N : 1) || 1);
+    const baseFloorSeconds = Math.max(REVEAL_MIN_SECONDS, floorCount * REVEAL_SECONDS_PER_FLOOR) / floorCount;
+    const durations = Array.from({ length: floorCount }, (_, index) => {
+      const floor = index + 1;
+      return shouldCompressRevealFloor(stage, result, floor) ? baseFloorSeconds * REVEAL_EMPTY_FLOOR_FACTOR : baseFloorSeconds;
+    });
+    const totalSeconds = durations.reduce((sum, seconds) => sum + seconds, 0);
+    return {
+      durations,
+      totalSeconds,
+      hasCompressedFloors: durations.some((seconds) => seconds < baseFloorSeconds),
+      floorAt(elapsedSeconds) {
+        if (!Number.isFinite(elapsedSeconds)) return floorCount;
+        let cursor = 0;
+        for (let index = 0; index < durations.length; index += 1) {
+          cursor += durations[index];
+          if (elapsedSeconds < cursor) return index + 1;
+        }
+        return floorCount;
+      },
+    };
+  }
+
+  function shouldCompressRevealFloor(stage, result, floor) {
+    if (!stage || !result || Number(stage.params.N || 0) < REVEAL_SKIP_EMPTY_MIN_FLOORS) return false;
+    const step = (result.timeline || []).find((item) => Number(item.floor) === floor);
+    if (hasRevealMovement(step, result)) return false;
+    return !hasRevealBonusAtFloor(stage, result, floor);
+  }
+
+  function hasRevealMovement(step, result) {
+    if (!step) return false;
+    const stageTickets = result.stageId && state.room && state.room.tickets ? state.room.tickets[result.stageId] || {} : {};
+    const blocked = Object.values(stageTickets)
+      .filter((ticket) => !ticket.abstained && Number(ticket.boardFloor) === Number(step.floor))
+      .map((ticket) => ticket.uuid)
+      .filter((uuid) => ["invalid", "not_boarded"].includes(result.players[uuid] ? result.players[uuid].status : ""));
+    return Boolean(
+      (step.boarding || []).length ||
+      (step.exiting || []).length ||
+      (step.forcedOff || []).length ||
+      blocked.length
+    );
+  }
+
+  function hasRevealBonusAtFloor(stage, result, floor) {
+    const targetFloor = Number(floor);
+    const timelineByFloor = new Map((result.timeline || []).map((step) => [Number(step.floor), step]));
+    const step = timelineByFloor.get(targetFloor);
+    const passengersAfterCheck = step ? step.passengersAfterCheck || [] : [];
+    if ((stage.events || []).some((event) => event.type === "E4_special_floor" && Number(event.floor) === targetFloor && Number(event.bonus || event.score || 0) !== 0 && passengersAfterCheck.length)) {
+      return true;
+    }
+    if ((stage.events || []).some((event) => event.type === "E6_view_bonus" && Number(event.bonusPerExitFloor || event.multiplier || 0) !== 0)) {
+      const viewBonusPlayer = Object.values(result.players || {}).some((playerResult) => {
+        return playerResult.status === "success" && playerResult.ticket && Number(playerResult.ticket.exitFloor) === targetFloor;
+      });
+      if (viewBonusPlayer) return true;
+    }
+    if (targetFloor === Number(stage.params.N || 0)) {
+      return Object.values(result.players || {}).some((playerResult) => {
+        return (playerResult.predictionBreakdown || []).some((item) => Number(item.score || 0) !== 0);
+      });
+    }
+    return false;
   }
 
   function isRevealComplete(stage) {
@@ -1706,7 +1780,8 @@
   function checkRevealCompletionRemoteState() {
     if (!isRemoteMode() || state.syncing || state.room.phase !== Engine.PHASES.REVEAL) return;
     const stage = Engine.getCurrentStage(state.room);
-    if (!stage || getRevealFloor(stage, getRevealDuration(stage)) < stage.params.N) return;
+    const result = getCurrentStageResult();
+    if (!stage || getRevealFloor(stage, result) < stage.params.N) return;
     const checkKey = `${stage.stageId}:${state.room.animationStartedAt || ""}`;
     if (state.revealCompletionCheckedFor === checkKey) return;
     state.revealCompletionCheckedFor = checkKey;
@@ -2294,7 +2369,7 @@
     const result = getCurrentStageResult();
     if (!stage || !result || !result.timeline) return;
     const revealKey = `${state.room.gameId}:${stage.stageId}:${state.room.animationStartedAt || ""}`;
-    const currentFloor = getRevealFloor(stage, getRevealDuration(stage));
+    const currentFloor = getRevealFloor(stage, result);
     if (state.audio.revealKey !== revealKey) {
       state.audio.revealKey = revealKey;
       state.audio.revealFloor = Math.max(0, currentFloor - 1);
