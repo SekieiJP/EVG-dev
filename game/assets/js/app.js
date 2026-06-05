@@ -2,10 +2,6 @@
   const Engine = window.ElevatorGameEngine;
   const BUILD_CONFIG = Object.assign(
     {
-      GAS_API_BASE_URL: "",
-      GAS_API_KEY: "",
-      USE_GAS_API: false,
-      USE_FIREBASE_API: true,
       FIREBASE_USE_LOCAL_MOCK: false,
       FIREBASE_PROJECT_ID: "",
       FIREBASE_API_KEY: "",
@@ -18,8 +14,6 @@
     window.EVG_BUILD_CONFIG || {}
   );
   const QUERY = new URLSearchParams(location.search);
-  BUILD_CONFIG.USE_FIREBASE_API = true;
-  BUILD_CONFIG.USE_GAS_API = false;
   BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK = QUERY.get("backend") === "firebase-mock" || BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK;
   if (QUERY.get("room") || QUERY.get("roomId")) {
     BUILD_CONFIG.FIREBASE_ROOM_ID = QUERY.get("room") || QUERY.get("roomId");
@@ -63,10 +57,8 @@
     hostTokenExpiresAt: "evg.hostTokenExpiresAt.v1",
     logs: "evg.logs.v1",
     screenReady: "evg.screenReady.v1",
-    screenLocalSync: "evg.screenLocalSync.v1",
     personalHistoryCache: "evg.personalHistoryCache.v1",
   };
-  const LOCAL_SYNC_CHANNEL = "evg.local-room-sync.v1";
   const state = {
     role: REQUESTED_ROLE,
     room: null,
@@ -75,7 +67,6 @@
     hostToken: localStorage.getItem(STORAGE_KEYS.hostToken) || "",
     hostTokenExpiresAt: localStorage.getItem(STORAGE_KEYS.hostTokenExpiresAt) || "",
     screenReady: localStorage.getItem(STORAGE_KEYS.screenReady) === "true",
-    screenLocalSync: localStorage.getItem(STORAGE_KEYS.screenLocalSync) === "true" || QUERY.get("screenSync") === "local",
     logs: loadJson(STORAGE_KEYS.logs, []),
     toast: "",
     toastId: 0,
@@ -117,7 +108,6 @@
       revealFloor: 0,
     },
   };
-  const localSyncChannel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(LOCAL_SYNC_CHANNEL) : null;
   const firebaseAdapter = window.EVGFirebaseAdapter
     ? window.EVGFirebaseAdapter.createFirebaseAdapter({
         config: BUILD_CONFIG,
@@ -137,16 +127,6 @@
     setInterval(tick, 1000);
     startRemoteSync();
     ensureVisibleHistoryCache();
-    if (localSyncChannel) {
-      localSyncChannel.addEventListener("message", (event) => {
-        if (event.data && event.data.type === "room") applyLocalScreenRoom(event.data.room);
-      });
-    }
-    window.addEventListener("storage", (event) => {
-      if (event.key === STORAGE_KEYS.room) {
-        applyLocalScreenRoom(loadJson(STORAGE_KEYS.room, null));
-      }
-    });
   });
 
   function bindGlobalEvents() {
@@ -159,7 +139,7 @@
       history.replaceState(null, "", `?view=${state.role}`);
       render();
       ensureVisibleHistoryCache();
-      if (isFirebaseMode() && previousRole !== state.role) restartFirebaseSync();
+      if (previousRole !== state.role) restartFirebaseSync();
     });
     $("#app").addEventListener("submit", handleSubmit);
     $("#app").addEventListener("click", handleClick);
@@ -184,7 +164,7 @@
     const needsRevealRefresh =
       Boolean(revealPlaybackIncomplete) &&
       ((state.role === "screen" && state.room.phase === Engine.PHASES.REVEAL) || state.role === "player");
-    if (isRemoteMode()) maybeFetchRemoteAfterDeadline();
+    maybeFetchRemoteAfterDeadline();
     maybeAutoCommitHostTally();
     if (needsRevealRefresh || revealJustCompleted) checkRevealCompletionRemoteState();
     syncScreenAudio();
@@ -248,17 +228,12 @@
       const password = form.elements.password.value;
       state.hostPasswordDraft = password;
       try {
-        if (isRemoteMode()) {
-          const result = await withBusy("認証中…", () => apiPost("/api/host/auth", { password }));
-          if (!result.ok) return showToast(result.error || "パスワードが違います。");
-          state.hostToken = result.hostToken || "";
-          state.hostTokenExpiresAt = result.expiresAt || "";
-          localStorage.setItem(STORAGE_KEYS.hostToken, state.hostToken);
-          localStorage.setItem(STORAGE_KEYS.hostTokenExpiresAt, state.hostTokenExpiresAt);
-        } else {
-          const configured = getHostPassword(state.room);
-          if (password !== configured) return showToast("パスワードが違います。");
-        }
+        const result = await withBusy("認証中…", () => apiPost("/api/host/auth", { password }));
+        if (!result.ok) return showToast(result.error || "パスワードが違います。");
+        state.hostToken = result.hostToken || "";
+        state.hostTokenExpiresAt = result.expiresAt || "";
+        localStorage.setItem(STORAGE_KEYS.hostToken, state.hostToken);
+        localStorage.setItem(STORAGE_KEYS.hostTokenExpiresAt, state.hostTokenExpiresAt);
       } catch (error) {
         logClient("host.auth.error", error.message);
         return showToast(authErrorMessage(error));
@@ -266,8 +241,7 @@
       state.hostAuthed = true;
       state.hostPasswordDraft = "";
       localStorage.setItem(STORAGE_KEYS.hostAuthed, "true");
-      if (isFirebaseMode()) await restartFirebaseSync();
-      else if (isRemoteMode()) await refreshRemoteState({ force: true, full: true, showLoading: true });
+      await restartFirebaseSync();
       render();
     }
     if (form.id === "renameForm") {
@@ -286,15 +260,13 @@
     if (form.id === "uuidImportForm") {
       const uuid = form.elements.importUuid.value.trim();
       if (!uuid) return showToast("UUIDを入力してください。");
-      if (isRemoteMode()) {
-        const result = await runMutation(
-          () => ({ ok: true, room: state.room, player: getCurrentPlayer() }),
-          "/api/player/restore",
-          { uuid }
-        );
-        if (!result.ok) return showToast(result.error || "UUIDが見つかりません。");
-        state.room = result.room;
-      }
+      const result = await runMutation(
+        () => ({ ok: true, room: state.room, player: getCurrentPlayer() }),
+        "/api/player/restore",
+        { uuid }
+      );
+      if (!result.ok) return showToast(result.error || "UUIDが見つかりません。");
+      state.room = result.room;
       state.playerUuid = result.player && result.player.uuid || uuid;
       localStorage.setItem(playerUuidStorageKey(), state.playerUuid);
       state.restoreError = "";
@@ -392,17 +364,13 @@
         const stage = JSON.parse(textarea.value);
         const next = Engine.deepClone(state.room);
         next.config.stages.push(Engine.normalizeConfig({ stages: [stage] }).stages[0]);
-        if (isRemoteMode()) {
-          const result = await runMutation(
-            () => ({ ok: true, room: next }),
-            "/api/host/update-config",
-            { config: next.config }
-          );
-          if (!result.ok) return showToast(result.error);
-          state.room = result.room;
-        } else {
-          state.room = next;
-        }
+        const result = await runMutation(
+          () => ({ ok: true, room: next }),
+          "/api/host/update-config",
+          { config: next.config }
+        );
+        if (!result.ok) return showToast(result.error);
+        state.room = result.room;
         saveRoom("host.stage.import", "host");
         showToast("ステージを追加しました。");
         render();
@@ -679,7 +647,7 @@
   }
 
   function renderHostView() {
-    if (!state.hostAuthed || (isRemoteMode() && !state.hostToken)) {
+    if (!state.hostAuthed || !state.hostToken) {
       return `
         <section class="shell narrow">
           <header class="view-header"><div><p class="eyebrow">Host</p><h1>認証</h1></div></header>
@@ -935,7 +903,6 @@
     return `
       <section class="screen-shell ${reviewMode ? "is-review" : ""}">
         ${!state.screenReady ? `<button class="ready-button" data-action="screen-ready">準備完了</button>` : ""}
-        ${isGasMode() && state.role === "screen" ? `<button class="screen-sync-button" data-action="screen-local-sync">${state.screenLocalSync ? "同一端末同期中" : "同一端末同期"}</button>` : ""}
         <div class="screen-top">
           <p>${escapeHtml(state.room.config.gameMeta.title)}</p>
           <span>${phaseLabel(state.room.phase)}</span>
@@ -1571,7 +1538,7 @@
 
   function movingSeconds() {
     const endAt = state.room.tallyingEndsAt ||
-      (isRemoteMode() && state.room.countdownEndsAt
+      (state.room.countdownEndsAt
         ? new Date(new Date(state.room.countdownEndsAt).getTime() + 3000).toISOString()
         : "");
     if (!endAt) return 0;
@@ -1579,8 +1546,7 @@
   }
 
   function isRemoteMoving() {
-    return isRemoteMode() &&
-      state.room.phase === Engine.PHASES.COUNTDOWN &&
+    return state.room.phase === Engine.PHASES.COUNTDOWN &&
       state.room.countdownEndsAt &&
       new Date(state.room.countdownEndsAt).getTime() <= serverNow();
   }
@@ -1622,10 +1588,6 @@
     }[status] || status;
   }
 
-  function loadRoom() {
-    return normalizeRoomShape(loadJson(STORAGE_KEYS.room, null)) || Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
-  }
-
   function normalizeRoomShape(room) {
     if (!room) return null;
     room.config = room.config || Engine.DEFAULT_CONFIG;
@@ -1650,38 +1612,7 @@
   }
 
   function saveRoom(kind, actor) {
-    if (!isRemoteMode()) state.room.updatedAt = new Date().toISOString();
     if (kind) logClient(kind, actor || "");
-  }
-
-  function broadcastLocalRoom() {
-    if (localSyncChannel && state.room) {
-      localSyncChannel.postMessage({ type: "room", room: state.room });
-    }
-  }
-
-  function applyLocalScreenRoom(room) {
-    if (isFirebaseMode()) return;
-    if (!isRemoteMode() || state.role !== "screen" || !state.screenLocalSync || !room) return;
-    if (
-      state.room &&
-      room.gameId === state.room.gameId &&
-      Number(room.roomVersion || 0) < Number(state.room.roomVersion || 0)
-    ) return;
-    state.room = room;
-    render();
-  }
-
-  function isRemoteMode() {
-    return true;
-  }
-
-  function isGasMode() {
-    return false;
-  }
-
-  function isFirebaseMode() {
-    return true;
   }
 
   function remoteModeLabel() {
@@ -1701,25 +1632,8 @@
     }
   }
 
-  function pollRemoteState() {
-    if (isFirebaseMode()) return;
-    if (!isRemoteMode() || !state.room) return;
-    if (!shouldPollRemoteState()) return;
-    if (state.room.phase === Engine.PHASES.REVEAL) {
-      if (state.role !== "screen" && state.role !== "player") return;
-      const now = Date.now();
-      if (now - state.lastRevealPollAt < REMOTE_REVEAL_POLL_INTERVAL_MS) return;
-      state.lastRevealPollAt = now;
-      refreshRemoteState({ revealOnly: true });
-      return;
-    }
-    state.lastRevealPollAt = 0;
-    state.revealCompletionCheckedFor = "";
-    refreshRemoteState();
-  }
-
   function checkRevealCompletionRemoteState() {
-    if (!isRemoteMode() || state.syncing || state.room.phase !== Engine.PHASES.REVEAL) return;
+    if (state.syncing || state.room.phase !== Engine.PHASES.REVEAL) return;
     const stage = Engine.getCurrentStage(state.room);
     const result = getCurrentStageResult();
     if (!stage || getRevealFloor(stage, result) < stage.params.N) return;
@@ -1731,7 +1645,7 @@
   }
 
   async function refreshRemoteState(options = {}) {
-    if (!isRemoteMode() || state.syncing) return;
+    if (state.syncing) return;
     if (!options.force && !shouldPollRemoteState()) return;
     try {
       state.syncing = true;
@@ -1804,7 +1718,6 @@
   }
 
   async function restartFirebaseSync() {
-    if (!isFirebaseMode()) return;
     if (state.firebaseUnsubscribe) {
       state.firebaseUnsubscribe();
       state.firebaseUnsubscribe = null;
@@ -1835,10 +1748,10 @@
   }
 
   function shouldPollRemoteState() {
-    if (!isRemoteMode() || !state.room) return false;
+    if (!state.room) return false;
     if (state.role === "player") return Boolean(state.playerUuid) && state.room.phase === Engine.PHASES.VOTING && !isEditingPlayerText();
     if (state.role === "host") return Boolean(state.hostAuthed && state.hostToken) && [Engine.PHASES.LOBBY, Engine.PHASES.VOTING].includes(state.room.phase);
-    if (state.role === "screen") return !state.screenLocalSync && Boolean(state.screenReady || state.room.phase !== Engine.PHASES.LOBBY);
+    if (state.role === "screen") return Boolean(state.screenReady || state.room.phase !== Engine.PHASES.LOBBY);
     return false;
   }
 
@@ -1923,17 +1836,13 @@
     const normalizedConfig = Engine.normalizeConfig(config);
     const hasCurrentGameProgress = state.room.players.length || Object.keys(state.room.stageResults || {}).length;
     const nextRoom = hasCurrentGameProgress ? Engine.createNextGameRoom(state.room, normalizedConfig) : Engine.createInitialRoom(normalizedConfig);
-    if (isRemoteMode()) {
-      const result = await runMutation(
-        () => ({ ok: true, room: nextRoom }),
-        "/api/host/import-config",
-        { config: normalizedConfig, preservePlayers: true }
-      );
-      if (!result.ok) return showToast(result.error);
-      state.room = result.room;
-    } else {
-      state.room = nextRoom;
-    }
+    const result = await runMutation(
+      () => ({ ok: true, room: nextRoom }),
+      "/api/host/import-config",
+      { config: normalizedConfig, preservePlayers: true }
+    );
+    if (!result.ok) return showToast(result.error);
+    state.room = result.room;
     saveRoom(logKind || "host.config.import", "host");
     showToast("次ゲームを開始しました。参加者はアクセス後に表示されます。");
     render();
@@ -2014,7 +1923,7 @@
   }
 
   async function ensurePersonalHistoryCache(uuid) {
-    if (!isRemoteMode() || !uuid || uuid !== state.playerUuid) return;
+    if (!uuid || uuid !== state.playerUuid) return;
     if (getPersonalHistoryCache(uuid) || state.historyLoadingUuid === uuid) return;
     state.historyLoadingUuid = uuid;
     state.historyError = "";
@@ -2059,35 +1968,8 @@
     }
   }
 
-  async function fetchJsonWithRetry(url, options, attempt = 0) {
-    try {
-      const response = await fetch(url, options);
-      if (!response.ok && response.status >= 500 && attempt < 2) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return normalizePublicResponse(updateServerTime(await response.json()));
-    } catch (error) {
-      if (attempt >= 2) throw error;
-      const delay = 400 * Math.pow(2, attempt);
-      logClient("api.retry", `${attempt + 1}/3 ${error.message}`);
-      await sleep(delay);
-      return fetchJsonWithRetry(url, options, attempt + 1);
-    }
-  }
-
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  function apiUrl(path, payload) {
-    const url = new URL(BUILD_CONFIG.GAS_API_BASE_URL);
-    url.searchParams.set("path", path);
-    Object.entries(withApiMeta(payload || {})).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && typeof value !== "object") {
-        url.searchParams.set(key, String(value));
-      }
-    });
-    return url;
   }
 
   function withApiMeta(payload) {
@@ -2095,7 +1977,6 @@
       role: state.role,
       uuid: state.playerUuid || payload.uuid || "",
     };
-    if (BUILD_CONFIG.GAS_API_KEY) meta.apiKey = BUILD_CONFIG.GAS_API_KEY;
     if (state.hostToken) meta.hostToken = state.hostToken;
     return Object.assign({}, payload, meta);
   }
@@ -2191,7 +2072,7 @@
   }
 
   function checkHostTokenExpiry() {
-    if (!isRemoteMode() || state.role !== "host" || !state.hostAuthed || !state.hostTokenExpiresAt) return;
+    if (state.role !== "host" || !state.hostAuthed || !state.hostTokenExpiresAt) return;
     const expiresAt = new Date(state.hostTokenExpiresAt).getTime();
     if (Number.isFinite(expiresAt) && serverNow() >= expiresAt) {
       clearHostAuth("ホスト認証の有効期限が切れました。再認証してください。");

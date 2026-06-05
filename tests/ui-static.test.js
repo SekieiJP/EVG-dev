@@ -5,6 +5,7 @@ const path = require("path");
 const root = path.resolve(__dirname, "..");
 const appSource = fs.readFileSync(path.join(root, "game/assets/js/app.js"), "utf8");
 const cssSource = fs.readFileSync(path.join(root, "game/assets/css/styles.css"), "utf8");
+const configSource = fs.readFileSync(path.join(root, "game/assets/js/config.js"), "utf8");
 
 function section(source, start, end) {
   const startIndex = source.indexOf(start);
@@ -62,4 +63,14 @@ run("player view has no manual next button or ranking hold state", () => {
   assert.strictEqual(appSource.includes("/api/player/proceed-next"), false);
   assert.strictEqual(appSource.includes("playerRankingHold"), false);
   assert.strictEqual(appSource.includes("restorePlayerRankingHoldIfNeeded"), false);
+});
+
+run("client runtime contains no GAS or local fallback transport", () => {
+  assert.strictEqual(appSource.includes("GAS_API_BASE_URL"), false);
+  assert.strictEqual(appSource.includes("GAS_API_KEY"), false);
+  assert.strictEqual(appSource.includes("USE_GAS_API"), false);
+  assert.strictEqual(appSource.includes("fetchJsonWithRetry"), false);
+  assert.strictEqual(appSource.includes("screenLocalSync"), false);
+  assert.strictEqual(configSource.includes("script.google.com/macros"), false);
+  assert.strictEqual(configSource.includes("GAS_API"), false);
 });

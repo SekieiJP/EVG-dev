@@ -305,6 +305,7 @@
           <li>2026-06-06追記: MajorUpdate260606の回答に従い、現在Skill値はStageSkill上位5件の合計へ変更し、既存データへの遡及移行は行わない。E7入場料は<code>{"type":"E7_entry_fee","score":-M}</code>として棄権以外のチケット送信者へ乗車階到達時に適用し、E8完乗ボーナスは<code>{"type":"E8_completion_bonus","score":M}</code>として<code>status === "success"</code>のプレイヤーへ下車階到達時に適用する。</li>
           <li>2026-06-06追記: Player復帰はFirebase RTDBのroot <code>players/{uuid}</code>を正とし、保存済み名前・現在Skill・StageSkill履歴を現在roomへ戻す方式にした。Firebase匿名認証の<code>auth.uid</code>をUUIDとして使うため、任意の過去UUIDを別匿名uidから引き継ぐ処理は実装していない。別端末引き継ぎが必要なら、Blaze + Cloud Functions等でclaim/transfer処理を追加する必要がある。</li>
           <li>2026-06-06追記: Spark + RTDB RulesだけでPlayer復帰を成立させるため、本人は<code>rooms/{roomId}/playerStats/{uid}</code>とroot <code>players/{uid}</code>を書ける。Cloud Functionsによるサーバ検証がないため、厳密な改ざん耐性はBlaze移行時の課題として残る。</li>
+          <li>2026-06-06追記: MajorUpdate260606の回答に従い、静的クライアントからGAS接続先、GAS API key、GAS用fetchリトライ、同一端末localStorage Screen同期を削除した。<code>gas/</code>配下の旧実装とテスト資産は参照用に残すが、通常UIの通信経路はFirebase adapterだけにした。</li>
         </ul>
       </section>
 
