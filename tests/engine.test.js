@@ -156,6 +156,50 @@ run("special floor bonus applies after capacity check", () => {
   assert.strictEqual(result.players.p1.score, 46);
 });
 
+run("entry fee charges every non-abstained ticket including invalid tickets", () => {
+  const result = Engine.calculateStage(
+    stage({
+      events: [
+        { type: "E2_forbidden", fromFloor: 4, toFloor: 5 },
+        { type: "E7_entry_fee", score: -12 },
+      ],
+    }),
+    players(["A", "B", "C"]),
+    {
+      p1: { uuid: "p1", boardFloor: 1, exitFloor: 3, predictions: {} },
+      p2: { uuid: "p2", boardFloor: 4, exitFloor: 8, predictions: {} },
+      p3: { uuid: "p3", abstained: true, predictions: {} },
+    }
+  );
+  assert.strictEqual(result.players.p1.score, 9);
+  assert.strictEqual(result.players.p2.status, "invalid");
+  assert.strictEqual(result.players.p2.score, -27);
+  assert.strictEqual(result.players.p3.score, 0);
+});
+
+run("completion bonus applies only to successful exits", () => {
+  const result = Engine.calculateStage(
+    stage({ params: { X: 1 }, events: [{ type: "E8_completion_bonus", score: 25 }] }),
+    players(["A", "B"]),
+    {
+      p1: { uuid: "p1", boardFloor: 1, exitFloor: 2, predictions: {} },
+      p2: { uuid: "p2", boardFloor: 1, exitFloor: 10, predictions: {} },
+    }
+  );
+  assert.strictEqual(result.players.p1.status, "forced_off");
+  assert.strictEqual(result.players.p1.eventBonus, 0);
+  assert.strictEqual(result.players.p2.eventBonus, 0);
+
+  const success = Engine.calculateStage(
+    stage({ events: [{ type: "E8_completion_bonus", score: 25 }] }),
+    players(["A"]),
+    { p1: { uuid: "p1", boardFloor: 1, exitFloor: 2, predictions: {} } }
+  );
+  assert.strictEqual(success.players.p1.status, "success");
+  assert.strictEqual(success.players.p1.eventBonus, 25);
+  assert.strictEqual(success.players.p1.score, 39);
+});
+
 run("prediction no answer and correct answer scoring are applied", () => {
   const result = Engine.calculateStage(
     stage({
@@ -267,7 +311,25 @@ run("player prediction can target top pre-prediction scorer", () => {
   assert.strictEqual(result.players.p2.predictionBreakdown[0].matched, true);
 });
 
-run("current skill skips best stage and sums second through fifth", () => {
-  assert.strictEqual(Engine.calculateCurrentSkill([10, 20, 30, 40, 50]), 100);
-  assert.strictEqual(Engine.calculateCurrentSkill([90, 10]), 10);
+run("current skill sums top five stage skills", () => {
+  assert.strictEqual(Engine.calculateCurrentSkill([10, 20, 30, 40, 50]), 150);
+  assert.strictEqual(Engine.calculateCurrentSkill([90, 10]), 100);
+});
+
+run("tally stores current skill delta per player result", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room = Engine.registerPlayer(room, "Bob", "bob").room;
+  room.players[0].stageSkillHistory = [10, 20, 30, 40, 50];
+  room.players[0].skill = Engine.calculateCurrentSkill(room.players[0].stageSkillHistory);
+  const currentStage = Engine.getCurrentStage(room);
+  room.tickets[currentStage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 2, predictions: {} },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 3, predictions: {} },
+  };
+  const tallied = Engine.tallyCurrentStage(Object.assign({}, room, { phase: Engine.PHASES.COUNTDOWN }));
+  const alice = tallied.room.stageResults[currentStage.stageId].players.alice;
+  assert.strictEqual(typeof alice.skillBefore, "number");
+  assert.strictEqual(typeof alice.skillAfter, "number");
+  assert.strictEqual(alice.skillDelta, Number((alice.skillAfter - alice.skillBefore).toFixed(2)));
 });

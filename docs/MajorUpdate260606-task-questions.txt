@@ -1,0 +1,279 @@
+MajorUpdate260606 現行コード照合メモ・実装タスク・確認質問
+作成日: 2026-06-06
+
+参照元:
+- docs/MajorUpdate260606.txt
+- docs/elevator-game-requirements.md
+- game/assets/js/engine.js
+- game/assets/js/app.js
+- game/assets/js/firebase-adapter.js
+- gas/src/Code.gs
+- firebase/database.rules.json
+- tests/*.test.js
+
+前提:
+- MajorUpdate260606.txt には「最適化のために過去データとの互換性を失う変更をしてもよい」と明記されている。
+- 現在はFirebase RTDBを進行中ゲームの主バックエンドとし、GASは過去アーカイブ寄りへ移す方針が既にある。
+- docs/elevator-game-requirements.md は未コミット変更を含み、Skill定義が「上位1-5番目の5つの合計」へ更新されている。
+
+============================================================
+1. 実装タスク整理
+============================================================
+
+T1. Skill計算ロジック更新
+現状:
+- engine.js の calculateCurrentSkill() は「最高値を除外し、2-5番目を合計」する旧仕様。
+- gas/src/Code.gs の currentSkill_() も同じ旧仕様。
+- tests/engine.test.js も旧仕様名「current skill skips best stage and sums second through fifth」を期待している。
+
+必要タスク:
+- 現行仕様に合わせ、現在Skill値を StageSkill 上位1-5番目の5つの合計へ変更する。
+- engine.js、GAS側ヘルパ、テスト期待値を更新する。
+- 既存playerStats/stageSkillHistoryから再計算する移行処理を用意するか、互換破棄前提で新規集計から正にする。
+- StageSkill算出自体は既に実装されているが、E7/E8追加後に得点・StageSkillへ反映されることを回帰テストする。
+
+T2. Player画面の個人戦績表示強化
+現状:
+- Playerタブのヘッダに現在Skillらしき値は表示されている。
+- 結果表示では StageSkill は表示されるが、「個人Skillの上昇値差分 (+120.52) を緑文字で表示」は未実装。
+- 現在Skillはゲーム中に room.players[].skill として更新されるが、どのタイミングのSkillを基準に差分表示するかは未確定。
+
+必要タスク:
+- Playerタブに現在Skill、平均Skill、合計Skillなど、個人戦績の表示領域を追加/整理する。
+- reveal/結果表示時に「このステージで増えた現在Skill値」を算出し、緑文字の (+120.52) 形式で表示する。
+- 差分計算用に、集計前Skill、集計後Skill、今回StageSkillを stageResults.players[uuid] または playerStats に保存する。
+- 参加者1名などStageSkill未計算の場合の表示を決める。
+
+T3. Historyタブ表示項目の更新
+現状:
+- app.js の renderPlayerStats() は、累積得点、平均得点、表彰台回数を表示している。
+- docs/elevator-game-requirements.md の 10.5.4 では、これら3項目が削除され、最高得点、参加ゲーム数、参加ステージ数、強制下車回数、予想イベント正解率、優勝回数などが残っている。
+- gas-logic.test.js はまだ totalScore, averageScore, podiums を必須キーとしている。
+
+必要タスク:
+- History UIを10.5.4の新しい表示項目に合わせる。
+- GAS集計/テスト、Firebase playerHistory() の summary を同じキー体系へ揃える。
+- 「最高得点」がステージ単位なのかゲーム単位なのか、仕様文言に合わせて定義を固定する。
+- 予想イベント正解率の分母は「回答した予想イベント数」で統一する。
+
+T4. completedGames閲覧機能
+現状:
+- Firebase adapter は rooms/{roomId}/completedGames を購読・復元している。
+- History画面は現在プレイヤー中心で、completedGames配下をゲーム単位/ステージ単位で閲覧するUIはない。
+- /api/history/games は completedGames を返すが、表示は現在room.playersを基準にしたランキングに偏っている。
+
+必要タスク:
+- HistoryタブまたはHost画面に「過去ゲーム一覧」を追加する。
+- ゲームを選ぶと、ゲームサマリ、最終ランキング、ステージ一覧を表示する。
+- ステージを選ぶと、ステージランキング、各プレイヤーの得点内訳、StageSkill、チケット、予想結果を表示する。
+- completedGamesのスキーマを表示向けに正規化する。例: gameId/title/startedAt/endedAt/rankings/stages[]/players{}。
+- Firebase RTDBで大きいcompletedGamesを一括購読し続けるか、索引/詳細ノードへ分割するかを決める。
+
+T5. 新ゲーム開始後のPlayer自動復帰
+現状:
+- Player画面は state.playerUuid があっても room.players に存在しなければ参加登録フォームを表示する。
+- Firebase restorePlayer() は現在room.playersにUUIDが存在する場合だけ成功し、過去プレイヤーマスタやplayerStatsからの復元はできない。
+- GAS版 restorePlayer_() は saved player から復元する実装を持つ。
+
+必要タスク:
+- Firebase版にも「過去UUIDがDB上に存在すれば、名前入力なしで現在ゲームに参加復帰」する経路を作る。
+- 新ゲーム開始直後、localStorageにUUIDがあるPlayerは自動restoreを試み、成功したらフォームを出さずに参加状態へ入る。
+- 復元成功時に players/{uuid} と playerStats/{uuid} を作成/維持し、現在ゲームの表示対象へ加える。
+- 復元失敗時だけエラーまたは新規参加フォームを表示する。
+- Rulesで本人UUIDのrestore writeが成立するように、グローバルplayersまたはroom内playerStatsへのアクセス権限を見直す。
+
+T6. 「過去のデータを引き継いではじめる」の名前入力削除
+現状:
+- joinFormは常に名前inputをrequiredにしており、details内にrestoreUuidだけがある。
+- restoreUuidがあっても /api/player/join に name と uuid を送っている。
+
+必要タスク:
+- 新規参加フォームとUUID復元フォームを分離する。
+- UUID復元フォームは名前を求めず、/api/player/restore だけを呼ぶ。
+- UUIDが見つかれば保存済み名前で参加、見つからなければエラー。
+- 復元成功後はlocalStorageのplayerUuidを更新/維持する。
+
+T7. Player画面の「次へ」ボタン削除
+現状:
+- renderPlayerBody() と renderPlayerResult() に data-action="player-next" のボタンが残っている。
+- Firebase adapterにも /api/player/proceed-next が残っている。
+- 仕様書内にはまだ「中間ランキングの次へ」前提の古い記述が残っている箇所がある。
+
+必要タスク:
+- Player画面から「次へ」ボタンを削除する。
+- playerRankingHold/localStorage保持と /api/player/proceed-next を廃止または無害化する。
+- Firebase購読でHostのフェーズ進行へ自動追従する前提にUI/テストを更新する。
+- docs/test-plan.md と docs/screen-spec.md の古い「次へ」テスト/仕様を更新する。
+
+T8. E7 入場料イベント追加
+仕様:
+- E7 入場料: チケット購入者全員に一律マイナスM点。
+- そのステージ不参加の場合は適用されない。
+
+必要タスク:
+- engine.js/GAS calculateStage に E7_entry_fee を追加する。
+- チケット購入者のうち abstained でないプレイヤーへ -M を適用する。
+- eventBreakdown、結果表示、revealスコア更新へ反映する。
+- tool/stage-creator.html にE7入力UIを追加する。
+- sample-configs/rule-slides/test を追加/更新する。
+- 「棄権」は不参加扱いでE7なし、「不正チケット/乗車不可」は購入者なのでE7あり、という解釈でよいか確認する。
+
+T9. E8 完乗ボーナスイベント追加
+仕様:
+- E8 完乗ボーナス: 下車成功したらM点。
+
+必要タスク:
+- engine.js/GAS calculateStage に E8_completion_bonus を追加する。
+- status === success のプレイヤーへ +M を適用する。
+- eventBreakdown、結果表示、revealスコア更新へ反映する。
+- tool/stage-creator.html にE8入力UIを追加する。
+- E6_view_bonusとの併用順序、表示ラベル、ボーナス確定階を決める。
+
+T10. 締切カウントダウン再描画による入力破棄/フォーカス喪失修正
+現状:
+- tick() はPlayerの入力中は isEditingPlayerText() により再描画を避けるガードがある。
+- ただしフォーカスが外れた瞬間の再描画では、未送信の入力値が保存済みticket初期値に戻る可能性がある。
+
+必要タスク:
+- カウントダウン表示だけをDOM差分更新する、またはフォーム入力draftをstateへ保持する。
+- select/number入力のフォーカス・値をtick再描画で破壊しないテストを追加する。
+
+T11. 退室ボタンが別プレイヤーを退室させる不具合
+現状:
+- UIボタンには data-uuid があり、handleClick は button.dataset.uuid を使っている。
+- engine.removePlayerFromRoom() は指定uuidを削除する。
+- Firebase writeHostSideEffects() はplayers/scores/tickets/resultsをまとめて更新している。
+
+必要タスク:
+- DOM上のボタンUUID、confirm対象名、送信payload.uuid、削除後playersをログに残す。
+- 複数プレイヤーで各行の退室ボタンを押し、指定UUIDだけが消える回帰テストを追加する。
+- Firebase REST/RTDB更新で空オブジェクト/null化が別UUIDを巻き込まないか確認する。
+
+T12. Host再読み込み後に結果発表が終わらなくなる不具合
+現状:
+- Hostの「次へ」は reveal 中いつでも enabled=true で、演出完了判定とは連動していない。
+- Player結果解禁やScreen演出完了は animationStartedAt と getRevealDuration() から計算している。
+- 直近変更で長階層ステージの空フロア短縮が入り、result有無で演出完了時刻が変わり得る。
+
+必要タスク:
+- Host再読み込み後も results/{stageId} と animationStartedAt から同じ演出完了状態を復元できるようにする。
+- Hostの「次へ」を演出完了前に押せる仕様なのか、完了後だけ押せる仕様なのかを統一する。
+- revealCompletionCheckedFor/lastRevealPollAt周辺の再読み込み時初期値を確認する。
+- result未取得時のgetRevealDuration() fallbackで完了判定がズレないようにする。
+
+T13. 最終ステージrankingで総合得点右カラムが出るネタバレ修正
+現状:
+- renderRankingBoard() は phase === ranking かつ currentStageIndex > 0 なら、最終ステージでも右カラム「総合」を表示する。
+- 最終ステージ後も一旦rankingフェーズを経由し、その後Hostがnext-stageでfinalへ進む。
+
+必要タスク:
+- 最終ステージのrankingフェーズでは「今ステージ」だけ表示、またはrankingフェーズを経由せずfinalへ進む。
+- Hostの進行ボタン表示、Screen/Player表示、テストを更新する。
+
+T14. Firebaseスキーマ/Rules再設計
+現状:
+- room内 players は現在ゲーム表示対象、playerStats はroom内購読対象。
+- root players はRules上存在するが、現行adapterの復元/表示で実質使われていない。
+- completedGamesはroom配下で一括read可能。
+
+必要タスク:
+- 過去参加者マスタ、現在ゲーム参加者、過去ゲーム履歴、個人戦績集計を分離する。
+- 互換破棄可なら、RTDBノード構成をこのMajorUpdateに合わせて再設計する。
+- Rules、adapter serializer/deserializer、テストを更新する。
+
+============================================================
+2. 実装順の提案
+============================================================
+
+Phase 1: データ/計算の土台
+- T1 Skill計算更新
+- T8 E7追加
+- T9 E8追加
+- T14 Firebaseスキーマ方針確定
+
+Phase 2: Player復帰とPlayer UI
+- T5 新ゲーム後の自動復帰
+- T6 名前なしUUID復元
+- T7 Player次へ削除
+- T2 個人Skill表示・差分表示
+
+Phase 3: History/過去履歴
+- T3 History表示項目更新
+- T4 completedGames閲覧UI
+
+Phase 4: 不具合修正と回帰テスト
+- T10 カウントダウン入力破壊
+- T11 退室対象誤り
+- T12 Host再読み込み後reveal復元
+- T13 最終ステージrankingネタバレ
+
+============================================================
+3. 択一式で回答できる確認質問
+============================================================
+
+Q1. Skill現在値の新定義を既存データにも遡及適用しますか。
+B. いいえ。互換破棄可として、今後集計されるデータだけ新定義にする。
+
+Q2. Player画面のSkill差分 (+120.52) の基準はどれにしますか。
+A. 集計直前の現在Skillから、今回StageSkill反映後の現在Skillへの差分。
+
+Q3. StageSkill未計算ステージの差分表示はどうしますか。
+A. 表示しない。
+
+Q4. Historyタブの公開範囲はどうしますか。
+C. Hostは全員、Playerは本人と公開ランキングだけ表示する。
+
+Q5. completedGamesの保存スキーマはどれを優先しますか。
+B. 互換を捨て、completedGameSummaries と completedGameDetails/{gameId} へ分割する。
+
+Q6. 新ゲーム開始後、localStorageにUUIDがあるPlayerの自動復帰失敗時の挙動はどれにしますか。
+自由記述:1回再試行して、エラーメッセージを出し、新規参加フォームを表示する。
+
+Q7. 「過去のデータを引き継いではじめる」でUUIDが見つかった時、名前変更を同時に許可しますか。
+A. 許可しない。保存済みの現在名で復元し、名前変更は参加後の設定画面で行う。
+
+Q8. Player画面の「次へ」ボタン削除後、中間ランキングから次ステージへの追従はどうしますか。
+A. Firebase購読でHost進行に自動追従する。
+
+Q9. E7 入場料の対象はどれにしますか。
+A. 棄権以外のチケット送信者全員。不正チケット/乗車不可でも購入者としてマイナス。
+
+Q10. E7のJSONプロパティ名はどれにしますか。
+C. { "type": "E7_entry_fee", "score": -M }
+
+Q11. E8 完乗ボーナスの「下車成功」はどれにしますか。
+A. result.status === "success" のプレイヤー。
+
+Q12. E8のJSONプロパティ名はどれにしますか。
+B. { "type": "E8_completion_bonus", "score": M }
+
+Q13. E7/E8のreveal中スコア加減算タイミングはどれにしますか。
+A. E7は乗車階到達時、E8は下車階到達時。
+
+Q14. 締切カウントダウン中の入力保護はどの方針にしますか。
+A. フォームを再描画せず、カウントダウン数字だけDOM更新する。
+
+Q15. 退室不具合の修正方針はどれを優先しますか。
+自由記述: 現行UIを維持し、UUIDログと回帰テストを追加して原因を絞る。また、Hostはブラウザ上での通信ログ保存件数を2000件に増やす。
+
+Q16. Host再読み込み後のreveal完了判定はどうしますか。
+B. revealEndsAtをDBに保存し、端末はその時刻だけを見る。
+
+Q17. 最終ステージ後のrankingフェーズはどうしますか。
+A. 最終ステージでもrankingを経由するが、右カラムの総合は表示しない。
+
+Q18. Firebaseの過去参加者マスタはどこに置きますか。
+B. root players/{uuid} を正マスタにし、room playersは現在ゲーム表示用に限定する。
+
+Q19. completedGamesの購読方式はどれにしますか。
+C. Hostだけ全体取得し、Playerは本人関連だけ取得する。
+
+Q20. GAS側の扱いはどこまで更新しますか。
+自由記述: GASへのアクセスは全て廃止する。
+
+Q21. 過去データ互換を失う変更の許容範囲はどれですか。
+A. RTDBの既存roomデータは全破棄してよい。
+
+Q22. このMajorUpdateの実装単位はどう分けますか。
+自由記述: Skill/E7/E8、Player復帰、History、不具合修正の4段階に分ける。必要に応じてサブエージェントを用いて良い。
+

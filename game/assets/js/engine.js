@@ -579,14 +579,20 @@
   }
 
   function calculateEventBonus(stage, result, successFloors) {
-    if (result.actualRise <= 0) return 0;
     let total = 0;
     (stage.events || []).forEach((event) => {
+      if (event.type === "E7_entry_fee") {
+        total += Number(event.score || 0);
+      }
+      if (result.actualRise <= 0) return;
       if (event.type === "E4_special_floor" && successFloors.includes(Number(event.floor))) {
         total += Number(event.bonus || event.score || 0);
       }
       if (event.type === "E6_view_bonus" && result.status === "success") {
         total += Number(result.ticket.exitFloor) * Number(event.bonusPerExitFloor || event.multiplier || 0);
+      }
+      if (event.type === "E8_completion_bonus" && result.status === "success") {
+        total += Number(event.score || 0);
       }
     });
     return roundScore(total);
@@ -673,8 +679,18 @@
       if (event.type === "E6_view_bonus" && result.status === "success") {
         items.push({ label: "眺望", value: `降車階${result.ticket.exitFloor} x${event.bonusPerExitFloor || event.multiplier || 0}` });
       }
+      if (event.type === "E7_entry_fee") {
+        items.push({ label: "入場料", value: formatSignedScore(Number(event.score || 0)) });
+      }
+      if (event.type === "E8_completion_bonus" && result.status === "success") {
+        items.push({ label: "完乗ボーナス", value: formatSignedScore(Number(event.score || 0)) });
+      }
     });
     return items;
+  }
+
+  function formatSignedScore(value) {
+    return `${value >= 0 ? "+" : ""}${roundScore(value)}`;
   }
 
   function applyStageSkills(room, result) {
@@ -698,8 +714,11 @@
       const player = room.players.find((entry) => entry.uuid === item.uuid);
       if (player) {
         player.stageSkillHistory = player.stageSkillHistory || [];
+        item.skillBefore = calculateCurrentSkill(player.stageSkillHistory);
         player.stageSkillHistory.push(stageSkill);
         player.skill = calculateCurrentSkill(player.stageSkillHistory);
+        item.skillAfter = player.skill;
+        item.skillDelta = roundScore(item.skillAfter - item.skillBefore);
       }
     });
   }
@@ -707,7 +726,7 @@
   function calculateCurrentSkill(history) {
     const sorted = (history || []).slice().sort((a, b) => b - a);
     while (sorted.length < 5) sorted.push(0);
-    return roundScore(sorted.slice(1, 5).reduce((sum, value) => sum + value, 0));
+    return roundScore(sorted.slice(0, 5).reduce((sum, value) => sum + value, 0));
   }
 
   function calculateRiseFromIntervals(intervals) {

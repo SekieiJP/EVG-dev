@@ -681,7 +681,7 @@
             <div><dt>イベント補正</dt><dd>${formatScore(myResult.eventBonus)}</dd></div>
             <div><dt>チケット代</dt><dd>-${formatScore(myResult.penalty)}</dd></div>
             <div><dt>成功階数</dt><dd>${formatScore(myResult.actualRise)}階</dd></div>
-            <div><dt>StageSkill</dt><dd>${myResult.stageSkill === null ? "-" : formatSkill(myResult.stageSkill)}</dd></div>
+            <div><dt>StageSkill</dt><dd>${myResult.stageSkill === null ? "-" : `${formatSkill(myResult.stageSkill)}${renderSkillDelta(myResult)}`}</dd></div>
           </dl>
         </section>
         <section class="panel">
@@ -1178,6 +1178,18 @@
       });
       if (viewBonusPlayer) return true;
     }
+    if ((stage.events || []).some((event) => event.type === "E7_entry_fee" && Number(event.score || 0) !== 0)) {
+      const entryFeePlayer = Object.values(result.players || {}).some((playerResult) => {
+        return playerResult.ticket && !playerResult.ticket.abstained && Number(playerResult.ticket.boardFloor) === targetFloor;
+      });
+      if (entryFeePlayer) return true;
+    }
+    if ((stage.events || []).some((event) => event.type === "E8_completion_bonus" && Number(event.score || 0) !== 0)) {
+      const completionBonusPlayer = Object.values(result.players || {}).some((playerResult) => {
+        return playerResult.status === "success" && playerResult.ticket && Number(playerResult.ticket.exitFloor) === targetFloor;
+      });
+      if (completionBonusPlayer) return true;
+    }
     if (targetFloor === Number(stage.params.N || 0)) {
       return Object.values(result.players || {}).some((playerResult) => {
         return (playerResult.predictionBreakdown || []).some((item) => Number(item.score || 0) !== 0);
@@ -1311,6 +1323,22 @@
         if (currentFloor === Number(playerResult.ticket.exitFloor)) {
           delta += bonus;
           reason = "眺望";
+        }
+      }
+      if (event.type === "E7_entry_fee" && currentFloor >= Number(playerResult.ticket.boardFloor)) {
+        const fee = Number(event.score || 0);
+        score += fee;
+        if (currentFloor === Number(playerResult.ticket.boardFloor)) {
+          delta += fee;
+          reason = "入場料";
+        }
+      }
+      if (event.type === "E8_completion_bonus" && playerResult.status === "success" && currentFloor >= Number(playerResult.ticket.exitFloor)) {
+        const bonus = Number(event.score || 0);
+        score += bonus;
+        if (currentFloor === Number(playerResult.ticket.exitFloor)) {
+          delta += bonus;
+          reason = "完乗";
         }
       }
     });
@@ -1544,6 +1572,13 @@
         <div><dt>表彰台回数</dt><dd>${formatScore(summary.podiums ?? podiums)}</dd></div>
       </dl>
     `;
+  }
+
+  function renderSkillDelta(result) {
+    if (!result || result.stageSkill === null || result.stageSkill === undefined) return "";
+    const delta = Number(result.skillDelta || 0);
+    if (!delta) return "";
+    return ` <span class="skill-delta">(${delta > 0 ? "+" : ""}${formatSkill(delta)})</span>`;
   }
 
   function nextHostAction() {

@@ -799,7 +799,7 @@ function applyStageSkills_(room, result) {
 function currentSkill_(history) {
   const sorted = (history || []).slice().sort(function(a, b) { return b - a; });
   while (sorted.length < 5) sorted.push(0);
-  return round_(sorted.slice(1, 5).reduce(function(sum, value) { return sum + value; }, 0));
+  return round_(sorted.slice(0, 5).reduce(function(sum, value) { return sum + value; }, 0));
 }
 
 function calculateRiseFromIntervals_(intervals) {

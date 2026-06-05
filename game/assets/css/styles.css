@@ -250,6 +250,11 @@ code {
   color: var(--muted);
 }
 
+.skill-delta {
+  color: #16a34a;
+  font-weight: 900;
+}
+
 .form-grid,
 .ticket-grid,
 .settings-grid,
