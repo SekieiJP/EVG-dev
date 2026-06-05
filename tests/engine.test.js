@@ -68,6 +68,70 @@ run("forbidden floor accepts ticket but charges penalty only", () => {
   assert.strictEqual(result.players.p1.score, -15);
 });
 
+run("prediction metric normalizes to default question text", () => {
+  const config = Engine.normalizeConfig({
+    stages: [
+      stage({
+        events: [
+          {
+            type: "E1_prediction",
+            question: "カスタム文",
+            answerFormat: "integer",
+            metric: "forcedOffCount",
+          },
+          {
+            type: "E1_prediction",
+            question: "手動判定の問題文",
+            answerFormat: "integer",
+            correctAnswer: 3,
+          },
+        ],
+      }),
+    ],
+  });
+  assert.strictEqual(config.stages[0].events[0].question, "強制下車は何回発生する？");
+  assert.strictEqual(config.stages[0].events[1].question, "手動判定の問題文");
+});
+
+run("remove player leaves save data conceptually intact but removes current room participation", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room = Engine.registerPlayer(room, "Bob", "bob").room;
+  const stage = Engine.getCurrentStage(room);
+  room.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {}, submittedAt: "2026-06-01T00:00:00.000Z" },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 4, predictions: {}, submittedAt: "2026-06-01T00:00:00.000Z" },
+  };
+  room.ticketPresence = {
+    [stage.stageId]: {
+      alice: { status: "submitted", updatedAt: "2026-06-01T00:00:00.000Z" },
+      bob: { status: "submitted", updatedAt: "2026-06-01T00:00:00.000Z" },
+    },
+  };
+  const tallied = Engine.tallyCurrentStage(Object.assign({}, room, { phase: Engine.PHASES.COUNTDOWN }));
+  assert.strictEqual(tallied.ok, true, tallied.error);
+  const removed = Engine.removePlayerFromRoom(tallied.room, "bob", "host");
+
+  assert.strictEqual(removed.ok, true, removed.error);
+  assert.strictEqual(removed.room.players.some((player) => player.uuid === "bob"), false);
+  assert.strictEqual(removed.room.scores.bob, undefined);
+  assert.strictEqual(removed.room.tickets[stage.stageId].bob, undefined);
+  assert.strictEqual(removed.room.ticketPresence[stage.stageId].bob, undefined);
+  assert.strictEqual(removed.room.stageResults[stage.stageId].players.bob, undefined);
+  assert.strictEqual(removed.room.stageResults[stage.stageId].rankings.some((row) => row.uuid === "bob"), false);
+  assert.strictEqual(removed.room.stageResults[stage.stageId].timeline.some((step) => {
+    return ["boarding", "exiting", "passengersBeforeCheck", "passengersAfterCheck", "forcedOff"]
+      .some((key) => (step[key] || []).includes("bob"));
+  }), false);
+});
+
+run("same game JSON creates distinct game ids on restart", () => {
+  const config = Engine.normalizeConfig(Engine.DEFAULT_CONFIG);
+  const first = Engine.createInitialRoom(config);
+  const second = Engine.createNextGameRoom(first, config);
+  assert.notStrictEqual(first.gameId, second.gameId);
+});
+
 run("zone multiplier applies only to successful P side", () => {
   const result = Engine.calculateStage(
     stage({ events: [{ type: "E3a_zone_multiplier", fromFloor: 3, toFloor: 5, multiplier: 2 }] }),

@@ -376,26 +376,14 @@
       const textarea = $("#configJson");
       try {
         const config = Engine.normalizeConfig(JSON.parse(textarea.value));
-        const hasCurrentGameProgress = state.room.players.length || Object.keys(state.room.stageResults || {}).length;
-        const nextRoom = hasCurrentGameProgress ? Engine.createNextGameRoom(state.room, config) : Engine.createInitialRoom(config);
-        if (isRemoteMode()) {
-          const result = await runMutation(
-            () => ({ ok: true, room: nextRoom }),
-            "/api/host/import-config",
-            { config, preservePlayers: true }
-          );
-          if (!result.ok) return showToast(result.error);
-          state.room = result.room;
-        } else {
-          state.room = nextRoom;
-        }
-        saveRoom("host.config.import", "host");
-        clearPlayerRankingHold();
-        showToast("次ゲームを開始しました。参加者はアクセス後に表示されます。");
-        render();
+        await startNextGameFromConfig(config, "host.config.import");
       } catch (error) {
         showToast(`JSONを読み込めません: ${error.message}`);
       }
+    }
+    if (action === "restart-current-config") {
+      if (!confirm("現在のゲームJSONでもう一度ゲームを開始します。参加者は再アクセス後に表示されます。")) return;
+      await startNextGameFromConfig(state.room.config, "host.config.restart");
     }
     if (action === "load-game-configs") {
       await loadGameConfigs(true);
@@ -434,6 +422,22 @@
       } catch (error) {
         showToast(`JSONを読み込めません: ${error.message}`);
       }
+    }
+    if (action === "remove-player") {
+      const uuid = button.dataset.uuid || "";
+      const player = state.room.players.find((item) => item.uuid === uuid);
+      if (!player) return showToast("現在ゲームの参加者ではありません。");
+      if (!confirm(`${player.name} を現在ゲームから退室させます。保存済み履歴は削除しません。`)) return;
+      const result = await runMutation(
+        () => Engine.removePlayerFromRoom(state.room, uuid, "host"),
+        "/api/host/remove-player",
+        { uuid, hostName: "host" }
+      );
+      if (!result.ok) return showToast(result.error || "退室できませんでした。");
+      state.room = result.room;
+      saveRoom("host.player.remove", "host");
+      showToast(`${player.name} を退室させました。`);
+      render();
     }
     if (action === "select-history") {
       state.selectedHistoryUuid = button.dataset.uuid;
@@ -738,6 +742,7 @@
             <h2>設定</h2>
             <div class="form-actions">
               <button type="button" data-action="export-config">Export</button>
+              <button type="button" data-action="restart-current-config">同じJSONで再開始</button>
             </div>
             <textarea id="configJson" rows="8" spellcheck="false">${escapeHtml(JSON.stringify(state.room.config, null, 2))}</textarea>
             <button type="button" data-action="import-config">Import</button>
@@ -1383,14 +1388,15 @@
           <td>${ticket ? ticket.abstained ? "棄権" : `${ticket.boardFloor}→${ticket.exitFloor}` : "未投票"}</td>
           <td>${formatScore(state.room.scores[player.uuid] || 0)}</td>
           <td>${formatSkill(player.skill || 0)}</td>
+          <td><button type="button" class="danger" data-action="remove-player" data-uuid="${escapeAttr(player.uuid)}">退室</button></td>
         </tr>
       `;
     });
     return `
       <div class="table-wrap">
         <table>
-          <thead><tr><th>名前</th><th>UUID</th><th>入力</th><th>得点</th><th>現在Skill</th></tr></thead>
-          <tbody>${rows.join("") || `<tr><td colspan="5">なし</td></tr>`}</tbody>
+          <thead><tr><th>名前</th><th>UUID</th><th>入力</th><th>得点</th><th>現在Skill</th><th>操作</th></tr></thead>
+          <tbody>${rows.join("") || `<tr><td colspan="6">なし</td></tr>`}</tbody>
         </table>
       </div>
     `;
@@ -1895,6 +1901,27 @@
     state.nextGameConfigsLoadedAt = "";
     state.nextGameConfigError = "Firebase版では次ゲーム候補の読み込みは未対応です。設定JSON Importを使用してください。";
     if (showLoading) showToast(state.nextGameConfigError);
+    render();
+  }
+
+  async function startNextGameFromConfig(config, logKind) {
+    const normalizedConfig = Engine.normalizeConfig(config);
+    const hasCurrentGameProgress = state.room.players.length || Object.keys(state.room.stageResults || {}).length;
+    const nextRoom = hasCurrentGameProgress ? Engine.createNextGameRoom(state.room, normalizedConfig) : Engine.createInitialRoom(normalizedConfig);
+    if (isRemoteMode()) {
+      const result = await runMutation(
+        () => ({ ok: true, room: nextRoom }),
+        "/api/host/import-config",
+        { config: normalizedConfig, preservePlayers: true }
+      );
+      if (!result.ok) return showToast(result.error);
+      state.room = result.room;
+    } else {
+      state.room = nextRoom;
+    }
+    saveRoom(logKind || "host.config.import", "host");
+    clearPlayerRankingHold();
+    showToast("次ゲームを開始しました。参加者はアクセス後に表示されます。");
     render();
   }
 

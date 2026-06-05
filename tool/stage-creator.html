@@ -505,6 +505,12 @@
           ["allSucceeded", "全員乗車成功 yes/no"],
           ["topPlayer", "基礎得点トップUUID"],
         ];
+        const DEFAULT_PREDICTION_QUESTIONS = {
+          forcedOffCount: "強制下車は何回発生する？",
+          totalBoarded: "乗車成功者数は？",
+          allSucceeded: "全員が乗車成功する？",
+          topPlayer: "このステージの最高得点者は？",
+        };
         const CHOICE_KEYS = ["ranges", "options", "choices"];
         const SAMPLE = {
           schemaVersion: "1.0.0",
@@ -620,16 +626,18 @@
         function normalizeEvent(event) {
           const source = event && typeof event === "object" ? event : {};
           const type = String(source.type || "E1_prediction");
+          const answerFormat = String(source.answerFormat || "integer");
+          const metric = String(source.metric || source.answerMetric || "");
           const eventData = {
             type,
-            question: String(source.question || ""),
-            answerFormat: String(source.answerFormat || "integer"),
-            metric: String(source.metric || source.answerMetric || ""),
+            question: predictionQuestionForMetric(metric, source.question),
+            answerFormat,
+            metric,
             correctAnswer: valueOrEmpty(source.correctAnswer),
             scoreOnCorrect: numberOr(source.scoreOnCorrect, 0),
             scoreOnWrong: numberOr(source.scoreOnWrong, 0),
             scoreOnNoAnswer: numberOr(source.scoreOnNoAnswer, 0),
-            choiceKey: choiceKeyFor(source),
+            choiceKey: choiceKeyFor(source, answerFormat),
             choices: choiceListFor(source),
             fromFloor: numberOr(source.fromFloor, 1),
             toFloor: numberOr(source.toFloor, numberOr(source.fromFloor, 1)),
@@ -652,9 +660,10 @@
           ];
         }
 
-        function choiceKeyFor(source) {
+        function choiceKeyFor(source, answerFormat) {
           if (Array.isArray(source.options)) return "options";
           if (Array.isArray(source.choices)) return "choices";
+          if (answerFormat === "select") return "options";
           return "ranges";
         }
 
@@ -722,20 +731,26 @@
           const extra = safeObject(event.extra);
           const base = { type: event.type };
           if (event.type === "E1_prediction") {
-            base.question = event.question.trim();
+            const metricQuestion = predictionQuestionForMetric(event.metric, event.question);
+            base.question = metricQuestion.trim();
             base.answerFormat = event.answerFormat;
             if (event.metric) base.metric = event.metric;
             if (event.correctAnswer !== "") base.correctAnswer = normalizeCorrectAnswer(event.correctAnswer);
             base.scoreOnCorrect = number(event.scoreOnCorrect);
             base.scoreOnWrong = number(event.scoreOnWrong);
             base.scoreOnNoAnswer = number(event.scoreOnNoAnswer);
-            if (event.answerFormat === "range" || event.answerFormat === "select") {
+            if (event.answerFormat === "range") {
               base[event.choiceKey || "ranges"] = event.choices.map((choice) => {
                 const item = { value: choice.value, label: choice.label };
                 if (choice.min !== "") item.min = number(choice.min);
                 if (choice.max !== "") item.max = number(choice.max);
                 return item;
               });
+            } else if (event.answerFormat === "select") {
+              base[event.choiceKey || "options"] = event.choices.map((choice) => ({
+                value: choice.value,
+                label: choice.label,
+              }));
             }
           } else if (event.type === "E2_forbidden") {
             base.fromFloor = integer(event.fromFloor);
@@ -807,7 +822,8 @@
           if (event.type === "E1_prediction") {
             if (!event.question) warnings.push(`${label}: question が空です。`);
             if (!ANSWER_FORMATS.some(([format]) => format === event.answerFormat)) errors.push(`${label}: answerFormat が未対応です。`);
-            if ((event.answerFormat === "range" || event.answerFormat === "select") && (!Array.isArray(event[event.choiceKey || "ranges"]) || event[event.choiceKey || "ranges"].length === 0)) {
+            const choices = predictionChoices(event);
+            if ((event.answerFormat === "range" || event.answerFormat === "select") && choices.length === 0) {
               errors.push(`${label}: 範囲/択一選択肢を1件以上追加してください。`);
             }
           } else if (event.type === "E2_forbidden" || event.type === "E3a_zone_multiplier" || event.type === "E3b_score_multiplier") {
@@ -819,6 +835,15 @@
             validateRange(errors, label, "threshold", event.threshold, 1, 999);
             if (number(event.multiplier) <= 0) errors.push(`${label}: multiplier は0より大きい値にしてください。`);
           }
+        }
+
+        function predictionQuestionForMetric(metric, fallback) {
+          return DEFAULT_PREDICTION_QUESTIONS[metric] || String(fallback || "");
+        }
+
+        function predictionChoices(event) {
+          const choices = event.ranges || event.options || event.choices || [];
+          return Array.isArray(choices) ? choices : [];
         }
 
         function validateFloorRange(errors, label, from, to, maxFloor) {
@@ -934,9 +959,11 @@
 
         function renderEventFields(event) {
           if (event.type === "E1_prediction") {
+            const questionReadonly = event.metric ? "readonly" : "";
+            const questionHint = event.metric ? `<p class="muted">正解メトリクス選択時は既定の問題文を使います。</p>` : "";
             return `
               <div class="grid" style="margin-top:12px">
-                <label>問題文<input data-event-field="question" value="${escapeAttr(event.question)}"></label>
+                <label>問題文<input data-event-field="question" value="${escapeAttr(event.question)}" ${questionReadonly}>${questionHint}</label>
                 <label>回答形式<select data-event-field="answerFormat">${ANSWER_FORMATS.map(([value, label]) => `<option value="${value}" ${value === event.answerFormat ? "selected" : ""}>${label}</option>`).join("")}</select></label>
                 <label>正解メトリクス<select data-event-field="metric">${METRICS.map(([value, label]) => `<option value="${value}" ${value === event.metric ? "selected" : ""}>${label}</option>`).join("")}</select></label>
                 <label>固定正解フォールバック<input data-event-field="correctAnswer" value="${escapeAttr(event.correctAnswer)}"></label>
@@ -983,21 +1010,24 @@
         }
 
         function renderChoices(event) {
+          const isRange = event.answerFormat === "range";
+          const emptyMessage = isRange ? "範囲選択肢を追加してください。" : "択一選択肢を追加してください。";
           return `
             <div style="margin-top:14px">
               <div class="section-title">
                 <h3>選択肢</h3>
                 <button type="button" data-action="add-choice">追加</button>
               </div>
+              ${isRange ? "" : `<p class="muted">択一選択は value と正解値の完全一致で判定します。min/max は出力しません。</p>`}
               ${event.choices.map((choice, index) => `
                 <div class="choice-row" data-choice-index="${index}">
                   <label>value<input data-choice-field="value" value="${escapeAttr(choice.value)}"></label>
                   <label>label<input data-choice-field="label" value="${escapeAttr(choice.label)}"></label>
-                  <label>min<input type="number" step="0.1" data-choice-field="min" value="${escapeAttr(choice.min)}"></label>
-                  <label>max<input type="number" step="0.1" data-choice-field="max" value="${escapeAttr(choice.max)}"></label>
+                  ${isRange ? `<label>min<input type="number" step="0.1" data-choice-field="min" value="${escapeAttr(choice.min)}"></label>` : ""}
+                  ${isRange ? `<label>max<input type="number" step="0.1" data-choice-field="max" value="${escapeAttr(choice.max)}"></label>` : ""}
                   <button type="button" class="danger" data-action="delete-choice" data-choice-index="${index}">削除</button>
                 </div>
-              `).join("") || `<p class="muted">範囲/択一選択肢を追加してください。</p>`}
+              `).join("") || `<p class="muted">${emptyMessage}</p>`}
             </div>
           `;
         }
@@ -1052,6 +1082,11 @@
             const item = stage.events[Number(eventCard.dataset.eventIndex)];
             if (target.dataset.eventField) {
               item[target.dataset.eventField] = target.value;
+              if (target.dataset.eventField === "metric") {
+                const defaultQuestion = predictionQuestionForMetric(item.metric, "");
+                if (defaultQuestion) item.question = defaultQuestion;
+                renderStageEditor();
+              }
               if (target.dataset.eventField === "type" || target.dataset.eventField === "answerFormat") {
                 renderStageEditor();
               }

@@ -242,8 +242,13 @@ runAsync("firebase mock host flow advances through public state", async () => {
   await adapter.init();
   const auth = await adapter.post("/api/host/auth", { password: "host" });
   assert.strictEqual(auth.ok, true);
+  const joined = await adapter.post("/api/player/join", { name: "Alice", uuid: "alice" });
+  assert.strictEqual(joined.ok, true);
   const started = await adapter.post("/api/host/start-stage", { hostToken: auth.hostToken, hostName: "host" });
   assert.strictEqual(started.room.room.phase, Engine.PHASES.STAGE_INTRO);
   const voting = await adapter.post("/api/host/open-voting", { hostToken: auth.hostToken, hostName: "host" });
   assert.strictEqual(voting.room.room.phase, Engine.PHASES.VOTING);
+  const removed = await adapter.post("/api/host/remove-player", { hostToken: auth.hostToken, hostName: "host", uuid: "alice" });
+  assert.strictEqual(removed.ok, true);
+  assert.strictEqual(removed.room.room.players.some((player) => player.uuid === "alice"), false);
 });

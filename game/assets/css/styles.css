@@ -58,6 +58,11 @@ button.primary,
   font-weight: 700;
 }
 
+button.danger {
+  border-color: rgba(180, 35, 24, 0.36);
+  color: var(--danger);
+}
+
 input,
 select,
 textarea {

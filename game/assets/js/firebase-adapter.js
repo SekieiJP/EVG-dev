@@ -226,6 +226,8 @@
         result = this.engine.abstain(room, payload.uuid);
       } else if (path === "/api/host/commit-result") {
         result = this.commitHostResult(room, payload.room, payload.baseVersion);
+      } else if (path === "/api/host/remove-player") {
+        result = this.engine.removePlayerFromRoom(room, payload.uuid, payload.hostName || "host");
       } else if (path === "/api/host/import-config") {
         result = { ok: true, room: room.players.length || Object.keys(room.stageResults || {}).length ? this.engine.createNextGameRoom(room, payload.config) : this.engine.createInitialRoom(payload.config) };
       } else if (path === "/api/host/update-config") {
@@ -566,6 +568,16 @@
       if (path === "/api/host/start-stage" || path === "/api/host/advance") {
         updates["players"] = nodes.players;
         updates["playerStats"] = nodes.playerStats;
+      }
+      if (path === "/api/host/remove-player") {
+        updates["players"] = nodes.players;
+        updates["playerStats"] = nodes.playerStats;
+        updates["scores"] = nodes.scores;
+        Array.from(new Set(volatileStageIds(currentRoom).concat(volatileStageIds(nextRoom)))).forEach((stageId) => {
+          updates[`tickets/${stageId}`] = emptyObjectToNull(nextRoom.tickets && nextRoom.tickets[stageId] || {});
+          updates[`ticketPresence/${stageId}`] = emptyObjectToNull(nextRoom.ticketPresence && nextRoom.ticketPresence[stageId] || {});
+          updates[`results/${stageId}`] = emptyObjectToNull(nextRoom.stageResults && nextRoom.stageResults[stageId] || {});
+        });
       }
       await this.writeRestChildUpdates(updates);
     }

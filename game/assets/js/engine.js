@@ -95,6 +95,13 @@
     ],
   };
 
+  const DEFAULT_PREDICTION_QUESTIONS = {
+    forcedOffCount: "強制下車は何回発生する？",
+    totalBoarded: "乗車成功者数は？",
+    allSucceeded: "全員が乗車成功する？",
+    topPlayer: "このステージの最高得点者は？",
+  };
+
   function createInitialRoom(config) {
     return {
       roomId: "single-room",
@@ -130,6 +137,34 @@
     next.operations.unshift({ at: nowIso(), actor: "host", action: "next-game" });
     next.updatedAt = nowIso();
     return next;
+  }
+
+  function removePlayerFromRoom(room, uuid, actor) {
+    if (!uuid) return { room, ok: false, error: "退室させる参加者を選択してください。" };
+    if (!room.players || !room.players.some((player) => player.uuid === uuid)) {
+      return { room, ok: false, error: "現在ゲームの参加者ではありません。" };
+    }
+    const next = deepClone(room);
+    next.players = (next.players || []).filter((player) => player.uuid !== uuid);
+    delete next.scores[uuid];
+    Object.keys(next.tickets || {}).forEach((stageId) => {
+      if (next.tickets[stageId]) delete next.tickets[stageId][uuid];
+    });
+    Object.keys(next.ticketPresence || {}).forEach((stageId) => {
+      if (next.ticketPresence[stageId]) delete next.ticketPresence[stageId][uuid];
+    });
+    Object.keys(next.stageResults || {}).forEach((stageId) => {
+      const result = next.stageResults[stageId];
+      if (!result || !result.players || !result.players[uuid]) return;
+      delete result.players[uuid];
+      result.timeline = (result.timeline || []).map((step) => removeUuidFromTimelineStep(step, uuid));
+      result.rankings = rerankRows((result.rankings || []).filter((row) => row.uuid !== uuid));
+      refreshResultStats(result);
+    });
+    next.operations.unshift({ at: nowIso(), actor: actor || "host", action: "remove-player", uuid });
+    next.operations = next.operations.slice(0, 100);
+    next.updatedAt = nowIso();
+    return { room: next, ok: true };
   }
 
   function archiveCurrentGame(room) {
@@ -175,7 +210,13 @@
 
   function normalizeEvent(event) {
     if (!event || !event.type) return null;
-    return Object.assign({}, event);
+    const next = Object.assign({}, event);
+    if (next.type === "E1_prediction") {
+      const metric = next.metric || next.answerMetric || "";
+      const defaultQuestion = DEFAULT_PREDICTION_QUESTIONS[metric] || "";
+      if (defaultQuestion) next.question = defaultQuestion;
+    }
+    return next;
   }
 
   function getCurrentStage(room) {
@@ -718,6 +759,36 @@
     });
   }
 
+  function rerankRows(rows) {
+    let previousScore = null;
+    let previousRank = 0;
+    return rows.map((row, index) => {
+      const score = roundScore(row.score || 0);
+      const rank = score === previousScore ? previousRank : index + 1;
+      previousScore = score;
+      previousRank = rank;
+      return Object.assign({}, row, { rank, score });
+    });
+  }
+
+  function removeUuidFromTimelineStep(step, uuid) {
+    const next = Object.assign({}, step);
+    ["boarding", "exiting", "passengersBeforeCheck", "passengersAfterCheck", "forcedOff"].forEach((key) => {
+      next[key] = Array.isArray(next[key]) ? next[key].filter((item) => item !== uuid) : [];
+    });
+    return next;
+  }
+
+  function refreshResultStats(result) {
+    const players = Object.values(result.players || {});
+    const active = players.filter((player) => player.ticket && !player.ticket.abstained);
+    result.stats = Object.assign({}, result.stats || {}, {
+      forcedOffCount: (result.timeline || []).filter((step) => step.forcedOff && step.forcedOff.length).length,
+      allSucceeded: active.length ? active.every((player) => player.status === "success") : false,
+      totalBoarded: players.filter((player) => player.status === "success").length,
+    });
+  }
+
   function advancePhase(room, action, actor) {
     const next = deepClone(room);
     const stage = getCurrentStage(next);
@@ -857,7 +928,8 @@
 
   function uniqueGameId(title) {
     const normalized = String(title || "game").trim().replace(/\s+/g, "-").slice(0, 32) || "game";
-    return `${normalized}-${new Date().toISOString().slice(0, 10)}`;
+    const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 17);
+    return `${normalized}-${stamp}-${Math.random().toString(36).slice(2, 6)}`;
   }
 
   return {
@@ -868,6 +940,7 @@
     normalizeConfig,
     getCurrentStage,
     registerPlayer,
+    removePlayerFromRoom,
     renamePlayer,
     submitTicket,
     abstain,
