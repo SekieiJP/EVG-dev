@@ -199,6 +199,8 @@
           <li>Firebaseの匿名Authは、既存セッションが復元されるまで最大1秒待ってから新規匿名ログインする。ホスト認証済み端末のuidがリロードごとに変わると、hostTokenとDB上のhostUidがずれるため。</li>
           <li>Firebase版の状態反映では<code>roomVersion</code>比較で古い通知を捨てないことにした。Playerの復元・参加など自分だけの子ノード更新ではpublic側のversionを進めないため、比較するとHostのフェーズ通知を誤って捨てる可能性がある。</li>
           <li>GASの<code>players</code>シートは現在ゲーム参加者だけで上書きせず、既存UUIDを保持したまま現在参加者をマージする。過去UUID復元の起点を消さないため。</li>
+          <li>ルール説明スライドは、公開用<code>game/</code>配下に単体HTMLとして置いた。ゲーム本体のSPAや依存ライブラリへ組み込まず、会場でURLを直接開ける簡易資料として扱うため。</li>
+          <li>ルール説明スライドの図は、乗車処理、定員超過、得点式、役割進行を示す模式図に限定した。高層ビルなどのモチーフイラストは、理解すべきルール情報を増やさないため使わない。</li>
           <li>ステージ制作支援ツールは、既存アプリと同じ<code>schemaVersion</code>、<code>gameMeta</code>、<code>stages[].params</code>、<code>stages[].events</code>形式を出力する単一HTMLにした。GitHub Pagesやローカルファイルでそのまま開けることを優先した。</li>
           <li>JSON書式変更に備え、制作ツールにはトップレベル、ステージ、イベントごとの「追加JSON」欄を置いた。GUIがまだ知らないキーはここで保持・出力できるようにする。</li>
           <li>予想イベントの範囲選択肢は<code>ranges</code>、<code>options</code>、<code>choices</code>から出力キーを選べるようにした。既存エンジンが3種類を受け付けるため、Spreadsheet運用側の表記に合わせられるようにする。</li>
@@ -235,6 +237,7 @@
           <li>2026-06-03追記: Screen画面のステージ説明フェーズでは、購入受付前で誤解を招くためチケット購入人数の円グラフを表示しない。投票受付中以降は従来通り表示する。</li>
           <li>2026-06-05追記: Host画面から現在ゲーム参加者を退室できるようにした。退室は<code>current_game</code>相当の<code>players</code>、<code>scores</code>、現在ゲーム内の<code>tickets</code>、<code>ticketPresence</code>、<code>stageResults</code>から対象UUIDを外すだけで、Spreadsheet等に保存済みの履歴データは削除しない。</li>
           <li>2026-06-05追記: 同じゲームJSONで再開始できるようにした。<code>gameId</code>はタイトル+日時+短いランダム値で生成し、同一JSONを同日に複数回開始しても衝突しにくい形にした。</li>
+          <li>2026-06-05追記: ゲーム説明用のHTMLスライド<code>game/rule-slides.html</code>を追加した。基本ルール、チケット、強制下車、得点式、イベント、進行役割を投影向けに説明する。</li>
         </ul>
       </section>
 
