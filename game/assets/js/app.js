@@ -805,6 +805,7 @@
       ["subscriptionRole", firebaseInfo.role || ""],
       ["baseSubscriptions", (firebaseInfo.basePaths || []).join(", ")],
       ["stageSubscriptions", (firebaseInfo.stagePaths || []).join(", ")],
+      ["revealEndsAt", state.room.revealEndsAt || ""],
       ["lastRulesError", firebaseInfo.lastRulesError || ""],
       ["lastTransactionPublic", firebaseInfo.lastTransactionPublic ? compactJson(firebaseInfo.lastTransactionPublic) : ""],
       ["lastApi", state.lastApi ? compactJson(state.lastApi) : ""],
@@ -962,7 +963,7 @@
     const timelineByFloor = new Map(result.timeline.map((step) => [step.floor, step]));
     const tickets = state.room.tickets[result.stageId] || {};
     const revealSchedule = getRevealSchedule(stage, result);
-    const duration = revealSchedule.totalSeconds;
+    const duration = getRevealDuration(stage, result);
     const elapsed = getRevealElapsedSeconds();
     const currentFloor = getRevealFloor(stage, result);
     const reviewMode = isRevealComplete(stage);
@@ -1055,7 +1056,17 @@
   }
 
   function getRevealDuration(stage, result = getCurrentStageResult()) {
+    const timedDuration = revealDurationFromPersistedEnd();
+    if (timedDuration !== null) return timedDuration;
     return getRevealSchedule(stage, result).totalSeconds;
+  }
+
+  function revealDurationFromPersistedEnd() {
+    if (!state.room.animationStartedAt || !state.room.revealEndsAt) return null;
+    const started = new Date(state.room.animationStartedAt).getTime();
+    const ended = new Date(state.room.revealEndsAt).getTime();
+    if (!Number.isFinite(started) || !Number.isFinite(ended) || ended <= started) return null;
+    return (ended - started) / 1000;
   }
 
   function getRevealElapsedSeconds() {
@@ -1158,6 +1169,10 @@
   function isRevealPlaybackComplete(stage) {
     if (!stage) return false;
     if (state.room.animationSkippedAt) return true;
+    if (state.room.revealEndsAt) {
+      const ended = new Date(state.room.revealEndsAt).getTime();
+      if (Number.isFinite(ended)) return serverNow() >= ended;
+    }
     if (!state.room.animationStartedAt) return false;
     return getRevealElapsedSeconds() >= getRevealDuration(stage);
   }
@@ -1454,10 +1469,12 @@
   function renderRankingBoard() {
     const rankings = Engine.cumulativeRankings(state.room);
     const result = getCurrentStageResult();
+    const isLastStage = state.room.currentStageIndex >= (state.room.config.stages.length - 1);
+    const rankingRows = state.room.phase === Engine.PHASES.RANKING && result ? result.rankings : rankings;
     return `
       <div class="ranking-board">
         <h1>${state.room.phase === Engine.PHASES.FINAL ? "最終結果" : "中間ランキング"}</h1>
-        ${state.room.phase === Engine.PHASES.RANKING && result && state.room.currentStageIndex > 0 ? `
+        ${state.room.phase === Engine.PHASES.RANKING && result && state.room.currentStageIndex > 0 && !isLastStage ? `
           <div class="dual-ranking">
             <section>
               <h2>今ステージ</h2>
@@ -1468,7 +1485,7 @@
               ${rankings.map((row) => renderRankRow(row)).join("")}
             </section>
           </div>
-        ` : rankings.map((row) => renderRankRow(row)).join("")}
+        ` : rankingRows.map((row) => renderRankRow(row)).join("")}
       </div>
     `;
   }
@@ -1667,6 +1684,7 @@
     room.operations = Array.isArray(room.operations) ? room.operations : Object.values(room.operations || {});
     room.ticketPresence = room.ticketPresence || {};
     room.archive = room.archive || null;
+    room.revealEndsAt = room.revealEndsAt || null;
     room.phase = room.phase || Engine.PHASES.LOBBY;
     room.currentStageIndex = Number(room.currentStageIndex || 0);
     room.roomVersion = Number(room.roomVersion || 0);
@@ -1743,6 +1761,7 @@
     if (currentRoom.currentStageIndex !== nextRoom.currentStageIndex) return true;
     if ((currentRoom.animationStartedAt || "") !== (nextRoom.animationStartedAt || "")) return true;
     if ((currentRoom.animationSkippedAt || "") !== (nextRoom.animationSkippedAt || "")) return true;
+    if ((currentRoom.revealEndsAt || "") !== (nextRoom.revealEndsAt || "")) return true;
     const currentStage = getRoomCurrentStage(currentRoom);
     const nextStage = getRoomCurrentStage(nextRoom);
     if ((currentStage && currentStage.stageId) !== (nextStage && nextStage.stageId)) return true;
@@ -1871,6 +1890,7 @@
         showToast(localResult.error || "操作できません。");
         return false;
       }
+      stampRevealEndsAt(localResult.room);
       const response = await withBusy(message || "結果を保存中…", () => apiPost("/api/host/commit-result", {
         hostName: "host",
         baseVersion,
@@ -1890,6 +1910,17 @@
       showToast("集計の通信に失敗しました。");
       return false;
     }
+  }
+
+  function stampRevealEndsAt(room) {
+    if (!room || room.phase !== Engine.PHASES.REVEAL || !room.animationStartedAt) return room;
+    const stage = getRoomCurrentStage(room);
+    const result = stage && room.stageResults ? room.stageResults[stage.stageId] : null;
+    if (!stage || !result) return room;
+    const started = new Date(room.animationStartedAt).getTime();
+    if (!Number.isFinite(started)) return room;
+    room.revealEndsAt = new Date(started + getRevealSchedule(stage, result).totalSeconds * 1000).toISOString();
+    return room;
   }
 
   async function loadGameConfigs(showLoading) {

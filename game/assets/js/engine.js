@@ -119,6 +119,7 @@
       tallyingEndsAt: null,
       animationStartedAt: null,
       animationSkippedAt: null,
+      revealEndsAt: null,
       roomVersion: 0,
       volume: 0.8,
       muted: false,
@@ -843,6 +844,7 @@
         next.tallyingEndsAt = null;
         next.animationStartedAt = null;
         next.animationSkippedAt = null;
+        next.revealEndsAt = null;
         applyPendingNames(next);
       } else {
         next.phase = PHASES.FINAL;

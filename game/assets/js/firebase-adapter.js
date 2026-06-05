@@ -735,6 +735,7 @@
       tallyingEndsAt: status.tallyingEndsAt || null,
       animationStartedAt: status.animationStartedAt || null,
       animationSkippedAt: status.animationSkippedAt || null,
+      revealEndsAt: status.revealEndsAt || null,
       roomVersion: Number(status.roomVersion || 0),
       ticketPresence: nodes.ticketPresence || {},
       archive: nodes.archive || null,
@@ -1110,6 +1111,7 @@
       tallyingEndsAt: room.tallyingEndsAt || null,
       animationStartedAt: room.animationStartedAt || null,
       animationSkippedAt: room.animationSkippedAt || null,
+      revealEndsAt: room.revealEndsAt || null,
     };
   }
 
@@ -1188,6 +1190,7 @@
     room.hostUid = room.hostUid || "";
     room.ticketPresence = room.ticketPresence || {};
     room.archive = room.archive || null;
+    room.revealEndsAt = room.revealEndsAt || null;
     room.volume = room.volume !== undefined ? room.volume : fallback.volume;
     room.muted = Boolean(room.muted);
     return room;

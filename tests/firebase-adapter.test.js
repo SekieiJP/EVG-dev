@@ -29,6 +29,7 @@ run("firebase nodes round-trip room state without snapshot", () => {
   room.hostUid = "host-uid";
   room.phase = Engine.PHASES.VOTING;
   room.roomVersion = 7;
+  room.revealEndsAt = "2026-06-01T00:02:00.000Z";
   room.scores = { alice: 12, bob: -3 };
   room.tickets = {
     "stage-001": {
@@ -50,6 +51,7 @@ run("firebase nodes round-trip room state without snapshot", () => {
   assert.strictEqual(restored.hostUid, "host-uid");
   assert.strictEqual(restored.phase, Engine.PHASES.VOTING);
   assert.strictEqual(restored.roomVersion, 7);
+  assert.strictEqual(restored.revealEndsAt, "2026-06-01T00:02:00.000Z");
   assert.deepStrictEqual(restored.scores, { alice: 12, bob: -3 });
   assert.strictEqual(restored.players.length, 2);
   assert.strictEqual(restored.tickets["stage-001"].alice.exitFloor, 4);

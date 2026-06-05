@@ -58,6 +58,20 @@ run("reveal camera position is driven by computed schedule", () => {
   assert.strictEqual(cssSource.includes("animation: cameraClimb"), false);
 });
 
+run("reveal completion is persisted and restored from room state", () => {
+  assert.strictEqual(appSource.includes("revealEndsAt"), true);
+  assert.strictEqual(appSource.includes("function stampRevealEndsAt"), true);
+  const completion = section(appSource, "function isRevealPlaybackComplete", "function buildRevealScoreRows");
+  assert.strictEqual(completion.includes("state.room.revealEndsAt"), true);
+  assert.strictEqual(appSource.includes("(currentRoom.revealEndsAt || \"\") !== (nextRoom.revealEndsAt || \"\")"), true);
+});
+
+run("final stage ranking hides the total score side column", () => {
+  const rankingRenderer = section(appSource, "function renderRankingBoard", "function renderRankRow");
+  assert.strictEqual(rankingRenderer.includes("!isLastStage"), true);
+  assert.strictEqual(rankingRenderer.includes("const rankingRows = state.room.phase === Engine.PHASES.RANKING && result ? result.rankings : rankings"), true);
+});
+
 run("player view has no manual next button or ranking hold state", () => {
   assert.strictEqual(appSource.includes("player-next"), false);
   assert.strictEqual(appSource.includes("/api/player/proceed-next"), false);
