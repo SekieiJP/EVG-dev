@@ -848,7 +848,6 @@ code {
 .elevator-board {
   display: grid;
   grid-template-columns: minmax(420px, 56vw) 1fr;
-  grid-template-rows: 1fr auto;
   gap: 28px;
   min-height: calc(100vh - 145px);
   align-items: stretch;
@@ -1008,18 +1007,18 @@ code {
   background: #fda4af;
 }
 
-.screen-result-list {
-  display: grid;
-  align-content: center;
-  gap: 12px;
-}
-
 .reveal-scoreboard {
-  grid-column: 1 / -1;
+  min-height: calc(100vh - 145px);
+  max-height: calc(100vh - 145px);
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 8px;
-  align-self: end;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  align-content: start;
+  gap: 10px;
+  overflow: auto;
+  border: 1px solid var(--screen-line);
+  border-radius: 8px;
+  background: #0d1718;
+  padding: 12px;
 }
 
 .score-tile {
@@ -1058,7 +1057,6 @@ code {
   border-color: rgba(253, 164, 175, 0.68);
 }
 
-.screen-result-list div,
 .screen-rank {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -1113,6 +1111,11 @@ code {
   .result-layout,
   .elevator-board {
     grid-template-columns: 1fr;
+  }
+
+  .reveal-scoreboard {
+    min-height: auto;
+    max-height: none;
   }
 
   .ticket-grid,

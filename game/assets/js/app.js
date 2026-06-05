@@ -1017,10 +1017,7 @@
           </div>
           <div class="car"><span>EV</span></div>
         </div>
-        <div class="screen-result-list">
-          ${result.rankings.slice(0, 8).map((row) => `<div><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatScore(row.score)}</strong></div>`).join("")}
-        </div>
-        <div class="reveal-scoreboard">
+        <div class="reveal-scoreboard" aria-label="現在の得点">
           ${scoreRows.map((row) => `
             <div class="score-tile ${row.delta > 0 ? "gain" : row.delta < 0 ? "loss" : ""}">
               <span>${escapeHtml(shortName(row.name))}</span>
@@ -1197,9 +1194,14 @@
   }
 
   function buildRevealScoreRows(stage, result, currentFloor) {
+    const playerOrder = new Map((state.room.players || []).map((player, index) => [player.uuid, index]));
     return Object.values(result.players)
       .map((playerResult) => calculateRevealScore(stage, result, playerResult, currentFloor))
-      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, "ja"));
+      .sort((a, b) => {
+        const orderA = playerOrder.has(a.uuid) ? playerOrder.get(a.uuid) : Number.MAX_SAFE_INTEGER;
+        const orderB = playerOrder.has(b.uuid) ? playerOrder.get(b.uuid) : Number.MAX_SAFE_INTEGER;
+        return orderA - orderB || a.name.localeCompare(b.name, "ja");
+      });
   }
 
   function calculateRevealScore(stage, result, playerResult, currentFloor) {
