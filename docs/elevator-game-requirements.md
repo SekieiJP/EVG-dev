@@ -514,7 +514,6 @@
 | `/api/player/join` | POST | プレイヤー参加・UUID発行。**レスポンスに自分の現在Skill値を含める** |
 | `/api/player/restore` | POST | UUIDによる再接続。レスポンスに自分のSkill値を含める |
 | `/api/player/rename` | POST | 表示名変更（次ステージから反映） |
-| `/api/player/proceed-next` | POST | プレイヤーが「次のステージへ」ボタンを押下した通知（ゲーム全体のフェーズは進めない） |
 | `/api/ticket/submit` | POST | チケット購入（投票） |
 | `/api/ticket/abstain` | POST | 棄権宣言（自動送信用） |
 | `/api/host/auth` | POST | `apiKey` とホストパスワード認証。成功時に期限付き `hostToken` を返す |
@@ -683,7 +682,9 @@ StageSkill = (上昇成功階数 / (ステージ階数 × 定員 / 参加人数)
 - セーブデータは複数ゲームをまたいで永続化。
 - 1ゲーム終了時に `current_game` の内容を `game_history` に転記し、UUID×ゲーム別の戦績を `save_data` に追記。
 - `save_data` には参加時点の表示名をスナップショットとして保存（履歴の整合性確保）。
-- `players` シートはUUID、現在の表示名、現在Skill、StageSkill履歴を管理する。現在ゲームにいないUUIDも復元用に保持する。
+- Firebase RTDB版ではroot `players/{uuid}` をプレイヤーマスタの正とし、UUID、現在の表示名、現在Skill、StageSkill履歴を管理する。現在ゲームにいないUUIDも復元用に保持する。
+- Playerの復帰は保存済み表示名で行い、復帰時の改名は行わない。復帰に失敗した場合は1回再試行し、失敗理由を表示したうえで新規参加フォームを表示し続ける。
+- Player画面にはフェーズを先へ進める「次へ」操作を置かず、Firebase購読によりHostのフェーズ遷移へ自動追従する。
 - Host、Screen、Player、Historyなど各画面の現在ゲーム表示では、そのゲームが始まって以来アクセスまたは復元操作を行ったプレイヤーだけを表示する。次ゲーム開始時に前ゲーム参加者を `current_game.players` へ自動コピーしない。
 - 累積戦歴は `save_data` からUUID単位で集計して算出。
 - スプレッドシート行数の上限（500万セル）に達する前に、古いデータのアーカイブ運用が必要（12章参照）。

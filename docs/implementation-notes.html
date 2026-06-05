@@ -287,7 +287,7 @@
           <li>ブラウザ複数プレイヤーテストは、まず依存追加なしのHTMLハーネスにした。Playwright等の追加導入よりも、会場運用者がすぐ手動再現できることを優先した。</li>
           <li>結果発表のスクロールは、DOMを保持して細かく差分更新する案もあったが、既存の全体再描画構造を保ち、CSSアニメーションの負の遅延で現在時刻に追従させる実装にした。</li>
           <li>結果発表完了後は、Screenの再描画を続けると手動スクロール位置が戻るため、最終階到達後の自動再描画を止める設計にした。ホスト操作の反映はフェーズ更新時の再取得で扱う。</li>
-          <li>Playerランキングの<code>次へ</code>はサーバに進行要求を送る案もあったが、ホストだけがゲーム全体を進める方針を優先し、クライアント側のポーリング再開操作に変更した。GASの<code>/api/player/proceed-next</code>もフェーズを進めない確認APIへ変更した。</li>
+          <li>Playerランキングの<code>次へ</code>は廃止した。Hostだけがゲーム全体を進め、PlayerはFirebase購読でフェーズ遷移に自動追従する。</li>
           <li>GASのホストセッションはPropertiesServiceではなくCacheServiceに置いた。永続化よりも、期限切れと再認証を明確にする方を優先したため。</li>
           <li>Firebase移行でBlazeを前提にすればCloud Functionsで強いサーバ検証を先に作れるが、今回の開始条件がSparkのため、初期版はRulesとクライアントtransaction中心にする。費用ゼロで始められる一方、複雑なフェーズ遷移検証は弱くなる。</li>
           <li>Realtime Databaseの全体room購読は実装が簡単だが、50人本番ではダウンロード量が読みにくくなるため採用せず、画面別の小ノード購読へ分けた。</li>
@@ -303,6 +303,8 @@
           <li>2026-06-05追記: 結果発表アニメーション中のScreen右側からステージランキングを削除し、リアルタイム得点ボックスを配置した。得点順に並べると途中ランキングのネタバレになるため、reveal中のボックスは参加者表示順を優先し、ランキング表示は次フェーズの<code>ranking</code>で初めて出す。</li>
           <li>2026-06-05追記: 30F以上の結果発表では、乗車・乗車不可・下車・強制下車・ボーナス確定がない階を通常階の30%の時間で表示する。予想ボーナスは既存仕様どおり最上階で確定するため、予想得点がある場合の最上階は短縮対象外にした。</li>
           <li>2026-06-06追記: MajorUpdate260606の回答に従い、現在Skill値はStageSkill上位5件の合計へ変更し、既存データへの遡及移行は行わない。E7入場料は<code>{"type":"E7_entry_fee","score":-M}</code>として棄権以外のチケット送信者へ乗車階到達時に適用し、E8完乗ボーナスは<code>{"type":"E8_completion_bonus","score":M}</code>として<code>status === "success"</code>のプレイヤーへ下車階到達時に適用する。</li>
+          <li>2026-06-06追記: Player復帰はFirebase RTDBのroot <code>players/{uuid}</code>を正とし、保存済み名前・現在Skill・StageSkill履歴を現在roomへ戻す方式にした。Firebase匿名認証の<code>auth.uid</code>をUUIDとして使うため、任意の過去UUIDを別匿名uidから引き継ぐ処理は実装していない。別端末引き継ぎが必要なら、Blaze + Cloud Functions等でclaim/transfer処理を追加する必要がある。</li>
+          <li>2026-06-06追記: Spark + RTDB RulesだけでPlayer復帰を成立させるため、本人は<code>rooms/{roomId}/playerStats/{uid}</code>とroot <code>players/{uid}</code>を書ける。Cloud Functionsによるサーバ検証がないため、厳密な改ざん耐性はBlaze移行時の課題として残る。</li>
         </ul>
       </section>
 

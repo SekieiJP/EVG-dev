@@ -65,7 +65,6 @@
     screenReady: "evg.screenReady.v1",
     screenLocalSync: "evg.screenLocalSync.v1",
     personalHistoryCache: "evg.personalHistoryCache.v1",
-    playerRankingHold: "evg.playerRankingHold.v1",
   };
   const LOCAL_SYNC_CHANNEL = "evg.local-room-sync.v1";
   const state = {
@@ -87,6 +86,7 @@
     personalHistoryCache: loadJson(STORAGE_KEYS.personalHistoryCache, {}),
     historyLoadingUuid: "",
     historyError: "",
+    restoreError: "",
     syncing: false,
     lastRevealPollAt: 0,
     revealCompletionCheckedFor: "",
@@ -94,12 +94,10 @@
     hostAutoTallyKey: "",
     hostAutoTallyInFlight: false,
     hostAutoTallyRetryAt: 0,
-    playerRankingHold: null,
     nextGameConfigs: [],
     nextGameConfigsLoadedAt: "",
     nextGameConfigError: "",
     nextRemoteFetchAt: 0,
-    playerNextDisabledUntil: 0,
     serverTimeOffsetMs: 0,
     firebaseUnsubscribe: null,
     firebaseStartedAt: "",
@@ -158,7 +156,6 @@
       if (isRoleBlocked(button.dataset.role)) return;
       const previousRole = state.role;
       state.role = button.dataset.role;
-      if (state.role === "player") restorePlayerRankingHoldIfNeeded();
       history.replaceState(null, "", `?view=${state.role}`);
       render();
       ensureVisibleHistoryCache();
@@ -200,20 +197,26 @@
     const form = event.target;
     if (form.id === "joinForm") {
       const name = form.elements.name.value;
-      const carryUuid = form.elements.restoreUuid.value.trim() || state.playerUuid;
       const result = await runMutation(
-        () => Engine.registerPlayer(state.room, name, carryUuid || undefined),
+        () => Engine.registerPlayer(state.room, name, state.playerUuid || undefined),
         "/api/player/join",
-        { name, uuid: carryUuid || undefined }
+        { name, uuid: state.playerUuid || undefined }
       );
       if (!result.ok) return showToast(result.error);
       state.room = result.room;
       state.playerUuid = result.player.uuid;
       localStorage.setItem(playerUuidStorageKey(), state.playerUuid);
-      clearPlayerRankingHold();
+      state.restoreError = "";
       saveRoom("join", result.player.uuid);
       showToast("参加しました。");
       render();
+    }
+    if (form.id === "restoreForm") {
+      const uuid = form.elements.restoreUuid.value.trim();
+      if (!uuid) return showToast("UUIDを入力してください。");
+      const result = await restoreRemotePlayer(uuid, { showErrors: true, retry: true });
+      if (!result || !result.ok) return;
+      showToast("過去データを引き継ぎました。");
     }
     if (form.id === "ticketForm") {
       const stage = Engine.getCurrentStage(state.room);
@@ -292,9 +295,9 @@
         if (!result.ok) return showToast(result.error || "UUIDが見つかりません。");
         state.room = result.room;
       }
-      state.playerUuid = uuid;
-      localStorage.setItem(playerUuidStorageKey(), uuid);
-      clearPlayerRankingHold();
+      state.playerUuid = result.player && result.player.uuid || uuid;
+      localStorage.setItem(playerUuidStorageKey(), state.playerUuid);
+      state.restoreError = "";
       showToast("UUIDを設定しました。");
       render();
     }
@@ -341,27 +344,6 @@
       state.room = result.room;
       saveRoom("ticket.abstain", state.playerUuid);
       showToast("棄権を送信しました。");
-      render();
-    }
-    if (action === "player-next") {
-      if (Date.now() < state.playerNextDisabledUntil) return;
-      state.playerNextDisabledUntil = Date.now() + 5000;
-      render();
-      setTimeout(render, 5000);
-      if (![Engine.PHASES.RANKING, Engine.PHASES.FINAL].includes(state.room.phase)) return showToast("ホストの操作待ちです。");
-      const heldRoom = null;
-      const beforeGameId = state.room.gameId;
-      const beforePhase = state.room.phase;
-      const beforeVersion = state.room.roomVersion || 0;
-      if (isRemoteMode()) await refreshRemoteState({ force: true, showLoading: true });
-      else state.room = loadRoom();
-      if (state.room.gameId === beforeGameId && state.room.phase === beforePhase && (state.room.roomVersion || 0) === beforeVersion) {
-        if (heldRoom) state.room = heldRoom;
-        showToast("ホストの操作待ちです。");
-      } else {
-        clearPlayerRankingHold();
-        if (state.room.gameId !== beforeGameId) showToast("次ゲームへ移動しました。");
-      }
       render();
     }
     if (action === "screen-ready") {
@@ -471,7 +453,6 @@
 
   function render() {
     state.room = normalizeRoomShape(state.room) || Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
-    restorePlayerRankingHoldIfNeeded();
     const app = $("#app");
     document.body.dataset.phase = state.room.phase;
     document.body.dataset.role = state.role;
@@ -535,11 +516,13 @@
         </header>
         <form id="joinForm" class="panel form-grid">
           <label>名前<input name="name" maxlength="24" autocomplete="name" value="${escapeAttr(initialName)}" required></label>
-          <details class="carry-over">
-            <summary>データを引き継いではじめる</summary>
-            <label>過去のUUID<input name="restoreUuid" autocomplete="off" placeholder="UUIDを貼り付け"></label>
-          </details>
           <button class="primary" type="submit">参加</button>
+        </form>
+        <form id="restoreForm" class="panel form-grid">
+          <h2>過去のデータを引き継いではじめる</h2>
+          ${state.restoreError ? `<p class="muted">${escapeHtml(state.restoreError)}</p>` : ""}
+          <label>過去のUUID<input name="restoreUuid" autocomplete="off" placeholder="UUIDを貼り付け" value="${escapeAttr(state.playerUuid || "")}" required></label>
+          <button type="submit">引き継ぐ</button>
         </form>
       </section>
     `;
@@ -558,7 +541,6 @@
       return `<div class="panel waiting-result"><h2>結果発表中</h2><p>スクリーンをご覧ください。</p></div>`;
     }
     if ([Engine.PHASES.REVEAL, Engine.PHASES.RANKING, Engine.PHASES.FINAL].includes(state.room.phase)) {
-      if (state.room.phase === Engine.PHASES.RANKING) holdPlayerRanking();
       return renderPlayerResult(result);
     }
     return `
@@ -567,7 +549,6 @@
           <h2>チケット</h2>
           <p class="muted">${renderTicketSummary(ticket)}</p>
         </div>
-        <button data-action="player-next" ${playerNextDisabledAttr()}>${state.room.phase === Engine.PHASES.FINAL ? "次ゲームへ" : "次へ"}</button>
       </div>
     `;
   }
@@ -693,7 +674,6 @@
             </div>
           `).join("") : `<p class="muted">なし</p>`}
         </section>
-        <button data-action="player-next" ${playerNextDisabledAttr()}>次へ</button>
       </div>
     `;
   }
@@ -1210,75 +1190,6 @@
     return getRevealElapsedSeconds() >= getRevealDuration(stage);
   }
 
-  function holdPlayerRanking() {
-    if (state.role !== "player" || !state.room || state.room.phase !== Engine.PHASES.RANKING) return;
-    const stage = Engine.getCurrentStage(state.room);
-    const key = playerRankingHoldKey(state.room, stage);
-    if (!state.playerRankingHold || state.playerRankingHold.key !== key) {
-      state.playerRankingHold = {
-        key,
-        uuid: state.playerUuid,
-        gameId: state.room.gameId,
-        stageId: stage ? stage.stageId : "",
-        phase: state.room.phase,
-        currentStageIndex: state.room.currentStageIndex || 0,
-        savedAt: new Date().toISOString(),
-      };
-      persistPlayerRankingHold();
-    }
-  }
-
-  function hasPlayerRankingHold() {
-    return Boolean(
-      state.playerRankingHold &&
-        state.playerRankingHold.phase === Engine.PHASES.RANKING &&
-        state.playerRankingHold.uuid === state.playerUuid
-    );
-  }
-
-  function restorePlayerRankingHoldIfNeeded() {
-    loadPlayerRankingHold();
-    if (state.role !== "player" || !hasPlayerRankingHold()) return;
-    if (shouldDiscardPlayerRankingHold()) {
-      clearPlayerRankingHold();
-      return;
-    }
-  }
-
-  function isPlayerRankingHeld() {
-    return false;
-  }
-
-  function playerRankingHoldKey(room, stage) {
-    return [state.playerUuid || "", room.gameId || "", stage ? stage.stageId : "", room.currentStageIndex || 0].join(":");
-  }
-
-  function persistPlayerRankingHold() {
-    if (!state.playerRankingHold) return;
-    localStorage.setItem(STORAGE_KEYS.playerRankingHold, JSON.stringify(state.playerRankingHold));
-  }
-
-  function loadPlayerRankingHold() {
-    if (state.playerRankingHold || state.role !== "player" || !state.playerUuid) return;
-    const saved = loadJson(STORAGE_KEYS.playerRankingHold, null);
-    if (saved && saved.uuid === state.playerUuid && saved.phase === Engine.PHASES.RANKING) {
-      state.playerRankingHold = saved;
-    }
-  }
-
-  function shouldDiscardPlayerRankingHold() {
-    if (!state.playerRankingHold) return true;
-    if (state.playerRankingHold.uuid !== state.playerUuid) return true;
-    if (state.playerRankingHold.phase === Engine.PHASES.FINAL) return true;
-    const expectedKey = [state.playerRankingHold.uuid || "", state.playerRankingHold.gameId || "", state.playerRankingHold.stageId || "", state.playerRankingHold.currentStageIndex || 0].join(":");
-    return state.playerRankingHold.key !== expectedKey;
-  }
-
-  function clearPlayerRankingHold() {
-    state.playerRankingHold = null;
-    localStorage.removeItem(STORAGE_KEYS.playerRankingHold);
-  }
-
   function buildRevealScoreRows(stage, result, currentFloor) {
     const playerOrder = new Map((state.room.players || []).map((player, index) => [player.uuid, index]));
     return Object.values(result.players)
@@ -1711,10 +1622,6 @@
     }[status] || status;
   }
 
-  function playerNextDisabledAttr() {
-    return Date.now() < state.playerNextDisabledUntil ? "disabled" : "";
-  }
-
   function loadRoom() {
     return normalizeRoomShape(loadJson(STORAGE_KEYS.room, null)) || Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   }
@@ -1798,7 +1705,6 @@
     if (isFirebaseMode()) return;
     if (!isRemoteMode() || !state.room) return;
     if (!shouldPollRemoteState()) return;
-    if (isPlayerRankingHeld()) return;
     if (state.room.phase === Engine.PHASES.REVEAL) {
       if (state.role !== "screen" && state.role !== "player") return;
       const now = Date.now();
@@ -1827,7 +1733,6 @@
   async function refreshRemoteState(options = {}) {
     if (!isRemoteMode() || state.syncing) return;
     if (!options.force && !shouldPollRemoteState()) return;
-    if (!options.force && isPlayerRankingHeld()) return;
     try {
       state.syncing = true;
       const response = await maybeBusy(options.showLoading ? "読み込み中…" : "", () => apiGet("/api/status", {
@@ -1838,7 +1743,6 @@
       if (response.ok && response.unchanged) return;
       if (response.ok && response.room) {
         if (options.revealOnly && !shouldApplyRevealRemoteRoom(state.room, response.room)) return;
-        if (!options.force && isPlayerRankingHeld()) return;
         applyRemoteRoom(response.room, Object.assign({ source: "fetch" }, options));
       } else if (!response.ok) {
         logClient("api.state", response.error || response.message || "状態取得に失敗しました。");
@@ -1888,11 +1792,10 @@
       render();
       state.firebaseUnsubscribe = await firebaseAdapter.listen((room) => {
         if (!room) return;
-        if (isPlayerRankingHeld()) return;
         applyRemoteRoom(room);
       });
       await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true, source: "startup-fetch" });
-      if (state.role === "player") await restoreRemotePlayer();
+      if (state.role === "player") await restoreRemotePlayer(state.playerUuid, { retry: true, showErrors: false });
       logClient("firebase.ready", `${BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK ? "mock" : "rtdb"}:${BUILD_CONFIG.FIREBASE_ROOM_ID}`);
     } catch (error) {
       logClient("firebase.error", error.message);
@@ -1933,7 +1836,7 @@
 
   function shouldPollRemoteState() {
     if (!isRemoteMode() || !state.room) return false;
-    if (state.role === "player") return Boolean(state.playerUuid) && state.room.phase === Engine.PHASES.VOTING && !isPlayerRankingHeld() && !isEditingPlayerText();
+    if (state.role === "player") return Boolean(state.playerUuid) && state.room.phase === Engine.PHASES.VOTING && !isEditingPlayerText();
     if (state.role === "host") return Boolean(state.hostAuthed && state.hostToken) && [Engine.PHASES.LOBBY, Engine.PHASES.VOTING].includes(state.room.phase);
     if (state.role === "screen") return !state.screenLocalSync && Boolean(state.screenReady || state.room.phase !== Engine.PHASES.LOBBY);
     return false;
@@ -2032,7 +1935,6 @@
       state.room = nextRoom;
     }
     saveRoom(logKind || "host.config.import", "host");
-    clearPlayerRankingHold();
     showToast("次ゲームを開始しました。参加者はアクセス後に表示されます。");
     render();
   }
@@ -2046,7 +1948,6 @@
     );
     if (!result.ok) return showToast(result.error || "次ゲームを開始できません。");
     state.room = result.room;
-    clearPlayerRankingHold();
     state.nextGameConfigsLoadedAt = "";
     saveRoom("host.game-config.start", "host");
     showToast(state.room.gameId !== beforeGameId ? "次ゲームを開始しました。" : "設定を読み込みました。");
@@ -2059,17 +1960,33 @@
     return Boolean(element && ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName));
   }
 
-  async function restoreRemotePlayer() {
-    if (!state.playerUuid) return;
-    const response = await runMutation(
-      () => ({ ok: true, room: state.room, player: getCurrentPlayer() }),
-      "/api/player/restore",
-      { uuid: state.playerUuid }
-    );
-    if (response.ok && response.room) {
-      state.room = response.room;
-      render();
+  async function restoreRemotePlayer(uuid = state.playerUuid, options = {}) {
+    const targetUuid = String(uuid || "").trim();
+    if (!targetUuid) return null;
+    if (getCurrentPlayer() && getCurrentPlayer().uuid === targetUuid) return { ok: true, room: state.room, player: getCurrentPlayer() };
+    const attempts = options.retry ? 2 : 1;
+    let response = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      response = await runMutation(
+        () => ({ ok: false, room: state.room, error: "UUIDが見つかりません。" }),
+        "/api/player/restore",
+        { uuid: targetUuid }
+      );
+      if (response.ok) break;
     }
+    if (response && response.ok && response.room && response.player) {
+      state.room = response.room;
+      state.playerUuid = response.player.uuid;
+      state.restoreError = "";
+      localStorage.setItem(playerUuidStorageKey(), state.playerUuid);
+      saveRoom("player.restore", state.playerUuid);
+      render();
+      return response;
+    }
+    state.restoreError = response && (response.error || response.message) || "UUIDが見つかりません。";
+    if (options.showErrors) showToast(state.restoreError);
+    render();
+    return response || { ok: false, error: state.restoreError };
   }
 
   function historyStageCacheKey(uuid) {

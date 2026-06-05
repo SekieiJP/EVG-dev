@@ -38,3 +38,12 @@ run("public writes require version increment and allowed phases", () => {
   assert.match(roomRules.public[".validate"], /lobby\|stage_intro\|voting\|countdown\|tallying\|reveal\|ranking\|final/);
 });
 
+run("player master and self stats writes are explicitly scoped", () => {
+  assert.match(roomRules.playerStats.$uid[".write"], /auth\.uid === \$uid/);
+  assert.match(rules.players.$uid[".read"], /auth\.uid === \$uid/);
+  assert.match(rules.players.$uid[".write"], /auth\.uid === \$uid/);
+  assert.match(rules.players.$uid[".write"], /roles'\)\.child\('hosts/);
+  assert.match(rules.players.$uid[".validate"], /currentSkill/);
+  assert.match(rules.players.$uid[".validate"], /stageSkillHistory/);
+  assert.strictEqual(rules.players.$uid.$other[".validate"], false);
+});

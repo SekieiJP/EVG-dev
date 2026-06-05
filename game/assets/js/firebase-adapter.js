@@ -218,8 +218,6 @@
         result = this.restorePlayer(room, payload.uuid);
       } else if (path === "/api/player/rename") {
         result = this.engine.renamePlayer(room, payload.uuid, payload.name);
-      } else if (path === "/api/player/proceed-next") {
-        result = this.touchPlayer(room, payload.uuid);
       } else if (path === "/api/ticket/submit") {
         result = this.engine.submitTicket(room, payload.uuid, payload.ticket || payload);
       } else if (path === "/api/ticket/abstain") {
@@ -284,12 +282,35 @@
     async postRestPlayer(path, payload) {
       const room = await this.readRoom();
       if (!room) return { ok: false, code: "not_initialized", error: "ゲームルームがまだ初期化されていません。" };
+      const requestedUuid = String(payload && payload.uuid || this.auth.uid || "").trim();
+      if (requestedUuid && requestedUuid !== this.auth.uid) {
+        return {
+          ok: false,
+          code: "uid_mismatch",
+          error: "この端末のFirebase uidと復元UUIDが一致しません。同じ端末または同じ認証状態で開き直してください。",
+        };
+      }
       const playerPayload = Object.assign({}, payload, { uuid: this.auth.uid });
-      const result = this.applyMutation(path, playerPayload, room);
+      let result = null;
+      if (path === "/api/player/restore") {
+        const masterPlayer = await this.readRootPlayer(this.auth.uid);
+        result = restorePlayerFromMaster(this.engine, room, this.auth.uid, masterPlayer);
+      } else {
+        result = this.applyMutation(path, playerPayload, room);
+        if (result.ok && path === "/api/player/join") {
+          const masterPlayer = await this.readRootPlayer(this.auth.uid);
+          if (masterPlayer) {
+            result = mergeMasterStatsIntoResult(this.engine, result, this.auth.uid, masterPlayer);
+          }
+        }
+      }
       if (!result.ok) return result;
       const updates = playerUpdates(path, result.room, this.auth.uid);
       if (!Object.keys(updates).length) return { ok: false, code: "not_supported", error: "この操作はFirebase Player更新に未対応です。" };
       await this.writeRestChildUpdates(updates);
+      if (["/api/player/join", "/api/player/restore", "/api/player/rename"].includes(path) && result.player) {
+        await this.writeRootPlayer(result.player);
+      }
       return Object.assign({}, result, { room: this.publicRoom(result.room, playerPayload) });
     }
 
@@ -355,15 +376,6 @@
       nextPlayer.lastSeenAt = nowIso();
       touch(next);
       return { ok: true, room: next, player: nextPlayer };
-    }
-
-    touchPlayer(room, uuid) {
-      const next = this.engine.deepClone(room);
-      const player = next.players.find((item) => item.uuid === uuid);
-      if (!player) return { ok: false, code: "not_joined", error: "参加登録が必要です。" };
-      player.lastSeenAt = nowIso();
-      touch(next);
-      return { ok: true, room: next, player };
     }
 
     commitHostResult(room, nextRoom, baseVersion) {
@@ -519,6 +531,31 @@
       }));
     }
 
+    async readRootPlayer(uid) {
+      if (!uid) return null;
+      const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/players/${uid}`));
+      return snapshot.exists() ? snapshot.val() : null;
+    }
+
+    async writeRootPlayer(player) {
+      if (!player || !player.uuid) return;
+      await this.sdk.set(this.sdk.ref(this.firebaseDb, `/players/${player.uuid}`), rootPlayerNode(player, this.roomId));
+    }
+
+    async writeRootPlayersFromRoom(room) {
+      const players = (room && room.players || []).filter((player) => player && player.uuid);
+      if (!players.length) return;
+      if (this.sdk.update) {
+        const updates = players.reduce((acc, player) => {
+          acc[`players/${player.uuid}`] = rootPlayerNode(player, this.roomId);
+          return acc;
+        }, {});
+        await this.sdk.update(this.sdk.ref(this.firebaseDb), updates);
+        return;
+      }
+      await Promise.all(players.map((player) => this.writeRootPlayer(player)));
+    }
+
     async isHostAllowed() {
       if (this.mock) return true;
       const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/roles/hosts/${this.auth.uid}`));
@@ -580,6 +617,9 @@
         });
       }
       await this.writeRestChildUpdates(updates);
+      if (["/api/host/commit-result", "/api/host/start-stage", "/api/host/advance"].includes(path)) {
+        await this.writeRootPlayersFromRoom(nextRoom);
+      }
     }
   }
 
@@ -676,7 +716,6 @@
       "/api/player/join",
       "/api/player/restore",
       "/api/player/rename",
-      "/api/player/proceed-next",
       "/api/ticket/submit",
       "/api/ticket/abstain",
     ].includes(path);
@@ -857,6 +896,7 @@
     const updates = {};
     if (path.indexOf("/api/player/") === 0 && nodes.players && nodes.players[uid]) {
       updates[`players/${uid}`] = nodes.players[uid];
+      if (nodes.playerStats && nodes.playerStats[uid]) updates[`playerStats/${uid}`] = nodes.playerStats[uid];
     }
     if (path === "/api/ticket/submit" || path === "/api/ticket/abstain") {
       const stage = room.config && room.config.stages ? room.config.stages[room.currentStageIndex || 0] : null;
@@ -869,6 +909,65 @@
       }
     }
     return updates;
+  }
+
+  function rootPlayerNode(player, roomId) {
+    return {
+      name: player.name || player.uuid,
+      currentSkill: Number(player.skill || 0),
+      stageSkillHistory: player.stageSkillHistory || [],
+      joinedAt: player.joinedAt || "",
+      lastSeenAt: player.lastSeenAt || nowIso(),
+      updatedAt: nowIso(),
+      roomId: roomId || "",
+    };
+  }
+
+  function restorePlayerFromMaster(engine, room, uid, masterPlayer) {
+    if (!masterPlayer) return { ok: false, code: "not_found", error: "UUIDが見つかりません。" };
+    const cleanName = String(masterPlayer.name || uid || "").trim().slice(0, 24);
+    if (!cleanName) return { ok: false, code: "bad_player", error: "保存データに名前がありません。" };
+    const duplicateName = (room.players || []).find((player) => player.uuid !== uid && player.name === cleanName);
+    if (duplicateName) return { ok: false, code: "duplicate_name", error: "保存名が現在ゲーム内で使われています。Hostに確認してください。" };
+    const next = engine.deepClone(room);
+    let player = (next.players || []).find((item) => item.uuid === uid);
+    if (!player) {
+      player = {
+        uuid: uid,
+        name: cleanName,
+        joinedAt: nowIso(),
+        connected: true,
+        lastSeenAt: nowIso(),
+        skill: Number(masterPlayer.currentSkill || masterPlayer.skill || 0),
+        stageSkillHistory: normalizeSkillHistory(masterPlayer.stageSkillHistory),
+      };
+      next.players.push(player);
+      next.scores[uid] = next.scores[uid] || 0;
+    } else {
+      player.name = cleanName;
+      player.pendingName = null;
+      player.connected = true;
+      player.lastSeenAt = nowIso();
+      player.skill = Number(masterPlayer.currentSkill || masterPlayer.skill || 0);
+      player.stageSkillHistory = normalizeSkillHistory(masterPlayer.stageSkillHistory);
+    }
+    next.updatedAt = nowIso();
+    return { ok: true, room: next, player };
+  }
+
+  function mergeMasterStatsIntoResult(engine, result, uid, masterPlayer) {
+    if (!result || !result.ok || !masterPlayer) return result;
+    const next = engine.deepClone(result.room);
+    const player = (next.players || []).find((item) => item.uuid === uid);
+    if (!player) return result;
+    player.skill = Number(masterPlayer.currentSkill || masterPlayer.skill || 0);
+    player.stageSkillHistory = normalizeSkillHistory(masterPlayer.stageSkillHistory);
+    player.lastSeenAt = nowIso();
+    return Object.assign({}, result, { room: next, player });
+  }
+
+  function normalizeSkillHistory(value) {
+    return arrayFromFirebase(value).map((item) => Number(item || 0)).filter((item) => Number.isFinite(item));
   }
 
   function compactStatus(room) {
@@ -1055,5 +1154,8 @@
     roomFromFirebaseNodes,
     firebaseBaseSubscriptionPaths,
     firebaseStageSubscriptionPaths,
+    playerUpdates,
+    rootPlayerNode,
+    restorePlayerFromMaster,
   };
 })(typeof self !== "undefined" ? self : this);

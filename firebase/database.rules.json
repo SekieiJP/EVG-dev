@@ -56,7 +56,7 @@
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
           "$uid": {
             ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true)",
-            ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+            ".write": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true)",
             "currentSkill": { ".validate": "newData.isNumber()" },
             "stageSkillHistory": { ".validate": true },
             "updatedAt": { ".validate": "newData.isString()" },
@@ -139,8 +139,17 @@
     },
     "players": {
       "$uid": {
-        ".read": "auth != null && auth.uid === $uid",
-        ".write": "auth != null && auth.uid === $uid"
+        ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child(data.child('roomId').val()).child('roles').child('hosts').child(auth.uid).val() === true)",
+        ".write": "auth != null && (auth.uid === $uid || root.child('rooms').child(newData.child('roomId').val()).child('roles').child('hosts').child(auth.uid).val() === true)",
+        ".validate": "newData.hasChildren(['name', 'currentSkill', 'stageSkillHistory', 'joinedAt', 'lastSeenAt', 'updatedAt', 'roomId'])",
+        "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24" },
+        "currentSkill": { ".validate": "newData.isNumber()" },
+        "stageSkillHistory": { ".validate": true },
+        "joinedAt": { ".validate": "newData.isString()" },
+        "lastSeenAt": { ".validate": "newData.isString()" },
+        "updatedAt": { ".validate": "newData.isString()" },
+        "roomId": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80" },
+        "$other": { ".validate": false }
       }
     },
     "archives": {

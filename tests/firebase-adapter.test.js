@@ -67,6 +67,51 @@ run("firebase operation nodes use stable unique keys", () => {
   assert.strictEqual(nodes.operations["op-custom"].id, "op-custom");
 });
 
+run("firebase player updates write room player stats for self restore", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room.players[0].skill = 42;
+  room.players[0].stageSkillHistory = [8, 9, 10, 11, 12];
+
+  const updates = EVGFirebaseAdapter.playerUpdates("/api/player/restore", room, "alice");
+
+  assert.strictEqual(updates["players/alice"].name, "Alice");
+  assert.strictEqual(updates["playerStats/alice"].currentSkill, 42);
+  assert.deepStrictEqual(updates["playerStats/alice"].stageSkillHistory, [8, 9, 10, 11, 12]);
+});
+
+run("firebase root player node is the canonical saved player record", () => {
+  const node = EVGFirebaseAdapter.rootPlayerNode({
+    uuid: "alice",
+    name: "Alice",
+    skill: 18,
+    stageSkillHistory: [3, 7, 8],
+    joinedAt: "2026-06-06T00:00:00.000Z",
+    lastSeenAt: "2026-06-06T00:01:00.000Z",
+  }, "unit-room");
+
+  assert.strictEqual(node.name, "Alice");
+  assert.strictEqual(node.currentSkill, 18);
+  assert.deepStrictEqual(node.stageSkillHistory, [3, 7, 8]);
+  assert.strictEqual(node.roomId, "unit-room");
+});
+
+run("firebase restore uses saved name and skill without requiring a rename", () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  const result = EVGFirebaseAdapter.restorePlayerFromMaster(Engine, room, "alice", {
+    name: "Saved Alice",
+    currentSkill: 33,
+    stageSkillHistory: { 0: 4, 1: 10, 2: 19 },
+  });
+
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.player.uuid, "alice");
+  assert.strictEqual(result.player.name, "Saved Alice");
+  assert.strictEqual(result.player.skill, 33);
+  assert.deepStrictEqual(result.player.stageSkillHistory, [4, 10, 19]);
+  assert.strictEqual(result.room.players.length, 1);
+});
+
 run("firebase restores RTDB object arrays in stage results", () => {
   const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   const stage = Engine.getCurrentStage(room);

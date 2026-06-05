@@ -56,3 +56,10 @@ run("reveal camera position is driven by computed schedule", () => {
   assert.strictEqual(revealRenderer.includes("--reveal-shift"), true);
   assert.strictEqual(cssSource.includes("animation: cameraClimb"), false);
 });
+
+run("player view has no manual next button or ranking hold state", () => {
+  assert.strictEqual(appSource.includes("player-next"), false);
+  assert.strictEqual(appSource.includes("/api/player/proceed-next"), false);
+  assert.strictEqual(appSource.includes("playerRankingHold"), false);
+  assert.strictEqual(appSource.includes("restorePlayerRankingHoldIfNeeded"), false);
+});
