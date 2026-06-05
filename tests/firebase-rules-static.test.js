@@ -47,3 +47,12 @@ run("player master and self stats writes are explicitly scoped", () => {
   assert.match(rules.players.$uid[".validate"], /stageSkillHistory/);
   assert.strictEqual(rules.players.$uid.$other[".validate"], false);
 });
+
+run("completed game history is split into public summaries and scoped details", () => {
+  assert.strictEqual(roomRules.completedGames[".read"], false);
+  assert.strictEqual(roomRules.completedGames[".write"], false);
+  assert.strictEqual(roomRules.completedGameSummaries[".read"], "auth != null");
+  assert.match(roomRules.completedGameDetails[".read"], /roles'\)\.child\('hosts/);
+  assert.match(roomRules.completedGamePlayerDetails.$uid[".read"], /auth\.uid === \$uid/);
+  assert.match(roomRules.completedGamePlayerDetails.$uid[".write"], /roles'\)\.child\('hosts/);
+});

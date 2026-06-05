@@ -187,7 +187,7 @@
         };
       }
       if (path === "/api/history/games") {
-        return { ok: true, games: room.completedGames || [], players: publicPlayers(room.players || []) };
+        return this.historyGames(room, payload || {});
       }
       if (path.indexOf("/api/history/player/") === 0) {
         const uuid = path.split("/").pop();
@@ -421,16 +421,38 @@
       const stages = Object.keys(room.stageResults || {})
         .map((stageId) => room.stageResults[stageId].players && room.stageResults[stageId].players[uuid])
         .filter(Boolean);
+      const completedGames = (room.completedGames || []).filter((game) => playerParticipatedInGame(game, uuid));
+      const completedStages = completedGames
+        .flatMap((game) => Object.values(game.stageResults || {}))
+        .map((stageResult) => stageResult.players && stageResult.players[uuid])
+        .filter(Boolean);
+      const allStages = completedStages.concat(stages);
       return {
         ok: true,
-        games: room.completedGames || [],
-        stages,
+        games: completedGames,
+        stages: allStages,
         summary: {
           uuid,
-          totalScore: Number(room.scores[uuid] || 0),
-          stageCount: stages.length,
+          bestScore: allStages.length ? Math.max(...allStages.map((stage) => Number(stage.score || 0))) : 0,
+          gameCount: completedGames.length + (stages.length ? 1 : 0),
+          stageCount: allStages.length,
+          forcedOffCount: allStages.filter((stage) => stage.forcedOff).length,
+          predictionAccuracy: predictionAccuracy(allStages),
+          wins: completedGames.filter((game) => (game.rankings || []).some((row) => row.uuid === uuid && row.rank === 1)).length,
           currentSkill: ((room.players || []).find((player) => player.uuid === uuid) || {}).skill || 0,
         },
+      };
+    }
+
+    historyGames(room, payload) {
+      const summaries = room.completedGameSummaries || completedGameSummaries(room.completedGames || []);
+      const isHost = payload && payload.role === "host" && this.debug.isHostAllowed;
+      const uuid = payload && payload.uuid || "";
+      return {
+        ok: true,
+        summaries,
+        games: isHost ? (room.completedGames || []) : (room.completedGames || []).filter((game) => uuid && playerParticipatedInGame(game, uuid)),
+        players: publicPlayers(room.players || []),
       };
     }
 
@@ -642,7 +664,9 @@
       tickets: room.tickets || {},
       ticketPresence: ticketPresence(room, stage && stage.stageId),
       results: room.stageResults || {},
-      completedGames: keyBy(room.completedGames || [], "gameId", (game) => game),
+      completedGameSummaries: keyBy(completedGameSummaries(room.completedGames || []), "gameId", (summary) => summary),
+      completedGameDetails: keyBy(room.completedGames || [], "gameId", completedGameDetailNode),
+      completedGamePlayerDetails: completedGamePlayerDetails(room.completedGames || []),
       scores: Object.keys(room.scores || {}).reduce((acc, uuid) => {
         acc[uuid] = { total: room.scores[uuid], updatedAt: room.updatedAt || nowIso() };
         return acc;
@@ -684,6 +708,15 @@
       return acc;
     }, {});
     const settings = nodes.roomSettings || {};
+    const completedGameDetails = normalizeCompletedGames(nodes.completedGameDetails || nodes.completedGames || {});
+    const completedGameSummariesValue = normalizeCompletedGameSummaries(
+      nodes.completedGameSummaries || keyBy(completedGameSummaries(completedGameDetails), "gameId", (summary) => summary)
+    );
+    const uid = firstPlayerDetailUid(nodes.completedGamePlayerDetails);
+    const personalCompletedGames = uid
+      ? normalizeCompletedGames(nodes.completedGamePlayerDetails[uid] || {})
+      : [];
+    const completedGames = completedGameDetails.length ? completedGameDetails : mergePersonalGamesWithSummaries(personalCompletedGames, completedGameSummariesValue);
     return normalizeRoomShape({
       roomId: nodes.meta && nodes.meta.roomId || fallback.roomId,
       hostUid: firstHostUid(nodes.roles) || (nodes.meta && nodes.meta.hostUid) || "",
@@ -695,7 +728,8 @@
       tickets: nodes.tickets || {},
       stageResults: normalizeStageResults(nodes.results || {}),
       scores,
-      completedGames: normalizeCompletedGames(nodes.completedGames || {}),
+      completedGames,
+      completedGameSummaries: completedGameSummariesValue,
       operations: Object.values(nodes.operations || {}).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))),
       countdownEndsAt: status.countdownEndsAt || null,
       tallyingEndsAt: status.tallyingEndsAt || null,
@@ -729,15 +763,15 @@
     const common = ["meta", "public", "config", "roomSettings"];
     if (role === "host") {
       if (!hostAllowed) return common.concat([`roles/hosts/${uid}`]);
-      return common.concat([`roles/hosts/${uid}`, "players", "playerStats", "scores", "completedGames", "operations", "archive"]);
+      return common.concat([`roles/hosts/${uid}`, "players", "playerStats", "scores", "completedGameSummaries", "completedGameDetails", "operations", "archive"]);
     }
     if (role === "screen") {
       return common.concat(["players", "scores"]);
     }
     if (role === "history") {
-      return common.concat(["players", `playerStats/${uid}`, "scores", "completedGames"]);
+      return common.concat(["players", `playerStats/${uid}`, "scores", "completedGameSummaries", `completedGamePlayerDetails/${uid}`]);
     }
-    return common.concat(["players", `players/${uid}`, `playerStats/${uid}`, `scores/${uid}`, "completedGames"]);
+    return common.concat(["players", `players/${uid}`, `playerStats/${uid}`, `scores/${uid}`, "completedGameSummaries", `completedGamePlayerDetails/${uid}`]);
   }
 
   function firebaseStageSubscriptionPaths(role, uid, stageId, hostAllowed = true) {
@@ -783,6 +817,95 @@
       next.rankings = arrayFromFirebase(next.rankings);
       next.stageResults = normalizeStageResults(next.stageResults || {});
       return next;
+    });
+  }
+
+  function normalizeCompletedGameSummaries(summaries) {
+    return Object.values(summaries || {}).map((summary) => {
+      if (!summary || typeof summary !== "object") return summary;
+      const next = Object.assign({}, summary);
+      next.rankings = arrayFromFirebase(next.rankings);
+      next.stages = arrayFromFirebase(next.stages);
+      return next;
+    });
+  }
+
+  function completedGameSummaries(games) {
+    return (games || []).map(completedGameSummaryNode);
+  }
+
+  function completedGameSummaryNode(game) {
+    const stageResults = game && game.stageResults || {};
+    return {
+      gameId: game.gameId || "",
+      title: game.title || "game",
+      finishedAt: game.finishedAt || "",
+      interrupted: Boolean(game.interrupted),
+      finalPhase: game.finalPhase || "",
+      rankings: game.rankings || [],
+      playerCount: Object.keys(game.scores || {}).length,
+      stageCount: Object.keys(stageResults).length,
+      stages: Object.keys(stageResults).map((stageId) => ({
+        stageId,
+        name: stageResults[stageId] && stageResults[stageId].stageName || stageId,
+      })),
+    };
+  }
+
+  function completedGameDetailNode(game) {
+    return game || null;
+  }
+
+  function completedGamePlayerDetails(games) {
+    return (games || []).reduce((acc, game) => {
+      const uuids = new Set(Object.keys(game.scores || {}));
+      Object.values(game.stageResults || {}).forEach((stageResult) => {
+        Object.keys(stageResult.players || {}).forEach((uuid) => uuids.add(uuid));
+      });
+      uuids.forEach((uuid) => {
+        acc[uuid] = acc[uuid] || {};
+        acc[uuid][game.gameId] = completedGameForPlayer(game, uuid);
+      });
+      return acc;
+    }, {});
+  }
+
+  function completedGameForPlayer(game, uuid) {
+    const stageResults = Object.keys(game.stageResults || {}).reduce((acc, stageId) => {
+      const stageResult = game.stageResults[stageId] || {};
+      const playerResult = stageResult.players && stageResult.players[uuid];
+      if (!playerResult) return acc;
+      acc[stageId] = {
+        stageId: stageResult.stageId || stageId,
+        params: stageResult.params || null,
+        rankings: stageResult.rankings || [],
+        players: { [uuid]: playerResult },
+      };
+      return acc;
+    }, {});
+    return {
+      gameId: game.gameId || "",
+      title: game.title || "game",
+      finishedAt: game.finishedAt || "",
+      interrupted: Boolean(game.interrupted),
+      finalPhase: game.finalPhase || "",
+      scores: { [uuid]: Number((game.scores || {})[uuid] || 0) },
+      rankings: game.rankings || [],
+      stageResults,
+    };
+  }
+
+  function firstPlayerDetailUid(details) {
+    return Object.keys(details || {})[0] || "";
+  }
+
+  function mergePersonalGamesWithSummaries(personalGames, summaries) {
+    const summaryById = keyBy(summaries || [], "gameId", (summary) => summary);
+    return (personalGames || []).map((game) => {
+      const summary = summaryById[game.gameId] || {};
+      return Object.assign({}, summary, game, {
+        rankings: summary.rankings || game.rankings || [],
+      });
     });
   }
 
@@ -1059,6 +1182,7 @@
     room.stageResults = room.stageResults || {};
     room.scores = room.scores || {};
     room.completedGames = Array.isArray(room.completedGames) ? room.completedGames : Object.values(room.completedGames || {});
+    room.completedGameSummaries = Array.isArray(room.completedGameSummaries) ? room.completedGameSummaries : Object.values(room.completedGameSummaries || {});
     room.operations = Array.isArray(room.operations) ? room.operations : Object.values(room.operations || {});
     room.roomVersion = Number(room.roomVersion || 0);
     room.hostUid = room.hostUid || "";
@@ -1071,6 +1195,20 @@
 
   function publicPlayers(players) {
     return (players || []).map((player) => ({ uuid: player.uuid, name: player.name }));
+  }
+
+  function playerParticipatedInGame(game, uuid) {
+    if (!game || !uuid) return false;
+    if ((game.scores || {})[uuid] !== undefined) return true;
+    return Object.values(game.stageResults || {}).some((stageResult) => stageResult.players && stageResult.players[uuid]);
+  }
+
+  function predictionAccuracy(stageResults) {
+    const answers = (stageResults || [])
+      .flatMap((stageResult) => stageResult.predictionBreakdown || [])
+      .filter((item) => !item.noAnswer);
+    if (!answers.length) return null;
+    return answers.filter((item) => item.matched).length / answers.length;
   }
 
   function keyBy(items, key, mapper) {

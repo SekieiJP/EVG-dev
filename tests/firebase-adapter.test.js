@@ -39,6 +39,7 @@ run("firebase nodes round-trip room state without snapshot", () => {
 
   const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(room);
   assert.strictEqual(nodes.snapshot, undefined);
+  assert.strictEqual(nodes.completedGames, undefined);
   assert.strictEqual(nodes.meta.hostUid, undefined);
   assert.strictEqual(nodes.players.alice.name, "Alice");
   assert.strictEqual(nodes.scores.alice.total, 12);
@@ -144,11 +145,19 @@ run("firebase restores RTDB object arrays in stage results", () => {
       forcedOffCount: result.forcedOffCount,
     },
   };
-  nodes.completedGames = {
+  nodes.completedGameDetails = {
     previous: {
       gameId: "previous",
       rankings: { 0: { uuid: "alice", name: "Alice", rank: 1, score: 12 } },
       stageResults: nodes.results,
+    },
+  };
+  nodes.completedGameSummaries = {
+    previous: {
+      gameId: "previous",
+      title: "previous",
+      rankings: { 0: { uuid: "alice", name: "Alice", rank: 1, score: 12 } },
+      stages: { 0: { stageId: "stage-001", name: "stage-001" } },
     },
   };
 
@@ -162,6 +171,42 @@ run("firebase restores RTDB object arrays in stage results", () => {
   assert.strictEqual(restoredResult.timeline.length > 0, true);
   assert.strictEqual(Array.isArray(restored.completedGames[0].rankings), true);
   assert.strictEqual(Array.isArray(restored.completedGames[0].stageResults[stage.stageId].timeline), true);
+  assert.strictEqual(Array.isArray(restored.completedGameSummaries[0].rankings), true);
+});
+
+run("firebase can reconstruct player-owned completed game details from summaries", () => {
+  const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(Engine.createInitialRoom(Engine.DEFAULT_CONFIG));
+  nodes.completedGameSummaries = {
+    previous: {
+      gameId: "previous",
+      title: "Previous Game",
+      rankings: { 0: { uuid: "alice", name: "Alice", rank: 1, score: 12 }, 1: { uuid: "bob", name: "Bob", rank: 2, score: 4 } },
+      stages: { 0: { stageId: "stage-001", name: "stage-001" } },
+    },
+  };
+  nodes.completedGamePlayerDetails = {
+    alice: {
+      previous: {
+        gameId: "previous",
+        scores: { alice: 12 },
+        stageResults: {
+          "stage-001": {
+            stageId: "stage-001",
+            players: { alice: { uuid: "alice", name: "Alice", score: 12, predictionBreakdown: [] } },
+            rankings: { 0: { uuid: "alice", name: "Alice", rank: 1, score: 12 } },
+          },
+        },
+      },
+    },
+  };
+
+  const restored = EVGFirebaseAdapter.roomFromFirebaseNodes(nodes, Engine);
+
+  assert.strictEqual(restored.completedGames.length, 1);
+  assert.strictEqual(restored.completedGames[0].title, "Previous Game");
+  assert.strictEqual(restored.completedGames[0].scores.alice, 12);
+  assert.strictEqual(restored.completedGames[0].rankings.length, 2);
+  assert.strictEqual(Boolean(restored.completedGames[0].stageResults["stage-001"].players.alice), true);
 });
 
 runAsync("firebase room rewrite uses atomic update and avoids rules-closed volatile parent nodes", async () => {
@@ -247,9 +292,14 @@ run("firebase subscriptions are scoped by screen role", () => {
   assert.deepStrictEqual(lockedHostPaths, ["meta", "public", "config", "roomSettings", "roles/hosts/host-uid"]);
   assert.strictEqual(hostPaths.includes("tickets"), false);
   assert.strictEqual(hostPaths.includes("results"), false);
+  assert.strictEqual(hostPaths.includes("completedGameDetails"), true);
+  assert.strictEqual(hostPaths.includes("completedGames"), false);
   assert.strictEqual(screenPaths.includes("tickets"), false);
   assert.strictEqual(screenPaths.includes("results"), false);
   assert.strictEqual(playerPaths.includes("tickets"), false);
+  assert.strictEqual(playerPaths.includes("completedGameSummaries"), true);
+  assert.strictEqual(playerPaths.includes("completedGameDetails"), false);
+  assert.strictEqual(playerPaths.includes("completedGamePlayerDetails/player-uid"), true);
   assert.strictEqual(playerPaths.includes("scores/player-uid"), true);
   assert.deepStrictEqual(hostStagePaths, ["ticketPresence/stage-001", "tickets/stage-001", "results/stage-001"]);
   assert.deepStrictEqual(lockedHostStagePaths, []);

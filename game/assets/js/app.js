@@ -74,6 +74,7 @@
     busyCount: 0,
     hostPasswordDraft: QUERY.get("password") || "",
     selectedHistoryUuid: "",
+    selectedHistoryGameId: "",
     personalHistoryCache: loadJson(STORAGE_KEYS.personalHistoryCache, {}),
     historyLoadingUuid: "",
     historyError: "",
@@ -398,6 +399,10 @@
       state.selectedHistoryUuid = button.dataset.uuid;
       render();
       ensureVisibleHistoryCache();
+    }
+    if (action === "select-history-game") {
+      state.selectedHistoryGameId = button.dataset.gameId || "";
+      render();
     }
   }
 
@@ -1274,10 +1279,26 @@
     const selectedUuid = state.playerUuid || "";
     const selected = state.room.players.find((player) => player.uuid === selectedUuid);
     const historyEntry = getPersonalHistoryCache(selectedUuid);
+    const summaries = getHistorySummaries();
+    const selectedGameId = state.selectedHistoryGameId || (summaries[0] && summaries[0].gameId) || "";
+    const selectedGame = getHistoryGames().find((game) => game.gameId === selectedGameId) || null;
+    const selectedSummary = summaries.find((game) => game.gameId === selectedGameId) || selectedGame || null;
     return `
       <section class="shell">
         <header class="view-header"><div><p class="eyebrow">History</p><h1>戦歴</h1></div></header>
         <div class="history-grid">
+          <section class="panel">
+            <h2>過去ゲーム</h2>
+            ${summaries.map((game) => `
+              <button class="ranking-row ${game.gameId === selectedGameId ? "is-self" : ""}" data-action="select-history-game" data-game-id="${escapeAttr(game.gameId)}">
+                <span>${escapeHtml(game.title || game.gameId)}</span><strong>${formatScore(game.stageCount || 0)}st</strong>
+              </button>
+            `).join("") || `<p class="muted">なし</p>`}
+          </section>
+          <section class="panel">
+            <h2>ゲーム詳細</h2>
+            ${selectedSummary ? renderHistoryGameDetail(selectedSummary, selectedGame) : `<p class="muted">なし</p>`}
+          </section>
           <section class="panel">
             <h2>ランキング</h2>
             ${rankings.map((row) => `
@@ -1300,6 +1321,52 @@
           </section>
         </div>
       </section>
+    `;
+  }
+
+  function getHistorySummaries() {
+    const summaries = (state.room.completedGameSummaries || []).map((game) => Engine.deepClone(game));
+    const summaryIds = new Set(summaries.map((game) => game.gameId));
+    (state.room.completedGames || []).forEach((game) => {
+      if (summaryIds.has(game.gameId)) return;
+      summaries.push({
+        gameId: game.gameId,
+        title: game.title || game.gameId,
+        finishedAt: game.finishedAt || "",
+        interrupted: Boolean(game.interrupted),
+        finalPhase: game.finalPhase || "",
+        rankings: game.rankings || [],
+        stageCount: Object.keys(game.stageResults || {}).length,
+      });
+    });
+    return summaries.sort((a, b) => String(b.finishedAt || "").localeCompare(String(a.finishedAt || "")));
+  }
+
+  function renderHistoryGameDetail(summary, detail) {
+    const rankings = summary.rankings || detail && detail.rankings || [];
+    const stages = detail && detail.stageResults ? Object.values(detail.stageResults) : [];
+    return `
+      <div class="history-game-detail">
+        <p class="muted">${escapeHtml(summary.finishedAt ? formatTime(summary.finishedAt) : summary.gameId)} ${summary.interrupted ? "中断" : ""}</p>
+        <div class="mini-list">
+          ${(rankings || []).slice(0, 5).map((row) => `
+            <div class="mini-row"><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatScore(row.score)}</strong></div>
+          `).join("") || `<p class="muted">ランキングなし</p>`}
+        </div>
+        ${stages.length ? `
+          <div class="mini-list">
+            ${stages.map((stageResult) => {
+              const playerRows = Object.values(stageResult.players || {});
+              return `
+                <div class="mini-row">
+                  <span>${escapeHtml(stageResult.stageId || "")}</span>
+                  <strong>${playerRows.map((row) => `${escapeHtml(row.name || row.uuid)} ${formatScore(row.score)}`).join(" / ") || "-"}</strong>
+                </div>
+              `;
+            }).join("")}
+          </div>
+        ` : `<p class="muted">詳細はHostまたは本人のみ表示されます。</p>`}
+      </div>
     `;
   }
 
@@ -1596,6 +1663,7 @@
     room.stageResults = room.stageResults || {};
     room.scores = room.scores || {};
     room.completedGames = Array.isArray(room.completedGames) ? room.completedGames : Object.values(room.completedGames || {});
+    room.completedGameSummaries = Array.isArray(room.completedGameSummaries) ? room.completedGameSummaries : Object.values(room.completedGameSummaries || {});
     room.operations = Array.isArray(room.operations) ? room.operations : Object.values(room.operations || {});
     room.ticketPresence = room.ticketPresence || {};
     room.archive = room.archive || null;

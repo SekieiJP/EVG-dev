@@ -306,6 +306,7 @@
           <li>2026-06-06追記: Player復帰はFirebase RTDBのroot <code>players/{uuid}</code>を正とし、保存済み名前・現在Skill・StageSkill履歴を現在roomへ戻す方式にした。Firebase匿名認証の<code>auth.uid</code>をUUIDとして使うため、任意の過去UUIDを別匿名uidから引き継ぐ処理は実装していない。別端末引き継ぎが必要なら、Blaze + Cloud Functions等でclaim/transfer処理を追加する必要がある。</li>
           <li>2026-06-06追記: Spark + RTDB RulesだけでPlayer復帰を成立させるため、本人は<code>rooms/{roomId}/playerStats/{uid}</code>とroot <code>players/{uid}</code>を書ける。Cloud Functionsによるサーバ検証がないため、厳密な改ざん耐性はBlaze移行時の課題として残る。</li>
           <li>2026-06-06追記: MajorUpdate260606の回答に従い、静的クライアントからGAS接続先、GAS API key、GAS用fetchリトライ、同一端末localStorage Screen同期を削除した。<code>gas/</code>配下の旧実装とテスト資産は参照用に残すが、通常UIの通信経路はFirebase adapterだけにした。</li>
+          <li>2026-06-06追記: 完了ゲームはRTDB上で<code>completedGameSummaries</code>と<code>completedGameDetails/{gameId}</code>へ分割した。Playerが本人戦績をRulesで安全に読めるよう、補助ノードとして<code>completedGamePlayerDetails/{uid}/{gameId}</code>も書く。これはQ5の分割方針に、Q19のPlayer本人限定閲覧を満たすための索引を足した判断である。</li>
         </ul>
       </section>
 
