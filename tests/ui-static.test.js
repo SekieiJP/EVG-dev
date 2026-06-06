@@ -63,7 +63,7 @@ run("reveal completion is persisted and restored from room state", () => {
   assert.strictEqual(appSource.includes("function stampRevealEndsAt"), true);
   const completion = section(appSource, "function isRevealPlaybackComplete", "function buildRevealScoreRows");
   assert.strictEqual(completion.includes("state.room.revealEndsAt"), true);
-  assert.strictEqual(appSource.includes("(currentRoom.revealEndsAt || \"\") !== (nextRoom.revealEndsAt || \"\")"), true);
+  assert.strictEqual(appSource.includes("room.revealEndsAt = room.revealEndsAt || null"), true);
 });
 
 run("final stage ranking hides the total score side column", () => {
@@ -87,6 +87,15 @@ run("client runtime contains no GAS or local fallback transport", () => {
   assert.strictEqual(appSource.includes("screenLocalSync"), false);
   assert.strictEqual(configSource.includes("script.google.com/macros"), false);
   assert.strictEqual(configSource.includes("GAS_API"), false);
+});
+
+run("firebase client history uses subscribed data instead of REST fallbacks", () => {
+  assert.strictEqual(appSource.includes('/api/history/player/'), false);
+  assert.strictEqual(appSource.includes("buildLocalPersonalHistory"), true);
+  assert.strictEqual(appSource.includes("startup-fetch"), false);
+  assert.strictEqual(appSource.includes("maybeFetchRemoteAfterDeadline"), false);
+  assert.strictEqual(appSource.includes("checkRevealCompletionRemoteState"), false);
+  assert.strictEqual(appSource.includes("revealOnly"), false);
 });
 
 run("debug logs retain enough host evidence for UUID investigations", () => {

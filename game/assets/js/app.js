@@ -80,8 +80,6 @@
     historyError: "",
     restoreError: "",
     syncing: false,
-    lastRevealPollAt: 0,
-    revealCompletionCheckedFor: "",
     revealWasIncomplete: false,
     hostAutoTallyKey: "",
     hostAutoTallyInFlight: false,
@@ -169,9 +167,7 @@
     const needsRevealRefresh =
       Boolean(revealPlaybackIncomplete) &&
       ((state.role === "screen" && state.room.phase === Engine.PHASES.REVEAL) || state.role === "player");
-    maybeFetchRemoteAfterDeadline();
     maybeAutoCommitHostTally();
-    if (needsRevealRefresh || revealJustCompleted) checkRevealCompletionRemoteState();
     syncScreenAudio();
     if (needsPlayerCountdownPatch) updatePlayerCountdownDom();
     if (needsCountdownRefresh || needsRevealRefresh || revealJustCompleted) render();
@@ -1722,25 +1718,13 @@
     try {
       const response = await apiPost(remotePath, payload);
       const result = normalizeMutationResponse(response);
-      if (!result.ok) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+      if (!result.ok && state.role === "host") await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
       return result;
     } catch (error) {
       logClient("api.error", error.message);
-      await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+      if (state.role === "host") await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
       return { ok: false, room: state.room, error: "通信に失敗しました。" };
     }
-  }
-
-  function checkRevealCompletionRemoteState() {
-    if (state.syncing || state.room.phase !== Engine.PHASES.REVEAL) return;
-    const stage = Engine.getCurrentStage(state.room);
-    const result = getCurrentStageResult();
-    if (!stage || getRevealFloor(stage, result) < stage.params.N) return;
-    const checkKey = `${stage.stageId}:${state.room.animationStartedAt || ""}`;
-    if (state.revealCompletionCheckedFor === checkKey) return;
-    state.revealCompletionCheckedFor = checkKey;
-    state.lastRevealPollAt = Date.now();
-    refreshRemoteState({ revealOnly: true, full: true });
   }
 
   async function refreshRemoteState(options = {}) {
@@ -1755,7 +1739,6 @@
       }));
       if (response.ok && response.unchanged) return;
       if (response.ok && response.room) {
-        if (options.revealOnly && !shouldApplyRevealRemoteRoom(state.room, response.room)) return;
         applyRemoteRoom(response.room, Object.assign({ source: "fetch" }, options));
       } else if (!response.ok) {
         logClient("api.state", response.error || response.message || "状態取得に失敗しました。");
@@ -1765,22 +1748,6 @@
     } finally {
       state.syncing = false;
     }
-  }
-
-  function shouldApplyRevealRemoteRoom(currentRoom, nextRoom) {
-    if (!currentRoom || !nextRoom) return true;
-    if (currentRoom.phase !== Engine.PHASES.REVEAL) return true;
-    if (nextRoom.phase !== Engine.PHASES.REVEAL) return true;
-    if (currentRoom.currentStageIndex !== nextRoom.currentStageIndex) return true;
-    if ((currentRoom.animationStartedAt || "") !== (nextRoom.animationStartedAt || "")) return true;
-    if ((currentRoom.animationSkippedAt || "") !== (nextRoom.animationSkippedAt || "")) return true;
-    if ((currentRoom.revealEndsAt || "") !== (nextRoom.revealEndsAt || "")) return true;
-    const currentStage = getRoomCurrentStage(currentRoom);
-    const nextStage = getRoomCurrentStage(nextRoom);
-    if ((currentStage && currentStage.stageId) !== (nextStage && nextStage.stageId)) return true;
-    const currentResult = currentStage ? (currentRoom.stageResults || {})[currentStage.stageId] : null;
-    const nextResult = nextStage ? (nextRoom.stageResults || {})[nextStage.stageId] : null;
-    return !currentResult && Boolean(nextResult);
   }
 
   function getRoomCurrentStage(room) {
@@ -1799,7 +1766,7 @@
     try {
       state.firebaseStartedAt = new Date().toISOString();
       const init = await firebaseAdapter.init();
-      if (state.role === "player" && init && init.uid && state.playerUuid !== init.uid) {
+      if ((state.role === "player" || state.role === "history") && init && init.uid && state.playerUuid !== init.uid) {
         state.playerUuid = init.uid;
         localStorage.setItem(playerUuidStorageKey(), state.playerUuid);
       }
@@ -1808,7 +1775,6 @@
         if (!room) return;
         applyRemoteRoom(room);
       });
-      await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true, source: "startup-fetch" });
       if (state.role === "player") await restoreRemotePlayer(state.playerUuid, { retry: true, showErrors: false });
       logClient("firebase.ready", `${BUILD_CONFIG.FIREBASE_USE_LOCAL_MOCK ? "mock" : "rtdb"}:${BUILD_CONFIG.FIREBASE_ROOM_ID}`);
     } catch (error) {
@@ -1823,7 +1789,6 @@
       state.firebaseUnsubscribe = null;
     }
     await startFirebaseSync();
-    await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
   }
 
   function applyRemoteRoom(room, options = {}) {
@@ -1866,16 +1831,6 @@
     if (state.role === "host") return Boolean(state.hostAuthed && state.hostToken) && [Engine.PHASES.LOBBY, Engine.PHASES.VOTING].includes(state.room.phase);
     if (state.role === "screen") return Boolean(state.screenReady || state.room.phase !== Engine.PHASES.LOBBY);
     return false;
-  }
-
-  function maybeFetchRemoteAfterDeadline() {
-    if (state.role !== "player" || !state.playerUuid || state.syncing) return;
-    if (![Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase)) return;
-    const targetAt = state.room.tallyingEndsAt || state.room.countdownEndsAt;
-    if (!targetAt || serverNow() < new Date(targetAt).getTime()) return;
-    if (Date.now() < state.nextRemoteFetchAt) return;
-    state.nextRemoteFetchAt = Date.now() + 10000;
-    refreshRemoteState({ force: true });
   }
 
   function maybeAutoCommitHostTally() {
@@ -2054,19 +2009,52 @@
     state.historyError = "";
     render();
     try {
-      const response = await withBusy("戦績を読み込み中…", () => apiGet(`/api/history/player/${encodeURIComponent(uuid)}`, { uuid }));
-      if (response.ok) {
-        savePersonalHistoryCache(uuid, response);
-      } else {
-        state.historyError = response.error || response.message || "戦績を取得できませんでした。";
-      }
+      savePersonalHistoryCache(uuid, buildLocalPersonalHistory(uuid));
     } catch (error) {
-      state.historyError = "戦績の通信に失敗しました。";
+      state.historyError = "戦績を集計できませんでした。";
       logClient("history.error", error.message);
     } finally {
       state.historyLoadingUuid = "";
       render();
     }
+  }
+
+  function buildLocalPersonalHistory(uuid) {
+    const games = getHistoryGames().filter((game) => playerParticipatedInHistoryGame(game, uuid));
+    const stages = games
+      .flatMap((game) => Object.values(game.stageResults || {}))
+      .map((stageResult) => stageResult.players && stageResult.players[uuid])
+      .filter(Boolean);
+    const player = state.room.players.find((item) => item.uuid === uuid) || {};
+    const historySkills = Array.isArray(player.stageSkillHistory) ? player.stageSkillHistory : Object.values(player.stageSkillHistory || {});
+    const fallbackSkills = stages.map((stage) => stage.stageSkill).filter((value) => value !== null && value !== undefined);
+    const stageSkills = (historySkills.length ? historySkills : fallbackSkills)
+      .map((value) => Number(value || 0))
+      .filter((value) => Number.isFinite(value));
+    const answered = stages.flatMap((stage) => stage.predictionBreakdown || []).filter((item) => !item.noAnswer);
+    return {
+      ok: true,
+      games,
+      stages,
+      summary: {
+        uuid,
+        currentSkill: Number(player.skill || 0),
+        averageSkill: average(stageSkills),
+        totalSkill: stageSkills.reduce((sum, value) => sum + value, 0),
+        bestScore: stages.length ? Math.max(...stages.map((stage) => Number(stage.score || 0))) : 0,
+        gameCount: games.length,
+        stageCount: stages.length,
+        forcedOffCount: stages.filter((stage) => stage.forcedOff).length,
+        predictionAccuracy: answered.length ? answered.filter((item) => item.matched).length / answered.length : null,
+        wins: games.filter((game) => (game.rankings || []).some((row) => row.uuid === uuid && row.rank === 1)).length,
+      },
+    };
+  }
+
+  function playerParticipatedInHistoryGame(game, uuid) {
+    if (!game || !uuid) return false;
+    if ((game.scores || {})[uuid] !== undefined) return true;
+    return Object.values(game.stageResults || {}).some((stageResult) => stageResult.players && stageResult.players[uuid]);
   }
 
   async function apiGet(path, payload) {
