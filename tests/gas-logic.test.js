@@ -365,8 +365,11 @@ run("GAS save data summary contains required player metrics", () => {
   room = advance(gas, room, "close-voting");
   room = gas.tallyCurrentStage_(room, "test-host").room;
   const summary = gas.buildPlayerGameSummary_(room, room.players.find((player) => player.uuid === "alice"));
-  ["currentSkill", "averageSkill", "totalSkill", "totalScore", "averageScore", "bestScore", "gameCount", "stageCount", "forcedOffCount", "predictionAccuracy", "wins", "podiums"].forEach((key) => {
+  ["currentSkill", "averageSkill", "totalSkill", "bestScore", "gameCount", "stageCount", "forcedOffCount", "predictionAccuracy", "wins"].forEach((key) => {
     assert.strictEqual(Object.prototype.hasOwnProperty.call(summary, key), true, key);
+  });
+  ["totalScore", "averageScore", "podiums"].forEach((key) => {
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(summary, key), false, key);
   });
 });
 

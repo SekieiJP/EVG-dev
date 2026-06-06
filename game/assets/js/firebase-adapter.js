@@ -427,19 +427,27 @@
         .map((stageResult) => stageResult.players && stageResult.players[uuid])
         .filter(Boolean);
       const allStages = completedStages.concat(stages);
+      const roomPlayer = (room.players || []).find((player) => player.uuid === uuid) || {};
+      const historySkills = Array.isArray(roomPlayer.stageSkillHistory) ? roomPlayer.stageSkillHistory : Object.values(roomPlayer.stageSkillHistory || {});
+      const fallbackSkills = allStages.map((stage) => stage.stageSkill).filter((value) => value !== null && value !== undefined);
+      const stageSkills = (historySkills.length ? historySkills : fallbackSkills)
+        .map((value) => Number(value || 0))
+        .filter((value) => Number.isFinite(value));
       return {
         ok: true,
         games: completedGames,
         stages: allStages,
         summary: {
           uuid,
+          currentSkill: Number(roomPlayer.skill || 0),
+          averageSkill: stageSkills.length ? stageSkills.reduce((sum, value) => sum + value, 0) / stageSkills.length : 0,
+          totalSkill: stageSkills.reduce((sum, value) => sum + value, 0),
           bestScore: allStages.length ? Math.max(...allStages.map((stage) => Number(stage.score || 0))) : 0,
           gameCount: completedGames.length + (stages.length ? 1 : 0),
           stageCount: allStages.length,
           forcedOffCount: allStages.filter((stage) => stage.forcedOff).length,
           predictionAccuracy: predictionAccuracy(allStages),
           wins: completedGames.filter((game) => (game.rankings || []).some((row) => row.uuid === uuid && row.rank === 1)).length,
-          currentSkill: ((room.players || []).find((player) => player.uuid === uuid) || {}).skill || 0,
         },
       };
     }

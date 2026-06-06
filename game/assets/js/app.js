@@ -1529,9 +1529,7 @@
     const answered = stageResults.flatMap((item) => item.predictionBreakdown || []).filter((item) => !item.noAnswer);
     const correct = answered.filter((item) => item.matched).length;
     const playerGames = games.filter((game) => Object.values(game.stageResults || {}).some((stageResult) => stageResult.players[player.uuid]));
-    const totalScore = games.reduce((sum, game) => sum + Number((game.scores || {})[player.uuid] || 0), 0);
     const wins = games.filter((game) => (game.rankings || []).some((row) => row.uuid === player.uuid && row.rank === 1)).length;
-    const podiums = games.filter((game) => (game.rankings || []).some((row) => row.uuid === player.uuid && row.rank <= 3)).length;
     const summary = remoteSummary || {};
     const predictionAccuracy = summary.predictionAccuracy !== undefined && summary.predictionAccuracy !== null
       ? Number(summary.predictionAccuracy) * 100
@@ -1541,15 +1539,12 @@
         <div><dt>現在Skill値</dt><dd>${formatSkill(summary.currentSkill ?? player.skill ?? 0)}</dd></div>
         <div><dt>平均Skill値</dt><dd>${formatSkill(summary.averageSkill ?? average(player.stageSkillHistory || []))}</dd></div>
         <div><dt>合計Skill値</dt><dd>${formatSkill(summary.totalSkill ?? (player.stageSkillHistory || []).reduce((a, b) => a + b, 0))}</dd></div>
-        <div><dt>累積得点</dt><dd>${formatScore(summary.totalScore ?? totalScore)}</dd></div>
-        <div><dt>平均得点</dt><dd>${formatScore(summary.averageScore ?? average(scores))}</dd></div>
         <div><dt>最高得点</dt><dd>${formatScore(summary.bestScore ?? (scores.length ? Math.max(...scores) : 0))}</dd></div>
         <div><dt>参加ゲーム数</dt><dd>${formatScore(summary.gameCount ?? playerGames.length)}</dd></div>
         <div><dt>参加ステージ数</dt><dd>${formatScore(summary.stageCount ?? stageResults.length)}</dd></div>
         <div><dt>強制下車回数</dt><dd>${formatScore(summary.forcedOffCount ?? forced)}</dd></div>
         <div><dt>予想イベント正解率</dt><dd>${predictionAccuracy === null ? "-" : formatSkill(predictionAccuracy) + "%"}</dd></div>
         <div><dt>優勝回数</dt><dd>${formatScore(summary.wins ?? wins)}</dd></div>
-        <div><dt>表彰台回数</dt><dd>${formatScore(summary.podiums ?? podiums)}</dd></div>
       </dl>
     `;
   }

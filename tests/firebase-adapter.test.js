@@ -115,6 +115,52 @@ run("firebase restore uses saved name and skill without requiring a rename", () 
   assert.strictEqual(result.room.players.length, 1);
 });
 
+run("firebase player history summary matches approved metric keys", () => {
+  global.BroadcastChannel = undefined;
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room.players[0].skill = 30;
+  room.players[0].stageSkillHistory = [10, 20];
+  room.completedGames = [{
+    gameId: "previous",
+    title: "Previous",
+    scores: { alice: 18 },
+    rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 18 }],
+    stageResults: {
+      "stage-001": {
+        stageId: "stage-001",
+        players: {
+          alice: {
+            uuid: "alice",
+            name: "Alice",
+            score: 18,
+            stageSkill: 10,
+            forcedOff: false,
+            predictionBreakdown: [{ matched: true, noAnswer: false }],
+          },
+        },
+      },
+    },
+  }];
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_USE_LOCAL_MOCK: true, FIREBASE_ROOM_ID: "unit-history-summary" },
+    engine: Engine,
+    getRole: () => "player",
+    getUuid: () => "alice",
+  });
+
+  const summary = adapter.playerHistory(room, "alice").summary;
+
+  ["currentSkill", "averageSkill", "totalSkill", "bestScore", "gameCount", "stageCount", "forcedOffCount", "predictionAccuracy", "wins"].forEach((key) => {
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(summary, key), true, key);
+  });
+  ["totalScore", "averageScore", "podiums"].forEach((key) => {
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(summary, key), false, key);
+  });
+  assert.strictEqual(summary.averageSkill, 15);
+  assert.strictEqual(summary.totalSkill, 30);
+});
+
 run("firebase restores RTDB object arrays in stage results", () => {
   const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   const stage = Engine.getCurrentStage(room);

@@ -311,6 +311,7 @@
           <li>2026-06-06追記: 最終ステージ後も<code>ranking</code>フェーズは維持するが、このフェーズでは右側の総合ランキングカラムを出さず、今ステージのランキングだけを表示する。最終総合順位は次の<code>final</code>フェーズで表示する。</li>
           <li>2026-06-06追記: Hostのクライアントログ保持数を2000件へ増やし、APIログにrequest/payload/response UUIDを追加した。退室操作ではボタン由来UUID、対象名、退室前後のplayers UUID一覧を残す。</li>
           <li>2026-06-06追記: Playerがチケット入力中にRTDB通知で<code>countdown</code>/<code>tallying</code>へ変わる場合、フォーム全体を再描画せず<code>data-player-countdown</code>だけを更新する。入力欄の破棄を避けるため。</li>
+          <li>2026-06-06追記: Historyの個人戦績表示とFirebase/GAS summaryから、旧指標の累積得点、平均得点、表彰台回数を外した。表示指標は10.5.4の9項目へ統一する。</li>
         </ul>
       </section>
 

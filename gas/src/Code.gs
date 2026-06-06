@@ -1306,15 +1306,12 @@ function buildPlayerGameSummary_(room, player) {
     currentSkill: Number(player.skill || 0),
     averageSkill: average_(player.stageSkillHistory || []),
     totalSkill: round_((player.stageSkillHistory || []).reduce(function(sum, value) { return sum + Number(value || 0); }, 0)),
-    totalScore: Number(room.scores[player.uuid] || 0),
-    averageScore: average_(stageScores),
     bestScore: stageScores.length ? Math.max.apply(null, stageScores) : 0,
     gameCount: 1,
     stageCount: stages.filter(function(result) { return result.ticket && !result.ticket.abstained; }).length,
     forcedOffCount: stages.filter(function(result) { return result.status === 'forced_off'; }).length,
     predictionAccuracy: answeredPredictions.length ? round_(answeredPredictions.filter(function(item) { return item.matched; }).length / answeredPredictions.length) : null,
     wins: ranking.rank === 1 ? 1 : 0,
-    podiums: ranking.rank <= 3 ? 1 : 0,
     rank: ranking.rank || null,
     interrupted: room.phase !== EVG_PHASES.FINAL,
   };
@@ -1325,19 +1322,16 @@ function aggregatePlayerHistory_(uuid, saveRows, stageRows) {
   const stageSkills = (stageRows || []).map(function(row) { return Number(row.stageSkill || 0); }).filter(function(value) { return value > 0; });
   const scores = (stageRows || []).map(function(row) { return Number(row.score || 0); });
   const totals = summaries.reduce(function(acc, summary) {
-    acc.totalScore += Number(summary.totalScore || 0);
     acc.gameCount += Number(summary.gameCount || 0);
     acc.wins += Number(summary.wins || 0);
-    acc.podiums += Number(summary.podiums || 0);
     acc.forcedOffCount += Number(summary.forcedOffCount || 0);
     return acc;
-  }, { totalScore: 0, gameCount: 0, wins: 0, podiums: 0, forcedOffCount: 0 });
+  }, { gameCount: 0, wins: 0, forcedOffCount: 0 });
   return Object.assign(totals, {
     uuid,
     currentSkill: currentSkill_(stageSkills),
     averageSkill: average_(stageSkills),
     totalSkill: round_(stageSkills.reduce(function(sum, value) { return sum + value; }, 0)),
-    averageScore: average_(scores),
     bestScore: scores.length ? Math.max.apply(null, scores) : 0,
     stageCount: scores.length,
   });

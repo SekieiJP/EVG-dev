@@ -106,3 +106,13 @@ run("player countdown updates do not rerender active ticket input", () => {
   assert.strictEqual(appSource.includes("needsPlayerCountdownPatch"), true);
   assert.strictEqual(cssSource.includes(".inline-countdown:empty"), true);
 });
+
+run("history player stats show the approved metric set only", () => {
+  const statsRenderer = section(appSource, "function renderPlayerStats", "function renderSkillDelta");
+  assert.strictEqual(statsRenderer.includes("累積得点"), false);
+  assert.strictEqual(statsRenderer.includes("平均得点"), false);
+  assert.strictEqual(statsRenderer.includes("表彰台回数"), false);
+  ["現在Skill値", "平均Skill値", "合計Skill値", "最高得点", "参加ゲーム数", "参加ステージ数", "強制下車回数", "予想イベント正解率", "優勝回数"].forEach((label) => {
+    assert.strictEqual(statsRenderer.includes(label), true, label);
+  });
+});
