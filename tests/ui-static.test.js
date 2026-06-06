@@ -88,3 +88,21 @@ run("client runtime contains no GAS or local fallback transport", () => {
   assert.strictEqual(configSource.includes("script.google.com/macros"), false);
   assert.strictEqual(configSource.includes("GAS_API"), false);
 });
+
+run("debug logs retain enough host evidence for UUID investigations", () => {
+  assert.strictEqual(appSource.includes("state.logs = state.logs.slice(0, 2000)"), true);
+  assert.strictEqual(appSource.includes("requestUuid"), true);
+  assert.strictEqual(appSource.includes("payloadUuid"), true);
+  assert.strictEqual(appSource.includes("responsePlayerUuid"), true);
+  assert.strictEqual(appSource.includes("host.remove-player.start"), true);
+  assert.strictEqual(appSource.includes("buttonUuid"), true);
+  assert.strictEqual(appSource.includes("afterPlayers"), true);
+});
+
+run("player countdown updates do not rerender active ticket input", () => {
+  assert.strictEqual(appSource.includes("data-player-countdown"), true);
+  assert.strictEqual(appSource.includes("function updatePlayerCountdownDom"), true);
+  assert.strictEqual(appSource.includes("function shouldPatchPlayerCountdownOnly"), true);
+  assert.strictEqual(appSource.includes("needsPlayerCountdownPatch"), true);
+  assert.strictEqual(cssSource.includes(".inline-countdown:empty"), true);
+});

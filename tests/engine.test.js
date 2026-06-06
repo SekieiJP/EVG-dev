@@ -114,10 +114,13 @@ run("remove player leaves save data conceptually intact but removes current room
 
   assert.strictEqual(removed.ok, true, removed.error);
   assert.strictEqual(removed.room.players.some((player) => player.uuid === "bob"), false);
+  assert.strictEqual(removed.room.players.some((player) => player.uuid === "alice"), true);
+  assert.strictEqual(removed.room.scores.alice > 0, true);
   assert.strictEqual(removed.room.scores.bob, undefined);
   assert.strictEqual(removed.room.tickets[stage.stageId].bob, undefined);
   assert.strictEqual(removed.room.ticketPresence[stage.stageId].bob, undefined);
   assert.strictEqual(removed.room.stageResults[stage.stageId].players.bob, undefined);
+  assert.strictEqual(Boolean(removed.room.stageResults[stage.stageId].players.alice), true);
   assert.strictEqual(removed.room.stageResults[stage.stageId].rankings.some((row) => row.uuid === "bob"), false);
   assert.strictEqual(removed.room.stageResults[stage.stageId].timeline.some((step) => {
     return ["boarding", "exiting", "passengersBeforeCheck", "passengersAfterCheck", "forcedOff"]

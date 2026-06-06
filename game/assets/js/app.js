@@ -154,6 +154,10 @@
     const needsCountdownRefresh =
       [Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase) &&
       (state.role === "host" || state.role === "screen" || (state.role === "player" && !isEditingPlayerText()));
+    const needsPlayerCountdownPatch =
+      state.role === "player" &&
+      isEditingPlayerText() &&
+      [Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(state.room.phase);
     const stage = Engine.getCurrentStage(state.room);
     const revealPlaybackIncomplete =
       stage &&
@@ -169,6 +173,7 @@
     maybeAutoCommitHostTally();
     if (needsRevealRefresh || revealJustCompleted) checkRevealCompletionRemoteState();
     syncScreenAudio();
+    if (needsPlayerCountdownPatch) updatePlayerCountdownDom();
     if (needsCountdownRefresh || needsRevealRefresh || revealJustCompleted) render();
   }
 
@@ -383,6 +388,7 @@
       const uuid = button.dataset.uuid || "";
       const player = state.room.players.find((item) => item.uuid === uuid);
       if (!player) return showToast("現在ゲームの参加者ではありません。");
+      logClient("host.remove-player.start", { buttonUuid: uuid, targetName: player.name, beforePlayers: state.room.players.map((item) => item.uuid) });
       if (!confirm(`${player.name} を現在ゲームから退室させます。保存済み履歴は削除しません。`)) return;
       const result = await runMutation(
         () => Engine.removePlayerFromRoom(state.room, uuid, "host"),
@@ -392,6 +398,7 @@
       if (!result.ok) return showToast(result.error || "退室できませんでした。");
       state.room = result.room;
       saveRoom("host.player.remove", "host");
+      logClient("host.remove-player.ok", { payloadUuid: uuid, targetName: player.name, afterPlayers: state.room.players.map((item) => item.uuid) });
       showToast(`${player.name} を退室させました。`);
       render();
     }
@@ -547,13 +554,24 @@
   }
 
   function renderPlayerInlineCountdown() {
+    return `<div class="inline-countdown" data-player-countdown>${playerCountdownMarkup()}</div>`;
+  }
+
+  function playerCountdownMarkup() {
     if (state.room.phase === Engine.PHASES.COUNTDOWN && !isRemoteMoving()) {
-      return `<div class="inline-countdown"><span>締切まで</span><strong>${countdownSeconds()}秒</strong></div>`;
+      return `<span>締切まで</span><strong>${countdownSeconds()}秒</strong>`;
     }
     if (isRemoteMoving() || state.room.phase === Engine.PHASES.TALLYING) {
-      return `<div class="inline-countdown"><span>移動中…</span><strong>${movingSeconds()}秒</strong></div>`;
+      return `<span>移動中…</span><strong>${movingSeconds()}秒</strong>`;
     }
     return "";
+  }
+
+  function updatePlayerCountdownDom() {
+    const target = document.querySelector("[data-player-countdown]");
+    if (!target) return false;
+    target.innerHTML = playerCountdownMarkup();
+    return true;
   }
 
   function renderPredictionInput(event, index, ticket) {
@@ -1830,8 +1848,21 @@
       version: Number(room.roomVersion || 0),
       role: state.role,
     });
+    const patchCountdownOnly = shouldPatchPlayerCountdownOnly(state.room, room);
     state.room = room;
+    if (patchCountdownOnly && updatePlayerCountdownDom()) return;
     render();
+  }
+
+  function shouldPatchPlayerCountdownOnly(currentRoom, nextRoom) {
+    if (state.role !== "player" || !isEditingPlayerText() || !currentRoom || !nextRoom) return false;
+    if (![Engine.PHASES.VOTING, Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(currentRoom.phase)) return false;
+    if (![Engine.PHASES.VOTING, Engine.PHASES.COUNTDOWN, Engine.PHASES.TALLYING].includes(nextRoom.phase)) return false;
+    const currentStage = getRoomCurrentStage(currentRoom);
+    const nextStage = getRoomCurrentStage(nextRoom);
+    return currentRoom.gameId === nextRoom.gameId &&
+      currentRoom.currentStageIndex === nextRoom.currentStageIndex &&
+      (currentStage && currentStage.stageId) === (nextStage && nextStage.stageId);
   }
 
   function shouldPollRemoteState() {
@@ -2140,10 +2171,13 @@
       error: response && (response.error || response.message) || "",
       elapsedMs: Date.now() - startedAt,
       requestRole: state.role,
+      requestUuid: state.playerUuid || "",
+      payloadUuid: payload && payload.uuid || "",
       requestPhase: state.room ? state.room.phase : "",
       requestVersion: state.room ? Number(state.room.roomVersion || 0) : 0,
       responsePhase: room ? room.phase : "",
       responseVersion: room ? Number(room.roomVersion || 0) : "",
+      responsePlayerUuid: response && response.player ? response.player.uuid : response && response.me ? response.me.uuid : "",
       hostAction: payload && payload.hostName ? path : "",
     };
     logClient(response && response.ok === false ? "api.response.error" : "api.response", state.lastApi);
@@ -2213,7 +2247,7 @@
 
   function logClient(kind, message) {
     state.logs.unshift({ at: new Date().toISOString(), kind, message: typeof message === "string" ? message : compactJson(message || "") });
-    state.logs = state.logs.slice(0, 200);
+    state.logs = state.logs.slice(0, 2000);
     localStorage.setItem(STORAGE_KEYS.logs, JSON.stringify(state.logs));
   }
 

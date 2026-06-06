@@ -309,6 +309,8 @@
           <li>2026-06-06追記: 完了ゲームはRTDB上で<code>completedGameSummaries</code>と<code>completedGameDetails/{gameId}</code>へ分割した。Playerが本人戦績をRulesで安全に読めるよう、補助ノードとして<code>completedGamePlayerDetails/{uid}/{gameId}</code>も書く。これはQ5の分割方針に、Q19のPlayer本人限定閲覧を満たすための索引を足した判断である。</li>
           <li>2026-06-06追記: reveal演出の完了時刻はHost集計commit時に<code>revealEndsAt</code>としてRTDBのpublic状態へ保存する。Host再読み込み後も<code>animationStartedAt</code>、<code>revealEndsAt</code>、<code>results/{stageId}</code>から同じ完了判定に戻すため。</li>
           <li>2026-06-06追記: 最終ステージ後も<code>ranking</code>フェーズは維持するが、このフェーズでは右側の総合ランキングカラムを出さず、今ステージのランキングだけを表示する。最終総合順位は次の<code>final</code>フェーズで表示する。</li>
+          <li>2026-06-06追記: Hostのクライアントログ保持数を2000件へ増やし、APIログにrequest/payload/response UUIDを追加した。退室操作ではボタン由来UUID、対象名、退室前後のplayers UUID一覧を残す。</li>
+          <li>2026-06-06追記: Playerがチケット入力中にRTDB通知で<code>countdown</code>/<code>tallying</code>へ変わる場合、フォーム全体を再描画せず<code>data-player-countdown</code>だけを更新する。入力欄の破棄を避けるため。</li>
         </ul>
       </section>
 
