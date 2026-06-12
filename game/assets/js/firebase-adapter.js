@@ -637,13 +637,25 @@
         updates["playerStats"] = nodes.playerStats;
       }
       if (path === "/api/host/remove-player") {
-        updates["players"] = nodes.players;
-        updates["playerStats"] = nodes.playerStats;
-        updates["scores"] = nodes.scores;
-        Array.from(new Set(volatileStageIds(currentRoom).concat(volatileStageIds(nextRoom)))).forEach((stageId) => {
-          updates[`tickets/${stageId}`] = emptyObjectToNull(nextRoom.tickets && nextRoom.tickets[stageId] || {});
-          updates[`ticketPresence/${stageId}`] = emptyObjectToNull(nextRoom.ticketPresence && nextRoom.ticketPresence[stageId] || {});
-          updates[`results/${stageId}`] = emptyObjectToNull(nextRoom.stageResults && nextRoom.stageResults[stageId] || {});
+        removedPlayerUids(currentRoom, nextRoom).forEach((uid) => {
+          updates[`players/${uid}`] = null;
+          updates[`playerStats/${uid}`] = null;
+          updates[`scores/${uid}`] = null;
+          Object.keys(currentRoom.tickets || {}).forEach((stageId) => {
+            if (currentRoom.tickets[stageId] && currentRoom.tickets[stageId][uid]) updates[`tickets/${stageId}/${uid}`] = null;
+          });
+          Object.keys(currentRoom.ticketPresence || {}).forEach((stageId) => {
+            if (currentRoom.ticketPresence[stageId] && currentRoom.ticketPresence[stageId][uid]) updates[`ticketPresence/${stageId}/${uid}`] = null;
+          });
+          Object.keys(currentRoom.stageResults || {}).forEach((stageId) => {
+            const currentResult = currentRoom.stageResults[stageId];
+            if (!currentResult || !currentResult.players || !currentResult.players[uid]) return;
+            const nextResult = nextRoom.stageResults && nextRoom.stageResults[stageId] || {};
+            updates[`results/${stageId}/players/${uid}`] = null;
+            updates[`results/${stageId}/rankings`] = nextResult.rankings || [];
+            updates[`results/${stageId}/timeline`] = nextResult.timeline || [];
+            updates[`results/${stageId}/stats`] = nextResult.stats || {};
+          });
         });
       }
       await this.writeRestChildUpdates(updates);
@@ -810,6 +822,13 @@
       if (stage && stage.stageId) ids.add(stage.stageId);
     });
     return Array.from(ids).filter(Boolean);
+  }
+
+  function removedPlayerUids(currentRoom, nextRoom) {
+    const nextUids = new Set((nextRoom.players || []).map((player) => player.uuid));
+    return (currentRoom.players || [])
+      .map((player) => player.uuid)
+      .filter((uuid) => uuid && !nextUids.has(uuid));
   }
 
   function normalizeStageResults(results) {

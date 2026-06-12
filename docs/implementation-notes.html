@@ -313,6 +313,7 @@
           <li>2026-06-06追記: Playerがチケット入力中にRTDB通知で<code>countdown</code>/<code>tallying</code>へ変わる場合、フォーム全体を再描画せず<code>data-player-countdown</code>だけを更新する。入力欄の破棄を避けるため。</li>
           <li>2026-06-06追記: Historyの個人戦績表示とFirebase/GAS summaryから、旧指標の累積得点、平均得点、表彰台回数を外した。表示指標は10.5.4の9項目へ統一する。</li>
           <li>2026-06-06追記: History通常UIは、<code>/api/history/player/{uuid}</code>互換APIを追加GETせず、購読済みの<code>completedGameSummaries</code>と本人用<code>completedGamePlayerDetails/{uid}</code>を復元した<code>state.room</code>から本人戦績をローカル集計する。Player本人戦績の閲覧拒否は仕様ではなく、購読移行後に残ったRESTフォールバックがRules差分で失敗し得る実装問題として扱った。あわせてFirebase起動時、締切後、reveal完了確認の補助<code>/api/status</code>取得を通常Player/History/Screen経路から外し、Host失敗時の復旧取得だけを残した。</li>
+          <li>2026-06-12追記: Hostの退室操作は、現在ゲームから対象UUIDを外すだけでroot <code>players/{uid}</code>の保存済みユーザーデータには触れない。Firebase RTDB更新も<code>rooms/{roomId}/players/{uid}</code>、<code>playerStats/{uid}</code>、<code>scores/{uid}</code>、対象チケット/結果の子パス削除に絞り、親ノード丸ごとの書き直しや未関係ステージの削除を避ける。退室失敗時は原因ログが<code>/api/status</code>の失敗で上書きされないよう、退室操作だけ失敗時の補助状態取得を行わない。</li>
         </ul>
       </section>
 

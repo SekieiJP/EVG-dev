@@ -1718,13 +1718,18 @@
     try {
       const response = await apiPost(remotePath, payload);
       const result = normalizeMutationResponse(response);
-      if (!result.ok && state.role === "host") await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+      if (!result.ok && shouldRefreshAfterMutationFailure(remotePath)) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
       return result;
     } catch (error) {
       logClient("api.error", error.message);
-      if (state.role === "host") await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
+      if (shouldRefreshAfterMutationFailure(remotePath)) await refreshRemoteState({ force: true, full: true, ignoreLocalVersion: true });
       return { ok: false, room: state.room, error: "通信に失敗しました。" };
     }
+  }
+
+  function shouldRefreshAfterMutationFailure(remotePath) {
+    if (state.role !== "host") return false;
+    return remotePath !== "/api/host/remove-player";
   }
 
   async function refreshRemoteState(options = {}) {

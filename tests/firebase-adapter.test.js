@@ -360,6 +360,52 @@ run("firebase subscriptions are scoped by screen role", () => {
   ]);
 });
 
+runAsync("firebase host remove player writes only removed player child nodes", async () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room = Engine.registerPlayer(room, "Bob", "bob").room;
+  const stage = Engine.getCurrentStage(room);
+  room.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {}, submittedAt: "2026-06-01T00:00:00.000Z" },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 4, predictions: {}, submittedAt: "2026-06-01T00:00:00.000Z" },
+  };
+  room.ticketPresence = {
+    [stage.stageId]: {
+      alice: { status: "submitted", updatedAt: "2026-06-01T00:00:00.000Z" },
+      bob: { status: "submitted", updatedAt: "2026-06-01T00:00:00.000Z" },
+    },
+  };
+  const tallied = Engine.tallyCurrentStage(Object.assign({}, room, { phase: Engine.PHASES.COUNTDOWN }));
+  assert.strictEqual(tallied.ok, true, tallied.error);
+  const removed = Engine.removePlayerFromRoom(tallied.room, "bob", "host");
+  assert.strictEqual(removed.ok, true, removed.error);
+
+  let updates = null;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+    getUuid: () => "host-uid",
+  });
+  adapter.writeRestChildUpdates = async (nextUpdates) => {
+    updates = nextUpdates;
+  };
+
+  await adapter.writeHostSideEffects("/api/host/remove-player", tallied.room, removed.room);
+
+  assert.strictEqual(updates.players, undefined);
+  assert.strictEqual(updates.playerStats, undefined);
+  assert.strictEqual(updates.scores, undefined);
+  assert.strictEqual(updates["players/bob"], null);
+  assert.strictEqual(updates["playerStats/bob"], null);
+  assert.strictEqual(updates["scores/bob"], null);
+  assert.strictEqual(updates[`tickets/${stage.stageId}/bob`], null);
+  assert.strictEqual(updates[`ticketPresence/${stage.stageId}/bob`], null);
+  assert.strictEqual(updates[`results/${stage.stageId}/players/bob`], null);
+  assert.strictEqual(updates[`results/${stage.stageId}/rankings`].some((row) => row.uuid === "bob"), false);
+  assert.strictEqual(JSON.stringify(updates[`results/${stage.stageId}/timeline`]).includes("bob"), false);
+});
+
 runAsync("firebase mock host flow advances through public state", async () => {
   const storage = {};
   global.localStorage = {
