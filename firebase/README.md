@@ -16,6 +16,12 @@ Firebaseプロジェクト `elevator-game-live` の初期セットアップはFi
 
 - `database.rules.json`: Sparkで動かすためのRealtime Database Rules。`elevator-game-live-default-rtdb` へdeploy済み。
 
+## デプロイ運用チェックリスト
+
+- `database.rules.json` を変更したら、現在の本番RTDB Rulesをバックアップしてから `firebase deploy --only database` を実行する。
+- Rulesをdeployした日時は `docs/implementation-notes.html` に記録する。
+- リリース時は、`game/index.html` のCSS/JS参照に付けているアセットquery versionを更新し、旧CSS/JSキャッシュ混在を避ける。
+
 ## ローカル作業メモ
 
 Firebase CLIを使う場合は、プロジェクト作成後に以下のような設定を追加する想定です。
