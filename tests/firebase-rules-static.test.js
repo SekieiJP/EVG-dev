@@ -56,3 +56,16 @@ run("completed game history is split into public summaries and scoped details", 
   assert.match(roomRules.completedGamePlayerDetails.$uid[".read"], /auth\.uid === \$uid/);
   assert.match(roomRules.completedGamePlayerDetails.$uid[".write"], /roles'\)\.child\('hosts/);
 });
+
+run("room settings allow separated bgm and se audio controls", () => {
+  const settings = roomRules.roomSettings;
+  ["volume", "bgmVolume", "seVolume"].forEach((key) => {
+    assert.match(settings[key][".validate"], /newData\.isNumber/);
+    assert.match(settings[key][".validate"], /newData\.val\(\) >= 0/);
+    assert.match(settings[key][".validate"], /newData\.val\(\) <= 1/);
+  });
+  ["muted", "bgmMuted", "seMuted"].forEach((key) => {
+    assert.strictEqual(settings[key][".validate"], "newData.isBoolean()");
+  });
+  assert.strictEqual(settings.$other[".validate"], false);
+});

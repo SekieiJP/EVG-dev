@@ -138,11 +138,7 @@
           ".read": "auth != null",
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
           "volume": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1" },
-          "bgmVolume": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1" },
-          "seVolume": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1" },
           "muted": { ".validate": "newData.isBoolean()" },
-          "bgmMuted": { ".validate": "newData.isBoolean()" },
-          "seMuted": { ".validate": "newData.isBoolean()" },
           "$other": { ".validate": false }
         },
         "archive": {
@@ -178,3 +174,4 @@
     }
   }
 }
+
