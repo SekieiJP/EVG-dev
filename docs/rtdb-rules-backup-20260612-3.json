@@ -122,7 +122,6 @@
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
         },
         "completedGamePlayerDetails": {
-          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
           "$uid": {
             ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true)",
             ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
@@ -179,3 +178,4 @@
     }
   }
 }
+

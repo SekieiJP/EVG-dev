@@ -53,6 +53,8 @@ run("completed game history is split into public summaries and scoped details", 
   assert.strictEqual(roomRules.completedGames[".write"], false);
   assert.strictEqual(roomRules.completedGameSummaries[".read"], "auth != null");
   assert.match(roomRules.completedGameDetails[".read"], /roles'\)\.child\('hosts/);
+  assert.strictEqual(roomRules.completedGamePlayerDetails[".read"], undefined);
+  assert.match(roomRules.completedGamePlayerDetails[".write"], /roles'\)\.child\('hosts/);
   assert.match(roomRules.completedGamePlayerDetails.$uid[".read"], /auth\.uid === \$uid/);
   assert.match(roomRules.completedGamePlayerDetails.$uid[".write"], /roles'\)\.child\('hosts/);
 });
