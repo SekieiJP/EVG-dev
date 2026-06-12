@@ -42,11 +42,13 @@
     },
     se: {
       countdownStart: "se_countdown_start.mp3",
-      countdownEnd: "se_countdown_end.mp3",
+      phaseTransition: "se_phase_transition.mp3",
       board: "se_board.mp3",
-      ride: "se_ride.mp3",
+      rideOccupied: "se_ride_occupied.mp3",
+      rideEmpty: "se_ride_empty.mp3",
       exit: "se_exit.mp3",
       forcedOff: "se_forced_off.mp3",
+      revealComplete: "se_reveal_complete.mp3",
     },
   };
   const STORAGE_KEYS = {
@@ -57,6 +59,7 @@
     hostTokenExpiresAt: "evg.hostTokenExpiresAt.v1",
     logs: "evg.logs.v1",
     screenReady: "evg.screenReady.v1",
+    screenAudio: "evg.screenAudio.v1",
     personalHistoryCache: "evg.personalHistoryCache.v1",
   };
   const state = {
@@ -67,6 +70,7 @@
     hostToken: localStorage.getItem(STORAGE_KEYS.hostToken) || "",
     hostTokenExpiresAt: localStorage.getItem(STORAGE_KEYS.hostTokenExpiresAt) || "",
     screenReady: localStorage.getItem(STORAGE_KEYS.screenReady) === "true",
+    screenAudio: normalizeAudioPreferences(loadJson(STORAGE_KEYS.screenAudio, null)),
     logs: loadJson(STORAGE_KEYS.logs, []),
     toast: "",
     toastId: 0,
@@ -105,6 +109,7 @@
       triggered: {},
       revealKey: "",
       revealFloor: 0,
+      phaseKey: "",
     },
   };
   const firebaseAdapter = window.EVGFirebaseAdapter
@@ -412,7 +417,21 @@
   function handleChange(event) {
     if (event.target.id === "muteToggle") {
       state.room.muted = event.target.checked;
+      state.room.bgmMuted = event.target.checked;
+      state.room.seMuted = event.target.checked;
       saveRoom("screen.mute", "host");
+      render();
+    }
+    if (event.target.id === "bgmMuteToggle") {
+      updateAudioSetting("bgmMuted", event.target.checked);
+      saveRoom("screen.bgm-mute", state.role);
+      syncScreenAudio();
+      render();
+    }
+    if (event.target.id === "seMuteToggle") {
+      updateAudioSetting("seMuted", event.target.checked);
+      saveRoom("screen.se-mute", state.role);
+      syncScreenAudio();
       render();
     }
   }
@@ -423,7 +442,18 @@
     }
     if (event.target.id === "volumeRange") {
       state.room.volume = Number(event.target.value);
+      state.room.bgmVolume = Number(event.target.value);
+      state.room.seVolume = Number(event.target.value);
       saveRoom("screen.volume", "host");
+    }
+    if (event.target.id === "bgmVolumeRange") {
+      updateAudioSetting("bgmVolume", Number(event.target.value));
+      saveRoom("screen.bgm-volume", state.role);
+      syncScreenAudio();
+    }
+    if (event.target.id === "seVolumeRange") {
+      updateAudioSetting("seVolume", Number(event.target.value));
+      saveRoom("screen.se-volume", state.role);
     }
   }
 
@@ -697,8 +727,7 @@
           ${renderHostNextPanel()}
           <section class="panel">
             <h2>音量</h2>
-            <label class="inline"><input id="muteToggle" type="checkbox" ${state.room.muted ? "checked" : ""}>Mute</label>
-            <input id="volumeRange" type="range" min="0" max="1" step="0.05" value="${state.room.volume}">
+            ${renderAudioControls("host")}
           </section>
           <section class="panel wide">
             <h2>現在ステージ</h2>
@@ -819,6 +848,7 @@
       ["subscriptionRole", firebaseInfo.role || ""],
       ["baseSubscriptions", (firebaseInfo.basePaths || []).join(", ")],
       ["stageSubscriptions", (firebaseInfo.stagePaths || []).join(", ")],
+      ["subscriptionErrors", compactJson(firebaseInfo.subscriptionErrors || {})],
       ["revealEndsAt", state.room.revealEndsAt || ""],
       ["lastRulesError", firebaseInfo.lastRulesError || ""],
       ["lastTransactionPublic", firebaseInfo.lastTransactionPublic ? compactJson(firebaseInfo.lastTransactionPublic) : ""],
@@ -843,6 +873,7 @@
       ["firebaseUid", firebaseInfo.uid || ""],
       ["isHostAllowed", Boolean(firebaseInfo.isHostAllowed)],
       ["baseSubscriptions", (firebaseInfo.basePaths || []).join(", ")],
+      ["subscriptionErrors", compactJson(firebaseInfo.subscriptionErrors || {})],
       ["lastRulesError", firebaseInfo.lastRulesError || ""],
       ["lastApi", state.lastApi ? compactJson(state.lastApi) : ""],
     ];
@@ -927,9 +958,29 @@
           <p>${escapeHtml(state.room.config.gameMeta.title)}</p>
           <span>${phaseLabel(state.room.phase)}</span>
         </div>
+        ${renderAudioControls("screen")}
         ${renderScreenMain(stage, result)}
         ${DEBUG_VIEW ? `<div class="screen-debug-panel">${renderClientLogs(12)}</div>` : ""}
       </section>
+    `;
+  }
+
+  function renderAudioControls(mode) {
+    const settings = currentAudioSettings();
+    const screenMode = mode === "screen";
+    return `
+      <div class="${screenMode ? "screen-audio-controls" : "audio-controls"}">
+        <label class="audio-control">
+          <span>BGM</span>
+          <input id="bgmVolumeRange" type="range" min="0" max="1" step="0.05" value="${settings.bgmVolume}">
+        </label>
+        <label class="inline audio-mute"><input id="bgmMuteToggle" type="checkbox" ${settings.bgmMuted ? "checked" : ""}>BGM Mute</label>
+        <label class="audio-control">
+          <span>SE</span>
+          <input id="seVolumeRange" type="range" min="0" max="1" step="0.05" value="${settings.seVolume}">
+        </label>
+        <label class="inline audio-mute"><input id="seMuteToggle" type="checkbox" ${settings.seMuted ? "checked" : ""}>SE Mute</label>
+      </div>
     `;
   }
 
@@ -1699,7 +1750,49 @@
     room.roomVersion = Number(room.roomVersion || 0);
     room.volume = room.volume !== undefined ? room.volume : 0.8;
     room.muted = Boolean(room.muted);
+    room.bgmVolume = clampVolume(room.bgmVolume !== undefined ? room.bgmVolume : room.volume);
+    room.seVolume = clampVolume(room.seVolume !== undefined ? room.seVolume : room.volume);
+    room.bgmMuted = room.bgmMuted !== undefined ? Boolean(room.bgmMuted) : room.muted;
+    room.seMuted = room.seMuted !== undefined ? Boolean(room.seMuted) : room.muted;
     return room;
+  }
+
+  function normalizeAudioPreferences(value) {
+    if (!value || typeof value !== "object") return null;
+    return {
+      bgmVolume: clampVolume(value.bgmVolume),
+      seVolume: clampVolume(value.seVolume),
+      bgmMuted: Boolean(value.bgmMuted),
+      seMuted: Boolean(value.seMuted),
+    };
+  }
+
+  function currentAudioSettings() {
+    const room = state.room || {};
+    const local = state.role === "screen" ? state.screenAudio : null;
+    return {
+      bgmVolume: clampVolume(local && local.bgmVolume !== undefined ? local.bgmVolume : room.bgmVolume),
+      seVolume: clampVolume(local && local.seVolume !== undefined ? local.seVolume : room.seVolume),
+      bgmMuted: local && local.bgmMuted !== undefined ? Boolean(local.bgmMuted) : Boolean(room.bgmMuted),
+      seMuted: local && local.seMuted !== undefined ? Boolean(local.seMuted) : Boolean(room.seMuted),
+    };
+  }
+
+  function updateAudioSetting(key, value) {
+    if (!state.room) return;
+    const normalized = key.endsWith("Volume") ? clampVolume(value) : Boolean(value);
+    state.room[key] = normalized;
+    state.room.volume = state.room.bgmVolume;
+    state.room.muted = Boolean(state.room.bgmMuted && state.room.seMuted);
+    if (state.role === "screen") {
+      state.screenAudio = Object.assign(currentAudioSettings(), { [key]: normalized });
+      localStorage.setItem(STORAGE_KEYS.screenAudio, JSON.stringify(state.screenAudio));
+    }
+  }
+
+  function clampVolume(value) {
+    const number = Number(value);
+    return Math.max(0, Math.min(1, Number.isFinite(number) ? number : 0.8));
   }
 
   function playerUuidStorageKey() {
@@ -2093,7 +2186,7 @@
   function withApiMeta(payload) {
     const meta = {
       role: state.role,
-      uuid: state.playerUuid || payload.uuid || "",
+      uuid: payload.uuid || state.playerUuid || "",
     };
     if (state.hostToken) meta.hostToken = state.hostToken;
     return Object.assign({}, payload, meta);
@@ -2284,21 +2377,21 @@
     const filename = AUDIO_FILES.bgm[phase];
     if (!filename) return;
     const key = `bgm:${phase}`;
-    if (state.room.muted) {
+    if (isAudioMuted("bgm")) {
       if (state.audio.bgmElement) state.audio.bgmElement.pause();
       return;
     }
     if (state.audio.bgmKey !== key) {
       if (state.audio.bgmElement) state.audio.bgmElement.pause();
-      const element = getAudioElement(key, filename, true);
+      const element = getAudioElement(key, filename, true, "bgm");
       state.audio.bgmKey = key;
       state.audio.bgmElement = element;
-      playAudioElement(element, key, true);
+      playAudioElement(element, key, true, "bgm");
       return;
     }
     if (state.audio.bgmElement) {
-      state.audio.bgmElement.volume = currentAudioVolume();
-      if (state.audio.bgmElement.paused) playAudioElement(state.audio.bgmElement, key, false);
+      state.audio.bgmElement.volume = currentAudioVolume("bgm");
+      if (state.audio.bgmElement.paused) playAudioElement(state.audio.bgmElement, key, false, "bgm");
     }
   }
 
@@ -2306,15 +2399,21 @@
     const stage = Engine.getCurrentStage(state.room);
     const stageId = stage ? stage.stageId : "";
     const base = `${state.room.gameId}:${stageId}`;
+    triggerPhaseTransitionSoundEffect(base);
     if (state.room.phase === Engine.PHASES.COUNTDOWN && state.room.countdownEndsAt && !isRemoteMoving()) {
       triggerSoundOnce(`countdown-start:${base}:${state.room.countdownEndsAt}`, "countdownStart");
     }
-    if (
-      state.room.countdownEndsAt &&
-      (state.room.phase === Engine.PHASES.TALLYING || (state.room.phase === Engine.PHASES.COUNTDOWN && isRemoteMoving()))
-    ) {
-      triggerSoundOnce(`countdown-end:${base}:${state.room.countdownEndsAt}`, "countdownEnd");
+  }
+
+  function triggerPhaseTransitionSoundEffect(base) {
+    const phaseKey = `${base}:${state.room.currentStageIndex}:${state.room.phase}`;
+    if (!state.audio.phaseKey) {
+      state.audio.phaseKey = phaseKey;
+      return;
     }
+    if (state.audio.phaseKey === phaseKey) return;
+    state.audio.phaseKey = phaseKey;
+    triggerSoundOnce(`phase-transition:${phaseKey}`, "phaseTransition");
   }
 
   function triggerRevealSoundEffects() {
@@ -2335,6 +2434,9 @@
       if (step) triggerFloorSoundEffects(revealKey, floor, step, result);
     }
     state.audio.revealFloor = currentFloor;
+    if (isRevealComplete(stage)) {
+      triggerSoundOnce(`reveal-complete:${revealKey}`, "revealComplete");
+    }
   }
 
   function triggerFloorSoundEffects(revealKey, floor, step, result) {
@@ -2345,8 +2447,9 @@
       return !forced.includes(uuid) && playerResult && !["invalid", "not_boarded"].includes(playerResult.status);
     });
     if (successfulBoarding.length) triggerSoundOnce(`board:${revealKey}:${floor}`, "board");
-    if ((step.passengersAfterCheck || []).length && !successfulBoarding.length && !exiting.length && !forced.length) {
-      triggerSoundOnce(`ride:${revealKey}:${floor}`, "ride");
+    if (floor > 1 && !successfulBoarding.length && !exiting.length && !forced.length) {
+      const soundKey = (step.passengersAfterCheck || []).length ? "rideOccupied" : "rideEmpty";
+      triggerSoundOnce(`ride:${soundKey}:${revealKey}:${floor}`, soundKey);
     }
     if (exiting.length) triggerSoundOnce(`exit:${revealKey}:${floor}`, "exit");
     if (forced.length) triggerSoundOnce(`forced:${revealKey}:${floor}`, "forcedOff");
@@ -2356,12 +2459,12 @@
     if (state.audio.triggered[triggerKey]) return;
     state.audio.triggered[triggerKey] = true;
     const filename = AUDIO_FILES.se[soundKey];
-    if (!filename || state.room.muted) return;
-    const element = getAudioElement(`se:${soundKey}`, filename, false);
-    playAudioElement(element, `se:${soundKey}`, true);
+    if (!filename || isAudioMuted("se")) return;
+    const element = getAudioElement(`se:${soundKey}`, filename, false, "se");
+    playAudioElement(element, `se:${soundKey}`, true, "se");
   }
 
-  function getAudioElement(key, filename, loop) {
+  function getAudioElement(key, filename, loop, kind) {
     if (!state.audio.elements[key]) {
       const element = new Audio(AUDIO_BASE_PATH + filename);
       element.preload = "auto";
@@ -2376,14 +2479,14 @@
     }
     const element = state.audio.elements[key];
     element.loop = loop;
-    element.volume = currentAudioVolume();
+    element.volume = currentAudioVolume(kind);
     return element;
   }
 
-  function playAudioElement(element, key, restart) {
-    if (!element || state.room.muted) return;
+  function playAudioElement(element, key, restart, kind) {
+    if (!element || isAudioMuted(kind)) return;
     try {
-      element.volume = currentAudioVolume();
+      element.volume = currentAudioVolume(kind);
       if (restart) element.currentTime = 0;
       const played = element.play();
       if (played && typeof played.catch === "function") {
@@ -2402,8 +2505,14 @@
     }
   }
 
-  function currentAudioVolume() {
-    return Math.max(0, Math.min(1, Number(state.room.volume ?? 0.8)));
+  function currentAudioVolume(kind) {
+    const settings = currentAudioSettings();
+    return kind === "se" ? settings.seVolume : settings.bgmVolume;
+  }
+
+  function isAudioMuted(kind) {
+    const settings = currentAudioSettings();
+    return kind === "se" ? settings.seMuted : settings.bgmMuted;
   }
 
   function getHistoryGames() {

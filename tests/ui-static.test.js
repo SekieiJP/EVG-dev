@@ -6,6 +6,7 @@ const root = path.resolve(__dirname, "..");
 const appSource = fs.readFileSync(path.join(root, "game/assets/js/app.js"), "utf8");
 const cssSource = fs.readFileSync(path.join(root, "game/assets/css/styles.css"), "utf8");
 const configSource = fs.readFileSync(path.join(root, "game/assets/js/config.js"), "utf8");
+const indexSource = fs.readFileSync(path.join(root, "game/index.html"), "utf8");
 
 function section(source, start, end) {
   const startIndex = source.indexOf(start);
@@ -106,6 +107,26 @@ run("debug logs retain enough host evidence for UUID investigations", () => {
   assert.strictEqual(appSource.includes("host.remove-player.start"), true);
   assert.strictEqual(appSource.includes("buttonUuid"), true);
   assert.strictEqual(appSource.includes("afterPlayers"), true);
+  assert.strictEqual(appSource.includes("subscriptionErrors"), true);
+});
+
+run("api meta preserves explicit payload uuid for host target actions", () => {
+  const metaBuilder = section(appSource, "function withApiMeta", "async function maybeBusy");
+  assert.strictEqual(metaBuilder.includes("uuid: payload.uuid || state.playerUuid || \"\""), true);
+  assert.strictEqual(metaBuilder.includes("uuid: state.playerUuid || payload.uuid || \"\""), false);
+});
+
+run("static assets include release cache busting query", () => {
+  [
+    "./assets/css/styles.css",
+    "./assets/js/config.js",
+    "./assets/js/engine.js",
+    "./assets/vendor/qrcode-generator/qrcode.js",
+    "./assets/js/firebase-adapter.js",
+    "./assets/js/app.js",
+  ].forEach((asset) => {
+    assert.strictEqual(indexSource.includes(`${asset}?v=`), true, asset);
+  });
 });
 
 run("player countdown updates do not rerender active ticket input", () => {

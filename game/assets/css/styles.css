@@ -319,6 +319,26 @@ code {
   font-weight: 900;
 }
 
+.audio-controls {
+  display: grid;
+  gap: 12px;
+}
+
+.audio-control {
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+}
+
+.audio-control span {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.audio-mute {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .flow-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 180px;
@@ -690,6 +710,41 @@ code {
 
 .screen-top p {
   margin: 0;
+}
+
+.screen-audio-controls {
+  position: fixed;
+  top: 58px;
+  right: 24px;
+  z-index: 6;
+  width: min(360px, calc(100vw - 48px));
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 12px;
+  align-items: center;
+  border: 1px solid var(--screen-line);
+  border-radius: 8px;
+  background: rgba(13, 23, 24, 0.86);
+  padding: 10px 12px;
+}
+
+.screen-audio-controls .audio-control {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.screen-audio-controls .audio-control span,
+.screen-audio-controls .audio-mute {
+  color: #d7eff0;
+}
+
+.screen-audio-controls input[type="range"] {
+  min-height: 28px;
+  padding: 0;
+}
+
+.screen-audio-controls .inline input {
+  width: 18px;
+  min-height: 18px;
 }
 
 .ready-button {

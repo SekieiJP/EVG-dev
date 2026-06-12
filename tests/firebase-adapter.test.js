@@ -62,12 +62,79 @@ run("firebase operation nodes use stable unique keys", () => {
   const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   room.operations = [
     { at: "2026-06-01T00:00:01.000Z", actor: "host", action: "open-voting" },
+    { id: "op-0000", at: "2026-06-01T00:00:02.000Z", actor: "host", action: "remove-player" },
     { id: "op-custom", at: "2026-06-01T00:00:00.000Z", actor: "host", action: "start-stage" },
   ];
   const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(room);
-  assert.deepStrictEqual(Object.keys(nodes.operations).sort(), ["op-0000", "op-custom"]);
-  assert.strictEqual(nodes.operations["op-0000"].id, "op-0000");
+  const keys = Object.keys(nodes.operations).sort();
+  assert.strictEqual(keys.length, 3);
+  assert.strictEqual(keys.includes("op-0000"), true);
+  assert.strictEqual(keys.includes("op-custom"), true);
+  const generatedKey = keys.find((key) => !["op-0000", "op-custom"].includes(key));
+  assert.match(generatedKey, /^op-[a-z0-9]+-[a-z0-9]{4}$/);
+  assert.strictEqual(nodes.operations[generatedKey].action, "open-voting");
+  assert.strictEqual(nodes.operations["op-0000"].action, "remove-player");
   assert.strictEqual(nodes.operations["op-custom"].id, "op-custom");
+});
+
+run("firebase subscription errors are exposed in debug info and logs", () => {
+  const cancelCallbacks = {};
+  const logs = [];
+  global.BroadcastChannel = undefined;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+    getUuid: () => "host-uid",
+    log: (kind, detail) => logs.push({ kind, detail }),
+  });
+  adapter.auth = { uid: "host-uid" };
+  adapter.firebaseDb = {};
+  adapter.debug.isHostAllowed = true;
+  adapter.sdk = {
+    ref: (db, path) => path,
+    onValue: (ref, next, cancel) => {
+      const relativePath = String(ref).replace("/rooms/unit-room/", "");
+      cancelCallbacks[relativePath] = cancel;
+      if (relativePath === "public") {
+        next({ val: () => ({ gameId: "game", phase: Engine.PHASES.FINAL, roomVersion: 1, currentStageIndex: 0, currentStageId: "stage-001" }) });
+      }
+      return () => {};
+    },
+  };
+
+  adapter.listenRest(() => {});
+  cancelCallbacks.completedGameDetails(new Error("Permission denied"));
+  cancelCallbacks["results/stage-001"](new Error("Stage denied"));
+
+  const debug = adapter.getDebugInfo();
+  assert.strictEqual(debug.subscriptionErrors.completedGameDetails, "Permission denied");
+  assert.strictEqual(debug.subscriptionErrors["results/stage-001"], "Stage denied");
+  assert.strictEqual(logs.some((entry) => entry.kind === "firebase.subscribe.error" && entry.detail.path === "completedGameDetails"), true);
+});
+
+runAsync("firebase read errors include the rejected path", async () => {
+  global.BroadcastChannel = undefined;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+    getUuid: () => "host-uid",
+  });
+  adapter.firebaseDb = {};
+  adapter.sdk = {
+    ref: (db, path) => path,
+    get: async (ref) => {
+      if (String(ref).endsWith("/completedGameDetails")) throw new Error("Permission denied");
+      return { exists: () => true, val: () => ({ ok: true }) };
+    },
+  };
+
+  await assert.rejects(
+    () => adapter.readRestNodes(["public", "completedGameDetails"]),
+    /Permission denied at completedGameDetails/
+  );
+  assert.match(adapter.getDebugInfo().lastRulesError, /completedGameDetails/);
 });
 
 run("firebase player updates write room player stats for self restore", () => {

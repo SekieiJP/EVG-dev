@@ -28,6 +28,7 @@
         isHostAllowed: false,
         lastRulesError: "",
         lastTransactionPublic: null,
+        subscriptionErrors: {},
       };
     }
 
@@ -80,6 +81,7 @@
           stagePaths: [],
           role: this.getRole(),
           currentStageId: "",
+          subscriptionErrors: {},
         };
         const handler = (event) => {
           if (event.data && event.data.type === "room" && event.data.roomId === this.roomId) {
@@ -108,6 +110,13 @@
         isHostAllowed: Boolean(this.debug.isHostAllowed),
         lastRulesError: this.debug.lastRulesError || "",
         lastTransactionPublic: this.debug.lastTransactionPublic || null,
+        subscriptionErrors: Object.assign({}, this.debug.subscriptionErrors || {}),
+      };
+      const handleSubscriptionError = (path, error) => {
+        const message = error && error.message ? error.message : String(error || "subscription failed");
+        this.debug.subscriptionErrors[path] = message;
+        this.debug.lastRulesError = message;
+        this.log("firebase.subscribe.error", { path, message });
       };
       const emit = () => {
         if (!initializedBasePaths.has("public") || !nodes.public) return;
@@ -120,14 +129,14 @@
           initializedBasePaths.add(path);
           updateStageSubscriptions();
           emit();
-        });
+        }, (error) => handleSubscriptionError(path, error));
         unsubscribers.push(unsubscribe);
       };
       const attachStage = (path) => {
         const unsubscribe = this.sdk.onValue(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), (snapshot) => {
           setNestedNode(nodes, path, snapshot.val());
           emit();
-        });
+        }, (error) => handleSubscriptionError(path, error));
         stageUnsubscribers.push(unsubscribe);
       };
       const updateStageSubscriptions = () => {
@@ -166,6 +175,7 @@
         isHostAllowed: Boolean(this.debug.isHostAllowed),
         lastRulesError: this.debug.lastRulesError || "",
         lastTransactionPublic: this.debug.lastTransactionPublic || null,
+        subscriptionErrors: Object.assign({}, this.debug.subscriptionErrors || {}),
       };
     }
 
@@ -507,8 +517,16 @@
 
     async readRestNodes(paths) {
       const pairs = await Promise.all(paths.map(async (path) => {
-        const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`));
-        return [path, snapshot.exists() ? snapshot.val() : null];
+        try {
+          const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`));
+          return [path, snapshot.exists() ? snapshot.val() : null];
+        } catch (error) {
+          const message = `${error && error.message ? error.message : String(error)} at ${path}`;
+          const nextError = new Error(message);
+          nextError.code = error && error.code;
+          this.debug.lastRulesError = message;
+          throw nextError;
+        }
       }));
       const nodes = {};
       pairs.forEach(([path, value]) => setNestedNode(nodes, path, value));
@@ -694,7 +712,11 @@
       operations: keyOperations(room.operations || []),
       roomSettings: {
         volume: room.volume !== undefined ? room.volume : 0.8,
+        bgmVolume: room.bgmVolume !== undefined ? room.bgmVolume : (room.volume !== undefined ? room.volume : 0.8),
+        seVolume: room.seVolume !== undefined ? room.seVolume : (room.volume !== undefined ? room.volume : 0.8),
         muted: Boolean(room.muted),
+        bgmMuted: room.bgmMuted !== undefined ? Boolean(room.bgmMuted) : Boolean(room.muted),
+        seMuted: room.seMuted !== undefined ? Boolean(room.seMuted) : Boolean(room.muted),
       },
       archive: room.archive || null,
     };
@@ -760,7 +782,11 @@
       ticketPresence: nodes.ticketPresence || {},
       archive: nodes.archive || null,
       volume: settings.volume !== undefined ? Number(settings.volume) : fallback.volume,
+      bgmVolume: settings.bgmVolume !== undefined ? Number(settings.bgmVolume) : (settings.volume !== undefined ? Number(settings.volume) : fallback.bgmVolume),
+      seVolume: settings.seVolume !== undefined ? Number(settings.seVolume) : (settings.volume !== undefined ? Number(settings.volume) : fallback.seVolume),
       muted: Boolean(settings.muted),
+      bgmMuted: settings.bgmMuted !== undefined ? Boolean(settings.bgmMuted) : Boolean(settings.muted),
+      seMuted: settings.seMuted !== undefined ? Boolean(settings.seMuted) : Boolean(settings.muted),
       createdAt: nodes.meta && nodes.meta.createdAt || fallback.createdAt,
       updatedAt: nodes.meta && nodes.meta.updatedAt || fallback.updatedAt,
     }, engine);
@@ -1161,7 +1187,28 @@
   }
 
   function operationNode(item, index) {
-    return Object.assign({}, item, { id: item.id || `op-${String(index).padStart(4, "0")}` });
+    return Object.assign({}, item, { id: item.id || createOperationId(item, index) });
+  }
+
+  function createOperationId(item, index) {
+    const time = Date.parse(item && item.at || "");
+    const stamp = Number.isFinite(time) ? time.toString(36) : Date.now().toString(36);
+    const seed = [
+      item && item.at || "",
+      item && (item.actorUid || item.actor) || "",
+      item && item.action || "",
+      item && item.uuid || "",
+      index,
+    ].join("|");
+    return `op-${stamp}-${shortHash(seed)}`;
+  }
+
+  function shortHash(value) {
+    let hash = 0;
+    String(value || "").split("").forEach((char) => {
+      hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
+    });
+    return Math.abs(hash).toString(36).slice(0, 4).padStart(4, "0");
   }
 
   function keyOperations(items) {
@@ -1220,6 +1267,10 @@
     room.revealEndsAt = room.revealEndsAt || null;
     room.volume = room.volume !== undefined ? room.volume : fallback.volume;
     room.muted = Boolean(room.muted);
+    room.bgmVolume = room.bgmVolume !== undefined ? room.bgmVolume : room.volume;
+    room.seVolume = room.seVolume !== undefined ? room.seVolume : room.volume;
+    room.bgmMuted = room.bgmMuted !== undefined ? Boolean(room.bgmMuted) : room.muted;
+    room.seMuted = room.seMuted !== undefined ? Boolean(room.seMuted) : room.muted;
     return room;
   }
 

@@ -139,7 +139,7 @@
           <li>2026-06-01追記: Firebase実接続版のホスト進行はRealtime Databaseの<code>runTransaction</code>でroom単位に更新し、同時操作時の単純な上書き競合を避けるようにした。Playerの参加・改名・投票は自分の<code>players/{uid}</code>、<code>tickets/{stageId}/{uid}</code>、<code>ticketPresence/{stageId}/{uid}</code>だけを書き込む。</li>
           <li>2026-06-01追記: <code>tests/firebase-adapter.test.js</code>を追加し、Firebase分割ノードへ変換しても<code>snapshot</code>なしでroom状態を復元できることを確認した。</li>
           <li>2026-06-01追記: Firebase疎通テスト用にURLクエリ<code>room</code>/<code>roomId</code>で<code>FIREBASE_ROOM_ID</code>を上書きできるようにした。</li>
-          <li>2026-06-01追記: Firebaseの<code>operations</code>は、既存idがある操作はそのidをキーにし、idがない操作だけ<code>op-0000</code>形式を付与するようにした。RTDB上で同一idの操作が別キーに重複することを避けるため。</li>
+          <li>2026-06-01追記: Firebaseの<code>operations</code>は、既存idがある操作はそのidをキーにし、idがない操作には操作時刻と内容由来の<code>op-...</code>形式idを付与する。RTDB上で同一idの操作が別キーに重複したり、新規操作が既存<code>op-0000</code>を上書きしたりすることを避けるため。</li>
           <li>2026-06-01追記: GitHub Pages上の既定バックエンドをFirebase RTDBへ切り替えた。旧GAS確認は<code>?backend=gas</code>、完全ローカル確認は<code>?backend=local</code>で明示的に選ぶ。</li>
           <li>2026-06-01追記: Firebase版ではGAS向けの状態ポーリングを止め、RTDBの<code>onValue</code>通知を画面反映の主経路にした。Playerの締切カウントダウン開始や結果反映を10秒/30秒ポーリング待ちにしないため。</li>
           <li>2026-06-01追記: 次ゲーム開始時に前ゲーム参加者を<code>room.players</code>へ自動コピーしない仕様へ変更した。<code>players</code>/<code>save_data</code>には過去ユーザーを保持し、Host/Screen等の現在ゲーム表示にはゲーム開始後にアクセスまたは復元したプレイヤーだけを出す。</li>
@@ -157,6 +157,8 @@
           <li>2026-06-02追記: Firebase実接続のHost操作を<code>rooms/{roomId}</code> root transactionから<code>rooms/{roomId}/public</code> transactionへ変更した。結果、スコア、参加者、操作ログはtransaction後に小ノードへ分割保存する。</li>
           <li>2026-06-02追記: Firebase Rulesを<code>meta.hostUid</code>所有モデルから<code>roles/hosts/{uid}</code> allowlistモデルへ変更した。Host roleはFirebase Console/CLIで事前登録する。</li>
           <li>2026-06-02追記: 進行中room全体を<code>localStorage</code>へ保存する処理と、Playerランキング保持がremote更新を止める処理を外した。ランキング保持は<code>gameId/stageId/seenAt</code>程度の小さい閲覧状態だけを保存する。</li>
+          <li>2026-06-12追記: <code>game/assets/audio/</code>に配置されたmp3を英小文字・アンダースコア形式へリネームし、ScreenでBGM音量/SE音量を別々に調整できるようにした。</li>
+          <li>2026-06-12追記: 上昇SEは<code>se_ride_occupied.mp3</code>と<code>se_ride_empty.mp3</code>に分け、結果発表タイムラインで乗車中の上昇と空の上昇を別々に発火するようにした。</li>
         </ul>
       </section>
 
@@ -189,7 +191,8 @@
           <li><code>game_configs</code>の行は使用後も<code>ACTIVE</code>のまま残す。テンプレートを繰り返し使う運用を優先し、不要な候補はSpreadsheet上で<code>ARCHIVED</code>へ手動変更する。</li>
           <li>中断して次ゲームへ進む場合、保存対象は集計済みステージだけにした。未集計の投票や受付中ステージは確定結果ではないため、履歴には残さず破棄する。</li>
           <li>音声ファイル名はすべて英小文字とアンダースコアのmp3に固定した。BGMは<code>bgm_フェーズ名.mp3</code>、SEは<code>se_イベント名.mp3</code>の形式にした。</li>
-          <li><code>se_ride.mp3</code>は、結果発表で1人以上が乗車中、かつその階で新規乗車・下車・強制下車が発生しない場合の上昇演出として扱う。</li>
+          <li>上昇SEは、結果発表で新規乗車・下車・強制下車が発生しない階に限って鳴らす。1人以上が乗車中なら<code>se_ride_occupied.mp3</code>、乗車中0人なら<code>se_ride_empty.mp3</code>を使う。</li>
+          <li>Screen画面で変更するBGM/SE音量は、そのScreen端末の<code>localStorage</code>設定を優先する。RTDBの<code>roomSettings</code>にも後方互換用の既定値を持つが、会場の投影端末ごとに調整できることを優先した。</li>
           <li>Firebase Spark初期版では、静的SPA配信は維持し、ゲーム中のSingle Source of TruthをRealtime Databaseへ移す計画にした。GitHub Pages配信を残すことで、配信面の変更を最小化し、通信層の差し替えに集中するため。</li>
           <li>Firebase版のデータ構造は、現行の<code>room</code>全体JSON保存ではなく、<code>public</code>、<code>players</code>、<code>tickets</code>、<code>ticketPresence</code>、<code>results</code>、<code>scores</code>へ分割する方針にした。Sparkの10GB/月ダウンロード枠に対して、全room再配信を避けるため。</li>
           <li>Firebase SparkではCloud Functionsを前提にしないため、初期移行ではHostブラウザ集計を継続し、Realtime Database Rulesとtransactionで最低限の権限・二重操作対策を行う計画にした。</li>
@@ -245,7 +248,7 @@
         <h2>逸脱</h2>
         <ul>
           <li>GAS通信は<code>USE_GAS_API</code>有効時のfetch接続、hostToken連携、serverTime補正まで実装した。ただし、実GASデプロイURLでの現地疎通、同時接続負荷、CORS挙動のブラウザ横断確認は未実施。</li>
-          <li>BGM/SEファイルは同梱していない。音声ファイル名規約が未確定で、素材も未提供のため、スクリーンの初回「準備完了」とAudioContext起動のみ実装した。</li>
+          <li>強制下車SEの<code>se_forced_off.mp3</code>に対応する素材は、2026-06-12に配置されたファイル群の中には見当たらなかった。未配置時は従来通り<code>audio.missing</code>を一度だけ記録し、進行は止めない。</li>
           <li>GASの<code>current_game</code>は完全正規化ではなく、状態JSONを複数行チャンクで保存する実装にした。初版の整合性と競合制御を優先しつつ、1セル上限を避けるため。</li>
           <li>結果発表中のフェーズ更新検知は、GAS通信中は低頻度フェッチと最上階到達時の最終確認として残している。Firebase通信中はRTDB購読でフェーズ更新を受け取る。</li>
           <li>同時ホストのボタンロックは、GASの<code>LockService</code>による先着処理を優先し、UI上のリアルタイムロック表示は未実装。</li>
@@ -314,6 +317,8 @@
           <li>2026-06-06追記: Historyの個人戦績表示とFirebase/GAS summaryから、旧指標の累積得点、平均得点、表彰台回数を外した。表示指標は10.5.4の9項目へ統一する。</li>
           <li>2026-06-06追記: History通常UIは、<code>/api/history/player/{uuid}</code>互換APIを追加GETせず、購読済みの<code>completedGameSummaries</code>と本人用<code>completedGamePlayerDetails/{uid}</code>を復元した<code>state.room</code>から本人戦績をローカル集計する。Player本人戦績の閲覧拒否は仕様ではなく、購読移行後に残ったRESTフォールバックがRules差分で失敗し得る実装問題として扱った。あわせてFirebase起動時、締切後、reveal完了確認の補助<code>/api/status</code>取得を通常Player/History/Screen経路から外し、Host失敗時の復旧取得だけを残した。</li>
           <li>2026-06-12追記: Hostの退室操作は、現在ゲームから対象UUIDを外すだけでroot <code>players/{uid}</code>の保存済みユーザーデータには触れない。Firebase RTDB更新も<code>rooms/{roomId}/players/{uid}</code>、<code>playerStats/{uid}</code>、<code>scores/{uid}</code>、対象チケット/結果の子パス削除に絞り、親ノード丸ごとの書き直しや未関係ステージの削除を避ける。退室失敗時は原因ログが<code>/api/status</code>の失敗で上書きされないよう、退室操作だけ失敗時の補助状態取得を行わない。</li>
+          <li>2026-06-12追記: improvement-report-260612 のT1-T8対応として、Host操作の明示<code>payload.uuid</code>を<code>withApiMeta()</code>で上書きしないよう修正し、RTDB購読エラーを<code>subscriptionErrors</code>としてinternal-statusへ表示する。<code>readRestNodes()</code>の失敗は拒否されたpathをerror messageへ含め、GitHub Pages配信用のCSS/JS参照にはリリース用query versionを付ける。</li>
+          <li>2026-06-12追記: 本番RTDB Rulesはdeploy前に<code>docs/rtdb-rules-backup-20260612.json</code>へバックアップし、2026-06-12T18:44+09:00 に <code>firebase deploy --only database --project elevator-game-live</code> で再deployした。deploy後のRulesは<code>docs/rtdb-rules-after-deploy-20260612.json</code>へ取得し、リポジトリの<code>firebase/database.rules.json</code>とJSONとして一致することを確認した。</li>
         </ul>
       </section>
 
@@ -324,7 +329,8 @@
           <li>制作ツールの出力項目名は現行<code>engine.js</code>とGAS実装に合わせた。今後JSONスキーマを変更する場合、追加JSONで暫定運用できるが、頻出項目は専用フォームへ昇格する必要がある。</li>
           <li>GAS実デプロイURLでのHost/Screen/Player複数端末疎通は、API URL提供後に確認が必要。</li>
           <li>100人規模のポーリング負荷、Spreadsheet書き込み時間、CacheServiceの実効TTLは現地または負荷試験で確認が必要。</li>
-          <li>音声ファイル名とフェーズ対応表、結果発表終了時のフェードアウト秒数を確定したい。</li>
+          <li>結果発表終了時のBGM/SEフェードアウト秒数を確定したい。</li>
+          <li>強制下車SEとして使う<code>se_forced_off.mp3</code>の素材を配置するか、既存素材のどれを割り当てるか確認したい。</li>
           <li>Firebase実接続では<code>elevator-game-live</code>、Realtime Database <code>asia-southeast1</code>、GitHub Pagesから使うWeb設定値を採用した。本番用に別プロジェクトや別roomIdを分けるかは確認が必要。</li>
           <li>Sparkの100同時接続上限に対して、50人本番で許容する予備端末・見学端末・複数タブの運用ルールを決める必要がある。</li>
           <li>Host権限を匿名Auth uidだけで運用するか、運営用パスワード/招待コードを併用するかを決める必要がある。</li>

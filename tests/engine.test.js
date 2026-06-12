@@ -135,6 +135,20 @@ run("same game JSON creates distinct game ids on restart", () => {
   assert.notStrictEqual(first.gameId, second.gameId);
 });
 
+run("next game keeps separated audio volume settings", () => {
+  const config = Engine.normalizeConfig(Engine.DEFAULT_CONFIG);
+  const first = Engine.createInitialRoom(config);
+  first.bgmVolume = 0.35;
+  first.seVolume = 0.9;
+  first.bgmMuted = true;
+  first.seMuted = false;
+  const second = Engine.createNextGameRoom(first, config);
+  assert.strictEqual(second.bgmVolume, 0.35);
+  assert.strictEqual(second.seVolume, 0.9);
+  assert.strictEqual(second.bgmMuted, true);
+  assert.strictEqual(second.seMuted, false);
+});
+
 run("zone multiplier applies only to successful P side", () => {
   const result = Engine.calculateStage(
     stage({ events: [{ type: "E3a_zone_multiplier", fromFloor: 3, toFloor: 5, multiplier: 2 }] }),

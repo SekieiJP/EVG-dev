@@ -122,7 +122,11 @@
       revealEndsAt: null,
       roomVersion: 0,
       volume: 0.8,
+      bgmVolume: 0.8,
+      seVolume: 0.8,
       muted: false,
+      bgmMuted: false,
+      seMuted: false,
       hostLock: null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
@@ -134,7 +138,11 @@
     const archived = archiveCurrentGame(room);
     next.completedGames = archived ? (room.completedGames || []).concat(archived) : deepClone(room.completedGames || []);
     next.volume = room.volume !== undefined ? room.volume : next.volume;
+    next.bgmVolume = room.bgmVolume !== undefined ? room.bgmVolume : next.volume;
+    next.seVolume = room.seVolume !== undefined ? room.seVolume : next.volume;
     next.muted = Boolean(room.muted);
+    next.bgmMuted = room.bgmMuted !== undefined ? Boolean(room.bgmMuted) : next.muted;
+    next.seMuted = room.seMuted !== undefined ? Boolean(room.seMuted) : next.muted;
     next.operations.unshift({ at: nowIso(), actor: "host", action: "next-game" });
     next.updatedAt = nowIso();
     return next;
