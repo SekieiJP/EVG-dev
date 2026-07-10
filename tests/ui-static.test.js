@@ -146,3 +146,12 @@ run("history player stats show the approved metric set only", () => {
     assert.strictEqual(statsRenderer.includes(label), true, label);
   });
 });
+
+run("player result groups the stage score and StageSkill, then labels updated totals", () => {
+  const playerView = section(appSource, "function renderPlayerView", "function renderJoin");
+  const resultView = section(appSource, "function renderPlayerResult", "function renderHostView");
+  assert.strictEqual(playerView.includes("持ち点"), true);
+  assert.strictEqual(playerView.includes("現在Skill"), true);
+  assert.strictEqual(resultView.includes("Stage Score / StageSkill"), true);
+  assert.strictEqual(resultView.includes("stage-result-metrics"), true);
+});

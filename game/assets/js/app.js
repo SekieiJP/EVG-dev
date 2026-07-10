@@ -499,8 +499,8 @@
             <h1>${escapeHtml(player.name)}</h1>
           </div>
           <div class="stat-strip">
-            <span>合計 ${formatScore(state.room.scores[player.uuid] || 0)}</span>
-            <span>Skill ${formatSkill(player.skill || 0)}</span>
+            <span>持ち点 ${formatScore(state.room.scores[player.uuid] || 0)}</span>
+            <span>現在Skill ${formatSkill(player.skill || 0)}</span>
           </div>
         </header>
         ${renderPhaseBanner()}
@@ -668,8 +668,11 @@
     return `
       <div class="result-layout">
         <section class="panel score-card">
-          <p class="eyebrow">Stage Score</p>
-          <strong>${formatScore(myResult.score)}</strong>
+          <p class="eyebrow">Stage Score / StageSkill</p>
+          <div class="stage-result-metrics">
+            <div><span>スコア</span><strong>${formatScore(myResult.score)}</strong></div>
+            <div><span>StageSkill</span><strong>${myResult.stageSkill === null ? "-" : `${formatSkill(myResult.stageSkill)}${renderSkillDelta(myResult)}`}</strong></div>
+          </div>
           <span>${statusLabel(myResult.status)}</span>
         </section>
         <section class="panel breakdown">
@@ -679,7 +682,6 @@
             <div><dt>イベント補正</dt><dd>${formatScore(myResult.eventBonus)}</dd></div>
             <div><dt>チケット代</dt><dd>-${formatScore(myResult.penalty)}</dd></div>
             <div><dt>成功階数</dt><dd>${formatScore(myResult.actualRise)}階</dd></div>
-            <div><dt>StageSkill</dt><dd>${myResult.stageSkill === null ? "-" : `${formatSkill(myResult.stageSkill)}${renderSkillDelta(myResult)}`}</dd></div>
           </dl>
         </section>
         <section class="panel">

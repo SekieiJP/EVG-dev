@@ -477,6 +477,27 @@ code {
   line-height: 1;
 }
 
+.stage-result-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.stage-result-metrics > div {
+  display: grid;
+  gap: 4px;
+}
+
+.stage-result-metrics span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.score-card .stage-result-metrics strong {
+  font-size: clamp(28px, 7vw, 46px);
+}
+
 .breakdown dl,
 .stats-list {
   display: grid;

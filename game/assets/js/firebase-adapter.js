@@ -278,6 +278,7 @@
           previousRoom: currentRoom,
           clearVolatile: path === "/api/host/import-config",
         });
+        if (path === "/api/host/import-config") await this.writeRootPlayersFromRoom(nextRoom);
         return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload).room });
       }
 

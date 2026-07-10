@@ -245,6 +245,18 @@
       </section>
 
       <section>
+        <h2>2026-07-10 Skill更新・次ゲーム継続の仕様決定</h2>
+        <ul>
+          <li><strong>デザインの決定:</strong> StageSkillは各ステージ集計時に記録し、同じ集計で現在Skill（全StageSkillの上位5件合計）も更新する。Playerの結果画面は当該ステージのスコアとStageSkillを同じ結果カードに表示し、ヘッダーの持ち点と現在Skillも集計値へ更新する。</li>
+          <li><strong>デザインの決定:</strong> 次ゲームには、直前ゲームで次ゲーム開始日と同じ日本時間の日付にチケット購入を完了したプレイヤーだけを継続参加させる。UUID、表示名、現在Skill、StageSkill履歴は保持し、ゲーム内得点は0へ戻す。</li>
+          <li><strong>実装:</strong> <code>engine.createNextGameRoom()</code>がステージ結果の<code>calculatedAt</code>を日本時間で判定して対象者を選び、<code>scores</code>を0で再作成する。Firebaseの設定Importでは、継続対象者のroot <code>players/{uid}</code>も更新して、名前とSkill履歴の復元元を一致させる。</li>
+          <li><strong>トレードオフ:</strong> 継続判定は新しい永続フィールドを追加せず、既存のステージ結果の<code>calculatedAt</code>とチケット情報から行う。これにより既存RTDBスキーマへの変更を避ける一方、集計時刻のない過去データは継続対象にしない。</li>
+          <li><strong>逸脱:</strong> v1.19の「次ゲームで前ゲーム参加者を自動コピーしない」方針は、2026-07-10の指定により置き換えた。前日以前の参加者を現在ゲームから外しつつ、当日直前ゲームで実際に参加したプレイヤーだけを自動継続する。</li>
+          <li><strong>未解決の質問:</strong> なし。日本時間の日付境界は仕様として確定した。</li>
+        </ul>
+      </section>
+
+      <section>
         <h2>逸脱</h2>
         <ul>
           <li>GAS通信は<code>USE_GAS_API</code>有効時のfetch接続、hostToken連携、serverTime補正まで実装した。ただし、実GASデプロイURLでの現地疎通、同時接続負荷、CORS挙動のブラウザ横断確認は未実施。</li>

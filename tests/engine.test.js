@@ -149,6 +149,38 @@ run("next game keeps separated audio volume settings", () => {
   assert.strictEqual(second.seMuted, false);
 });
 
+run("next game keeps only same-day stage participants and resets their game scores", () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.players = [
+    { uuid: "today", name: "Today", skill: 72, stageSkillHistory: [32, 40], connected: true },
+    { uuid: "yesterday", name: "Yesterday", skill: 55, stageSkillHistory: [55], connected: true },
+    { uuid: "abstained", name: "Abstained", skill: 44, stageSkillHistory: [44], connected: true },
+  ];
+  room.scores = { today: 18, yesterday: 25, abstained: 9 };
+  room.stageResults = {
+    yesterday: {
+      calculatedAt: "2026-07-09T14:00:00.000Z",
+      players: {
+        yesterday: { ticket: { abstained: false } },
+        abstained: { ticket: { abstained: true } },
+      },
+    },
+    today: {
+      calculatedAt: "2026-07-10T01:00:00.000Z",
+      players: {
+        today: { ticket: { abstained: false } },
+      },
+    },
+  };
+
+  const next = Engine.createNextGameRoom(room, Engine.DEFAULT_CONFIG, "2026-07-10T05:00:00.000Z");
+
+  assert.deepStrictEqual(next.players.map((player) => player.uuid), ["today"]);
+  assert.strictEqual(next.players[0].skill, 72);
+  assert.deepStrictEqual(next.players[0].stageSkillHistory, [32, 40]);
+  assert.deepStrictEqual(next.scores, { today: 0 });
+});
+
 run("zone multiplier applies only to successful P side", () => {
   const result = Engine.calculateStage(
     stage({ events: [{ type: "E3a_zone_multiplier", fromFloor: 3, toFloor: 5, multiplier: 2 }] }),

@@ -133,19 +133,63 @@
     };
   }
 
-  function createNextGameRoom(room, config) {
+  function createNextGameRoom(room, config, nextGameStartedAt) {
     const next = createInitialRoom(config);
+    const startedAt = validIsoTimestamp(nextGameStartedAt) ? nextGameStartedAt : nowIso();
     const archived = archiveCurrentGame(room);
     next.completedGames = archived ? (room.completedGames || []).concat(archived) : deepClone(room.completedGames || []);
+    next.players = nextGamePlayers(room, startedAt);
+    next.scores = next.players.reduce((scores, player) => {
+      scores[player.uuid] = 0;
+      return scores;
+    }, {});
     next.volume = room.volume !== undefined ? room.volume : next.volume;
     next.bgmVolume = room.bgmVolume !== undefined ? room.bgmVolume : next.volume;
     next.seVolume = room.seVolume !== undefined ? room.seVolume : next.volume;
     next.muted = Boolean(room.muted);
     next.bgmMuted = room.bgmMuted !== undefined ? Boolean(room.bgmMuted) : next.muted;
     next.seMuted = room.seMuted !== undefined ? Boolean(room.seMuted) : next.muted;
-    next.operations.unshift({ at: nowIso(), actor: "host", action: "next-game" });
-    next.updatedAt = nowIso();
+    next.createdAt = startedAt;
+    next.operations.unshift({ at: startedAt, actor: "host", action: "next-game" });
+    next.updatedAt = startedAt;
     return next;
+  }
+
+  function nextGamePlayers(room, nextGameStartedAt) {
+    const targetDate = tokyoDateKey(nextGameStartedAt);
+    if (!targetDate) return [];
+    return (room.players || [])
+      .filter((player) => playerParticipatedOnTokyoDate(room, player.uuid, targetDate))
+      .map((player) => Object.assign({}, deepClone(player), {
+        name: player.pendingName || player.name,
+        pendingName: null,
+      }));
+  }
+
+  function playerParticipatedOnTokyoDate(room, uuid, targetDate) {
+    return Object.values(room.stageResults || {}).some((stageResult) => {
+      const result = stageResult && stageResult.players && stageResult.players[uuid];
+      return Boolean(
+        result &&
+        result.ticket &&
+        !result.ticket.abstained &&
+        tokyoDateKey(stageResult.calculatedAt) === targetDate
+      );
+    });
+  }
+
+  function tokyoDateKey(value) {
+    if (!validIsoTimestamp(value)) return "";
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(value));
+  }
+
+  function validIsoTimestamp(value) {
+    return Boolean(value) && Number.isFinite(new Date(value).getTime());
   }
 
   function removePlayerFromRoom(room, uuid, actor) {
