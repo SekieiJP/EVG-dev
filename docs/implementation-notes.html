@@ -399,6 +399,8 @@
           <li><strong>トレードオフ:</strong> rootに非空履歴があり結果との由来対応を証明できない場合、値一致による推測マージはしない。既存canonicalを壊さないことを優先し、room mirrorのみrootへ合わせる。</li>
           <li><strong>安全側の停止:</strong> root履歴が空でもroomに由来不明の非空履歴と旧plain markerがある場合、同じ数値のStageSkillを同一実績とは見なさず<code>SKILL_HISTORY_AMBIGUOUS</code>で移行を止める。本番対象roomはroot/room履歴とも空のため、この停止条件には該当しない。</li>
           <li><strong>実データdry-run:</strong> 本番スナップショットをローカルで新移行関数へ通し、29件を履歴長<code>[4,5,5,5,5,5]</code>として復元、6人すべて非ゼロ現在Skill、ゲーム単位marker、現ゲーム5ステージ完了詳細を生成できた。RTDBへの書込みは行っていない。</li>
+          <li><strong>検証:</strong> 数値一致推測の拒否、同一game/stage競合の拒否、非空root不変、version競合後の全件再読込、移行markerの原子的拒否、Host限定results親読取り、0を含む29件復元をUnit/Rules emulatorへ追加した。50人×20ステージ負荷モデルとHost/Player 2人/ScreenのPlaywright E2Eも再通過した。</li>
+          <li><strong>公開反映:</strong> コミット<code>faebfc1</code>を<code>origin/master</code>へpushし、GitHub Pages workflow成功と公開HTMLのアセット版<code>260729-p0p1r2</code>を確認した。これは静的コードの反映であり、本番RTDB Rulesとデータ移行は未実施。</li>
           <li><strong>権限境界:</strong> 本番Rules deployは共有本番セキュリティ境界の永続変更に当たるため、明示承認なしでは実行しない。旧Rulesは一時領域へ読取りバックアップ済み。承認・作業手順と反映後backfill確認は<code>docs/operator-action-required-p0-p1.html</code>へ更新した。</li>
           <li><strong>未解決の質問:</strong> 本番Rules deploy、allowlist済みHostによる1回のbackfill、GAS archive Webアプリと設定値の反映、実端末smokeが未実施。</li>
         </ul>
