@@ -401,6 +401,11 @@
           <li><strong>実データdry-run:</strong> 本番スナップショットをローカルで新移行関数へ通し、29件を履歴長<code>[4,5,5,5,5,5]</code>として復元、6人すべて非ゼロ現在Skill、ゲーム単位marker、現ゲーム5ステージ完了詳細を生成できた。RTDBへの書込みは行っていない。</li>
           <li><strong>検証:</strong> 数値一致推測の拒否、同一game/stage競合の拒否、非空root不変、version競合後の全件再読込、移行markerの原子的拒否、Host限定results親読取り、0を含む29件復元をUnit/Rules emulatorへ追加した。50人×20ステージ負荷モデルとHost/Player 2人/ScreenのPlaywright E2Eも再通過した。</li>
           <li><strong>公開反映:</strong> コミット<code>faebfc1</code>を<code>origin/master</code>へpushし、GitHub Pages workflow成功と公開HTMLのアセット版<code>260729-p0p1r2</code>を確認した。これは静的コードの反映であり、本番RTDB Rulesとデータ移行は未実施。</li>
+          <li><strong>P1補完:</strong> final確定や移行で既に<code>completedGameDetails</code>へ保存済みの現ゲームも、Hostの「現在ゲームを保存」からGASへ手動送信できるようにした。final後の手動送信時は<code>results</code>全件を再読込して部分的な完了詳細を修復し、version CAS付きでRTDBのsummary/public/Host/本人詳細へ先に永続化してから、同じgameId/archiveIdでGASへ送る。</li>
+          <li><strong>P1安全策:</strong> 単一の<code>archive</code>状態で未完了ゲームを追跡している間は、別ゲームの手動保存で状態を上書きせず<code>archive_pending</code>として先行再送を促す。retry payloadのgameIdが追跡中gameIdと異なる場合も<code>archive_mismatch</code>で拒否する。</li>
+          <li><strong>トレードオフ:</strong> archive失敗は次ゲーム進行を止めない。未完了状態を次roomへ持ち越し、後続ゲームの完了詳細はRTDBへ確定する一方、GAS自動送信だけを先行job完了まで延期する。ブラウザ終了で<code>queued</code>が残った場合もUIから同一archiveIdで再送できる。</li>
+          <li><strong>検証:</strong> 未finalの手動保存がRTDB/GASの双方へ書き込まないこと、手動保存のversion CAS競合時にGASへ送らないこと、先行ゲームの<code>queued</code>/<code>failed</code>状態を保持しながら後続ゲームの完了詳細だけをRTDBへ確定することを統合テストへ追加した。Unit、Rules emulator、負荷モデル、Playwright E2Eはすべて通過した。</li>
+          <li><strong>ドキュメント修正:</strong> GAS README/readinessと<code>getClientConfigSnippet()</code>をarchive専用・Firebase正系の現行構成へ更新した。旧GAS進行API、ポーリング、Spreadsheet次ゲーム設定を本番手順として案内しない。</li>
           <li><strong>権限境界:</strong> 本番Rules deployは共有本番セキュリティ境界の永続変更に当たるため、明示承認なしでは実行しない。旧Rulesは一時領域へ読取りバックアップ済み。承認・作業手順と反映後backfill確認は<code>docs/operator-action-required-p0-p1.html</code>へ更新した。</li>
           <li><strong>未解決の質問:</strong> 本番Rules deploy、allowlist済みHostによる1回のbackfill、GAS archive Webアプリと設定値の反映、実端末smokeが未実施。</li>
         </ul>
@@ -423,7 +428,7 @@
           <li>本番運用で<code>roomId</code>をイベントごとにどう発行し、Host uid allowlistを誰がどの手順で登録するかを確定する必要がある。</li>
           <li>GAS archive APIの冪等キーは<code>archiveId</code>、ゲームの論理識別は<code>gameId</code>に確定した。実Spreadsheetで同一archiveId再送が重複しないことは運用者smokeで確認する。</li>
           <li>本番Host端末のFirebase uidをallowlistへ登録する運用手順を確定し、GitHub Pagesで使うroomIdごとに登録漏れがないか確認する必要がある。</li>
-          <li>2026-06-02追記: 再認証後、allowlist版Firebase Rulesを<code>elevator-game-live-default-rtdb</code>へdeployした。deploy時にRules構文チェックとrelease成功を確認済み。</li>
+          <li>2026-06-02にallowlist版Firebase Rulesをdeployした記録はあるが、2026-07-29監査では今回のP0/P1用Rules（<code>historyPlayers</code>、<code>nextGameConfigs</code>、完了履歴境界）は未反映だった。今回のRules deployとrelease確認は別作業として未完了。</li>
         </ul>
       </section>
     </main>

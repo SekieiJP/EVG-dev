@@ -1003,7 +1003,10 @@
       exported: "保存済み",
       failed: "未完了",
     }[archive.status] || "未送信";
-    const canArchiveCurrent = Object.keys(state.room.stageResults || {}).length > 0;
+    const canArchiveCurrent =
+      state.room.phase === Engine.PHASES.FINAL &&
+      Object.keys(state.room.stageResults || {}).length > 0;
+    const canRetryArchive = ["queued", "failed"].includes(archive.status);
     return `
       <section class="panel wide archive-panel">
         <div class="panel-heading">
@@ -1017,7 +1020,7 @@
         ${archive.error ? `<p class="muted">${escapeHtml(archive.error)}</p>` : ""}
         <div class="form-actions">
           <button type="button" data-action="archive-current" ${canArchiveCurrent ? "" : "disabled"}>現在ゲームを保存</button>
-          <button type="button" data-action="archive-retry" ${archive.status === "failed" ? "" : "disabled"}>未完了を再送</button>
+          <button type="button" data-action="archive-retry" ${canRetryArchive ? "" : "disabled"}>未完了を再送</button>
           <button type="button" data-action="archive-recalculate" data-game-id="${escapeAttr(archive.gameId || "")}">保存済み戦績を再集計</button>
         </div>
       </section>

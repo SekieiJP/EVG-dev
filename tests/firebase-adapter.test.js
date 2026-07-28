@@ -939,6 +939,446 @@ run("firebase final transition atomically persists completed history and queued 
   assert.strictEqual(updates["rooms/unit-room/archive"].status, "queued");
 });
 
+run("firebase manual archive can resend a current game already persisted as completed", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "completed-current";
+  room.phase = Engine.PHASES.FINAL;
+  room.stageResults = {
+    "stage-001": {
+      stageId: "stage-001",
+      players: { alice: { uuid: "alice", name: "Alice", score: 20, stageSkill: 40 } },
+    },
+    "stage-002": {
+      stageId: "stage-002",
+      players: { alice: { uuid: "alice", name: "Alice", score: 30, stageSkill: 50 } },
+    },
+  };
+  const persisted = {
+    gameId: room.gameId,
+    title: "Persisted game",
+    finishedAt: "2026-07-29T00:00:00.000Z",
+    stageResults: { "stage-001": Engine.deepClone(room.stageResults["stage-001"]) },
+  };
+  room.completedGames = [persisted];
+
+  assert.strictEqual(Engine.archiveCurrentGame(room), null);
+  const repaired = EVGFirebaseAdapter.archiveGameForCurrentRoom(room, Engine);
+  assert.strictEqual(repaired.gameId, persisted.gameId);
+  assert.strictEqual(Object.keys(repaired.stageResults).length, 2);
+  const repairedRoom = Engine.deepClone(room);
+  repairedRoom.completedGames = [repaired];
+  repairedRoom.roomVersion = 1;
+  repairedRoom.archive = {
+    status: "queued",
+    gameId: repaired.gameId,
+    archiveId: "archive-repaired",
+  };
+  const repairUpdates = EVGFirebaseAdapter.hostAtomicUpdates(
+    "/api/host/archive-current",
+    room,
+    repairedRoom,
+    "unit-room",
+    Engine
+  );
+  assert.strictEqual(
+    Object.keys(repairUpdates["rooms/unit-room/completedGameDetails"][repaired.gameId].stageResults).length,
+    2
+  );
+  assert.strictEqual(repairUpdates["rooms/unit-room/archive"].archiveId, "archive-repaired");
+
+  const unfinished = Engine.deepClone(room);
+  unfinished.gameId = "not-yet-persisted";
+  unfinished.completedGames = [];
+  assert.strictEqual(
+    EVGFirebaseAdapter.archiveGameForCurrentRoom(unfinished, Engine).gameId,
+    unfinished.gameId
+  );
+});
+
+run("firebase completed games defer archive export without blocking the next game", () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  const pending = {
+    status: "failed",
+    gameId: "older-game",
+    archiveId: "archive-older",
+    error: "retry",
+  };
+  const newGame = { gameId: "newly-finished" };
+  const canExport = EVGFirebaseAdapter.queueArchiveForGame(
+    room,
+    pending,
+    newGame,
+    "unit-room"
+  );
+  assert.strictEqual(canExport, false);
+  assert.deepStrictEqual(room.archive, pending);
+  assert.notStrictEqual(room.archive, pending);
+
+  const sameGameRoom = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  const sameGamePending = {
+    status: "failed",
+    gameId: newGame.gameId,
+    archiveId: "archive-existing",
+  };
+  assert.strictEqual(
+    EVGFirebaseAdapter.queueArchiveForGame(
+      sameGameRoom,
+      sameGamePending,
+      newGame,
+      "unit-room"
+    ),
+    true
+  );
+  assert.strictEqual(sameGameRoom.archive.status, "queued");
+  assert.strictEqual(sameGameRoom.archive.archiveId, "archive-existing");
+});
+
+runAsync("firebase manual archive preserves archive id and repairs partial completed details", async () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "manual-game";
+  room.phase = Engine.PHASES.FINAL;
+  room.archive = {
+    status: "failed",
+    gameId: room.gameId,
+    archiveId: "archive-manual",
+    error: "previous failure",
+  };
+  room.completedGames = [{
+    gameId: room.gameId,
+    title: "partial",
+    finishedAt: "2026-07-29T00:02:00.000Z",
+    stageResults: {
+      "stage-001": {
+        stageId: "stage-001",
+        players: { alice: { uuid: "alice", name: "Alice", score: 10, stageSkill: 20 } },
+      },
+    },
+  }];
+  const allResults = {
+    "stage-001": room.completedGames[0].stageResults["stage-001"],
+    "stage-002": {
+      stageId: "stage-002",
+      players: { alice: { uuid: "alice", name: "Alice", score: 15, stageSkill: 30 } },
+    },
+  };
+  const sent = [];
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  adapter.readRestRoom = async () => Engine.deepClone(room);
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async (path) => {
+      const value = path.endsWith("/results") ? allResults : null;
+      return { exists: () => value !== null, val: () => value };
+    },
+  };
+  adapter.firebaseDb = {};
+  let persistedRoom = null;
+  adapter.commitHostAtomicUpdate = async (_path, _currentRoom, nextRoom) => {
+    persistedRoom = Engine.deepClone(nextRoom);
+    return { ok: true };
+  };
+  adapter.exportArchiveGame = async (game, _sourceRoom, archiveId) => {
+    sent.push({ game, archiveId });
+    return { ok: true, archive: { status: "exported", gameId: game.gameId, archiveId } };
+  };
+  const payload = { hostToken: "firebase-host:host:test" };
+
+  assert.strictEqual((await adapter.postRestHost("/api/host/archive-current", payload)).ok, true);
+  assert.strictEqual((await adapter.postRestHost("/api/host/archive-current", payload)).ok, true);
+  assert.deepStrictEqual(sent.map((item) => item.archiveId), ["archive-manual", "archive-manual"]);
+  assert.strictEqual(Object.keys(sent[0].game.stageResults).length, 2);
+  assert.strictEqual(
+    Object.keys(persistedRoom.completedGames[0].stageResults).length,
+    2
+  );
+  const nextGame = Engine.createNextGameRoom(
+    persistedRoom,
+    Engine.DEFAULT_CONFIG,
+    "2026-07-29T00:03:00.000Z"
+  );
+  assert.strictEqual(
+    Object.keys(nextGame.completedGames.find((game) => game.gameId === "manual-game").stageResults).length,
+    2
+  );
+});
+
+runAsync("firebase manual archive will not replace another game's unfinished archive", async () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "game-b";
+  room.phase = Engine.PHASES.FINAL;
+  room.archive = {
+    status: "failed",
+    gameId: "game-a",
+    archiveId: "archive-a",
+    error: "retry me",
+  };
+  const results = {
+    "stage-001": {
+      stageId: "stage-001",
+      players: { alice: { uuid: "alice", name: "Alice", score: 10, stageSkill: 20 } },
+    },
+  };
+  let exported = false;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  adapter.readRestRoom = async () => Engine.deepClone(room);
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async () => ({ exists: () => true, val: () => results }),
+  };
+  adapter.firebaseDb = {};
+  adapter.exportArchiveGame = async () => {
+    exported = true;
+    return { ok: true };
+  };
+
+  const response = await adapter.postRestHost("/api/host/archive-current", {
+    hostToken: "firebase-host:host:test",
+  });
+  assert.strictEqual(response.ok, false);
+  assert.strictEqual(response.code, "archive_pending");
+  assert.strictEqual(exported, false);
+  assert.deepStrictEqual(room.archive, {
+    status: "failed",
+    gameId: "game-a",
+    archiveId: "archive-a",
+    error: "retry me",
+  });
+});
+
+runAsync("firebase archive retry rejects a game id different from the tracked archive", async () => {
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  const reads = [];
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async (path) => {
+      reads.push(path);
+      const value = path.endsWith("/archive")
+        ? { status: "failed", gameId: "game-a", archiveId: "archive-a" }
+        : null;
+      return { exists: () => value !== null, val: () => value };
+    },
+  };
+  adapter.firebaseDb = {};
+
+  const response = await adapter.postRestHost("/api/host/archive-retry", {
+    hostToken: "firebase-host:host:test",
+    gameId: "game-b",
+  });
+  assert.strictEqual(response.ok, false);
+  assert.strictEqual(response.code, "archive_mismatch");
+  assert.deepStrictEqual(reads, ["/rooms/unit-room/archive"]);
+});
+
+runAsync("firebase archive retry can recover a queued job with the same archive id", async () => {
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  const tracked = {
+    status: "queued",
+    gameId: "game-a",
+    archiveId: "archive-a",
+  };
+  const completed = {
+    gameId: "game-a",
+    title: "Queued game",
+    stageResults: {
+      "stage-001": {
+        stageId: "stage-001",
+        players: { alice: { uuid: "alice", name: "Alice", stageSkill: 20 } },
+      },
+    },
+  };
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async (path) => {
+      const value = path.endsWith("/archive")
+        ? tracked
+        : path.endsWith("/completedGameDetails/game-a")
+          ? completed
+          : null;
+      return { exists: () => value !== null, val: () => value };
+    },
+  };
+  adapter.firebaseDb = {};
+  let sent = null;
+  adapter.exportArchiveGame = async (game, sourceRoom, archiveId) => {
+    sent = { game, sourceRoom, archiveId };
+    return { ok: true, archive: { status: "exported", gameId: game.gameId, archiveId } };
+  };
+
+  const response = await adapter.postRestHost("/api/host/archive-retry", {
+    hostToken: "firebase-host:host:test",
+    gameId: "game-a",
+  });
+  assert.strictEqual(response.ok, true);
+  assert.strictEqual(sent.game.gameId, "game-a");
+  assert.strictEqual(sent.sourceRoom, null);
+  assert.strictEqual(sent.archiveId, "archive-a");
+});
+
+runAsync("firebase final transition defers GAS while preserving an older failed archive", async () => {
+  let current = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  current.gameId = "game-b";
+  current.phase = Engine.PHASES.RANKING;
+  current.roomVersion = 12;
+  current.archive = {
+    status: "failed",
+    gameId: "game-a",
+    archiveId: "archive-a",
+    error: "retry first",
+  };
+  current.stageResults = {
+    "stage-001": {
+      stageId: "stage-001",
+      players: { alice: { uuid: "alice", name: "Alice", score: 10, stageSkill: 20 } },
+    },
+  };
+  const finalRoom = Engine.deepClone(current);
+  finalRoom.phase = Engine.PHASES.FINAL;
+  let committed = null;
+  let exportCount = 0;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  adapter.readRestRoom = async () => Engine.deepClone(current);
+  adapter.applyMutation = () => ({ ok: true, room: Engine.deepClone(finalRoom) });
+  adapter.commitHostAtomicUpdate = async (_path, _currentRoom, nextRoom) => {
+    committed = Engine.deepClone(nextRoom);
+    return { ok: true };
+  };
+  adapter.exportArchiveGame = async () => {
+    exportCount += 1;
+    return { ok: true };
+  };
+
+  const response = await adapter.postRestHost("/api/host/advance", {
+    hostToken: "firebase-host:host:test",
+  });
+  assert.strictEqual(response.ok, true);
+  assert.strictEqual(exportCount, 0);
+  assert.strictEqual(committed.archive.gameId, "game-a");
+  assert.strictEqual(committed.archive.archiveId, "archive-a");
+  assert.strictEqual(
+    committed.completedGames.some((game) => {
+      return game.gameId === "game-b" && Object.keys(game.stageResults || {}).length === 1;
+    }),
+    true
+  );
+});
+
+runAsync("firebase manual archive rejects non-final rooms before RTDB or GAS writes", async () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.stageResults = {
+    "stage-001": { stageId: "stage-001", players: {} },
+  };
+  let databaseRead = false;
+  let committed = false;
+  let exported = false;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  adapter.readRestRoom = async () => Engine.deepClone(room);
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async () => {
+      databaseRead = true;
+      return { exists: () => false, val: () => null };
+    },
+  };
+  adapter.commitHostAtomicUpdate = async () => {
+    committed = true;
+    return { ok: true };
+  };
+  adapter.exportArchiveGame = async () => {
+    exported = true;
+    return { ok: true };
+  };
+
+  const response = await adapter.postRestHost("/api/host/archive-current", {
+    hostToken: "firebase-host:host:test",
+  });
+  assert.strictEqual(response.ok, false);
+  assert.strictEqual(response.code, "not_ready");
+  assert.strictEqual(databaseRead, false);
+  assert.strictEqual(committed, false);
+  assert.strictEqual(exported, false);
+});
+
+runAsync("firebase manual archive does not call GAS when the RTDB CAS loses", async () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "cas-game";
+  room.phase = Engine.PHASES.FINAL;
+  room.roomVersion = 20;
+  const allResults = {
+    "stage-001": {
+      stageId: "stage-001",
+      players: { alice: { uuid: "alice", name: "Alice", score: 10, stageSkill: 20 } },
+    },
+  };
+  let exported = false;
+  let attemptedRoom = null;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  adapter.readRestRoom = async () => Engine.deepClone(room);
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async () => ({ exists: () => true, val: () => allResults }),
+  };
+  adapter.firebaseDb = {};
+  adapter.commitHostAtomicUpdate = async (_path, _currentRoom, nextRoom) => {
+    attemptedRoom = Engine.deepClone(nextRoom);
+    return { ok: false, code: "version_conflict", error: "lost CAS" };
+  };
+  adapter.exportArchiveGame = async () => {
+    exported = true;
+    return { ok: true };
+  };
+
+  const response = await adapter.postRestHost("/api/host/archive-current", {
+    hostToken: "firebase-host:host:test",
+  });
+  assert.strictEqual(response.ok, false);
+  assert.strictEqual(response.code, "version_conflict");
+  assert.strictEqual(attemptedRoom.roomVersion, 21);
+  assert.strictEqual(attemptedRoom.archive.status, "queued");
+  assert.strictEqual(exported, false);
+});
+
 runAsync("firebase host remove player writes only removed player child nodes", async () => {
   let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   room = Engine.registerPlayer(room, "Alice", "alice").room;

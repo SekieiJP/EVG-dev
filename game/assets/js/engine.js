@@ -149,6 +149,7 @@
     next.muted = Boolean(room.muted);
     next.bgmMuted = room.bgmMuted !== undefined ? Boolean(room.bgmMuted) : next.muted;
     next.seMuted = room.seMuted !== undefined ? Boolean(room.seMuted) : next.muted;
+    next.archive = deepClone(room.archive || null);
     next.createdAt = startedAt;
     next.operations.unshift({ at: startedAt, actor: "host", action: "next-game" });
     next.updatedAt = startedAt;

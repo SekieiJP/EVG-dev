@@ -376,13 +376,16 @@ run("GAS save data summary contains required player metrics", () => {
   });
 });
 
-run("GAS client config snippet contains deployed URL and deployment id", () => {
+run("GAS client config snippet keeps Firebase primary and configures archive-only GAS", () => {
   const gas = loadGas();
   const deploymentId = "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO";
   const snippet = gas.buildClientConfigSnippet_(`https://script.google.com/macros/s/${deploymentId}/exec`, deploymentId);
   assert.match(snippet, /AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO/);
-  assert.match(snippet, /GAS_API_KEY: "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO"/);
-  assert.match(snippet, /USE_GAS_API: true/);
+  assert.match(snippet, /FIREBASE_PROJECT_ID: "elevator-game-live"/);
+  assert.match(snippet, /FIREBASE_ARCHIVE_GAS_URL: "https:\/\/script\.google\.com\/macros\/s\//);
+  assert.match(snippet, /FIREBASE_ARCHIVE_API_KEY: "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO"/);
+  assert.doesNotMatch(snippet, /USE_GAS_API/);
+  assert.doesNotMatch(snippet, /GAS_API_BASE_URL/);
   assert.match(snippet, /POLL_INTERVAL_MS: 10000/);
 });
 

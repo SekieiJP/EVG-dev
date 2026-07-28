@@ -142,11 +142,19 @@ run("next game keeps separated audio volume settings", () => {
   first.seVolume = 0.9;
   first.bgmMuted = true;
   first.seMuted = false;
+  first.archive = {
+    status: "failed",
+    gameId: first.gameId,
+    archiveId: "archive-pending",
+    error: "retry",
+  };
   const second = Engine.createNextGameRoom(first, config);
   assert.strictEqual(second.bgmVolume, 0.35);
   assert.strictEqual(second.seVolume, 0.9);
   assert.strictEqual(second.bgmMuted, true);
   assert.strictEqual(second.seMuted, false);
+  assert.deepStrictEqual(second.archive, first.archive);
+  assert.notStrictEqual(second.archive, first.archive);
 });
 
 run("next game keeps only same-day stage participants and resets their game scores", () => {

@@ -137,6 +137,19 @@ run("player countdown updates do not rerender active ticket input", () => {
   assert.strictEqual(cssSource.includes(".inline-countdown:empty"), true);
 });
 
+run("archive recovery is available for queued jobs and manual save waits for final", () => {
+  const archivePanel = section(appSource, "function renderArchivePanel", "function renderGameConfigOption");
+  assert.strictEqual(
+    archivePanel.includes('state.room.phase === Engine.PHASES.FINAL'),
+    true
+  );
+  assert.strictEqual(
+    archivePanel.includes('["queued", "failed"].includes(archive.status)'),
+    true
+  );
+  assert.strictEqual(archivePanel.includes("未完了を再送"), true);
+});
+
 run("history player stats show the approved metric set only", () => {
   const statsRenderer = section(appSource, "function renderPlayerStats", "function renderSkillDelta");
   assert.strictEqual(statsRenderer.includes("累積得点"), false);

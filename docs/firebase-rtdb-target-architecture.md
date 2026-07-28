@@ -396,6 +396,10 @@ rooms/{roomId}/archive
 
 GAS障害時もゲーム進行は止めない。Host画面に「アーカイブ未完了」と再送ボタンを出す。
 
+`queued`はGAS応答前のブラウザ終了等で残る可能性があるため、`failed`と同様に同一`archiveId`で明示再送できる。未完了jobがあるまま次ゲームへ進む場合はその状態を新roomへ持ち越し、後続ゲームのRTDB完了詳細は通常どおり確定するが、GAS自動送信だけを延期する。先行jobが`exported`になった後、後続finalゲームをHostが手動送信する。
+
+final済み現ゲームの手動送信では、Hostが`results`全件を再読込し、部分的な`completedGameDetails`を検出した場合はsummary、公開詳細、Host詳細、本人詳細、`archive=queued`を`public.roomVersion + 1`と同じmulti-location updateで修復する。このRTDB確定後にだけGASへ送るため、送信途中で失敗して次ゲームへ移ってもfull payloadをretryできる。
+
 ## クライアント構成
 
 ### モジュール境界

@@ -191,6 +191,49 @@ async function main() {
       },
     }));
 
+    await assertSucceeds(host.ref().update({
+      [`rooms/${roomId}/public`]: publicNode({
+        phase: "reveal",
+        roomVersion: 7,
+        animationStartedAt: "2026-07-29T00:00:04.000Z",
+      }),
+      [`rooms/${roomId}/completedGameSummaries/game-1`]: {
+        gameId: "game-1",
+        title: "Rules test repaired",
+        finishedAt: "2026-07-29T00:00:05.000Z",
+        stageCount: 2,
+      },
+      [`rooms/${roomId}/completedGamePublicDetails/game-1`]: {
+        gameId: "game-1",
+        title: "Rules test repaired",
+        stageResults: {
+          "stage-001": { stageId: "stage-001", rankings: [] },
+          "stage-002": { stageId: "stage-002", rankings: [] },
+        },
+      },
+      [`rooms/${roomId}/completedGameDetails/game-1`]: {
+        gameId: "game-1",
+        title: "Rules test repaired",
+        stageResults: {
+          "stage-001": { stageId: "stage-001" },
+          "stage-002": { stageId: "stage-002" },
+        },
+      },
+      [`rooms/${roomId}/completedGamePlayerDetails/alice/game-1`]: {
+        gameId: "game-1",
+        stageResults: {
+          "stage-001": { stageId: "stage-001" },
+          "stage-002": { stageId: "stage-002" },
+        },
+      },
+      [`rooms/${roomId}/archive`]: {
+        status: "queued",
+        gameId: "game-1",
+        archiveId: "archive-game-1",
+        requestedAt: "2026-07-29T00:00:06.000Z",
+      },
+    }));
+
     await assertSucceeds(host.ref(`rooms/${roomId}/historyPlayers/p_alice`).set({
       profileId: "p_alice",
       name: "Alice",

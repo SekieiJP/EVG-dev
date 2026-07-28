@@ -189,13 +189,19 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
     <p>本番イベントの本ゲームではなく、参加者に影響しない小規模な確認ゲームで実施してください。archiveは <code>archiveId</code> と <code>gameId</code> による冪等upsertなので、同じアーカイブの再送でSpreadsheetに二重行を作らない設計です。</p>
 
     <ol>
-      <li>allowlist済みHostで、少なくとも1ステージを集計済みにした確認ゲームを用意する。</li>
+      <li>allowlist済みHostで、小規模な確認ゲームを最終結果まで完了する。</li>
       <li>Host画面の<strong>戦績アーカイブ → 現在ゲームを保存</strong>を押す。</li>
       <li>表示が<strong>保存済み</strong>になり、エラーが空であることを確認する。</li>
       <li>Spreadsheetの <code>archive_log</code> に成功記録があり、<code>save_data</code>、<code>stage_results</code>、<code>stage_settings</code>、<code>game_history</code> に当該ゲームのデータがあることを確認する。</li>
       <li><strong>保存済み戦績を再集計</strong>を押し、GASの再集計応答が成功することを確認する。</li>
-      <li>既に <strong>未完了</strong> のarchiveがある場合は、URL/API key/allowlistを直したうえで<strong>未完了を再送</strong>を押す。保存済みに変わり、同じ <code>archiveId</code> の行が重複しないことを確認する。</li>
+      <li>既に <strong>未完了</strong> または長時間変わらない<strong>送信待ち</strong>のarchiveがある場合は、URL/API key/allowlistを直したうえで<strong>未完了を再送</strong>を押す。保存済みに変わり、同じ <code>archiveId</code> の行が重複しないことを確認する。</li>
     </ol>
+
+    <p>2026-06-12終了済みの本番ゲームはSkill backfill後に5ステージの完了詳細へ修復されます。GAS設定反映後、同じHost画面の<strong>現在ゲームを保存</strong>からこの保存済み現ゲームを送信できます。手動送信でも全resultsを再確認し、修復詳細をRTDBへ原子的に保存してから同じgameId/archiveIdでGASへ送ります。新しいゲームを作成する前に、表示が<strong>保存済み</strong>となり、Spreadsheet側の5ステージを確認してください。</p>
+
+    <div class="warning">
+      別ゲームのarchiveが<strong>送信待ち</strong>または<strong>未完了</strong>の間は、現在ゲームの保存を先に行わないでください。アプリも<code>archive_pending</code>として拒否します。必ず追跡中ゲームの<strong>未完了を再送</strong>を完了し、保存済みになってから次のゲームを送信してください。retry対象gameIdが追跡状態と異なる場合は<code>archive_mismatch</code>として拒否されます。
+    </div>
 
     <p>再送の導線自体を事前検証する必要があり、未完了の実例がない場合は、<strong>本番イベントではない確認ゲーム</strong>だけで一時的に無効なarchive URLを配信して失敗状態を作り、正しいURLへ戻して再送する方法があります。この確認は公開切替を伴うため、通常の変更管理・承認手順で行ってください。</p>
 
@@ -212,6 +218,7 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
         <tr><td>Hostが「allowlistに登録されていません」</td><td>internal-statusの現在uidと <code>rooms/elevator-game-live/roles/hosts/{uid}</code> を照合する。uidの子を <code>true</code> で追加し、Host画面を再読み込みする。既存のhost uidを一括削除しない。</td></tr>
         <tr><td>archiveが「GAS URL未設定」またはHTTPエラー</td><td><code>/exec</code> URL、Webアプリのアクセス範囲、公開済みクライアント設定を確認する。直せるまでURLを空に戻せばarchive呼出しは失敗状態になるだけで、ゲーム進行はRTDBで継続する。</td></tr>
         <tr><td>archiveが「Firebase ID token」またはHost認可エラー</td><td>匿名Authが有効か、Host画面を再読み込みしてtokenが更新されるか、GAS側のFirebaseプロジェクト/room設定とallowlistが一致するかを確認する。</td></tr>
+        <tr><td>archiveが<code>archive_pending</code>または<code>archive_mismatch</code></td><td>RTDB <code>archive</code>が追跡しているgameIdを変更・削除せず確認し、そのゲームの「未完了を再送」を先に完了する。別ゲームIDを手入力して再送しない。</td></tr>
         <tr><td>GASがsetup_requiredを返す</td><td>正しいSpreadsheetに紐づくスクリプトで <code>setupElevatorGameSheets</code> を実行し、必要シートが作成されているか確認する。</td></tr>
         <tr><td>archiveを一時停止したい</td><td>通常の公開手順で <code>FIREBASE_ARCHIVE_GAS_URL</code> を空にした版を配信する。RTDBのRules、進行データ、確定履歴を削除しない。復旧後はURLを戻して「未完了を再送」を使う。</td></tr>
       </tbody>

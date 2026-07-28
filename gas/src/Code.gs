@@ -1813,8 +1813,11 @@ function setConfigValue_(key, value) {
 
 function getClientConfigSnippet() {
   setupElevatorGameSheets();
-  const url = getConfigValue_('webAppUrl', EVG_DEPLOYED_WEB_APP_URL);
-  const apiKey = EVG_DEPLOYMENT_ID;
+  const serviceUrl = typeof ScriptApp !== 'undefined' && ScriptApp.getService
+    ? ScriptApp.getService().getUrl()
+    : '';
+  const url = serviceUrl || getConfigValue_('webAppUrl', EVG_DEPLOYED_WEB_APP_URL);
+  const apiKey = getConfigValue_('apiKey', EVG_DEPLOYMENT_ID) || EVG_DEPLOYMENT_ID;
   return buildClientConfigSnippet_(url, apiKey);
 }
 
@@ -1822,9 +1825,16 @@ function buildClientConfigSnippet_(url, apiKey) {
   return [
     '(function (root) {',
     '  root.EVG_BUILD_CONFIG = {',
-    '    GAS_API_BASE_URL: "' + url + '",',
-    '    GAS_API_KEY: "' + apiKey + '",',
-    '    USE_GAS_API: true,',
+    '    FIREBASE_USE_LOCAL_MOCK: false,',
+    '    FIREBASE_PROJECT_ID: "elevator-game-live",',
+    '    FIREBASE_API_KEY: "' + EVG_FIREBASE_API_KEY + '",',
+    '    FIREBASE_AUTH_DOMAIN: "elevator-game-live.firebaseapp.com",',
+    '    FIREBASE_DATABASE_URL: "' + EVG_FIREBASE_DATABASE_URL + '",',
+    '    FIREBASE_ROOM_ID: "' + EVG_FIREBASE_ROOM_ID + '",',
+    '    FIREBASE_HOST_PASSWORD: "host",',
+    '    FIREBASE_SDK_VERSION: "10.12.5",',
+    '    FIREBASE_ARCHIVE_GAS_URL: "' + String(url || '') + '",',
+    '    FIREBASE_ARCHIVE_API_KEY: "' + String(apiKey || '') + '",',
     '    POLL_INTERVAL_MS: 10000,',
     '  };',
     '})(typeof self !== "undefined" ? self : this);',
