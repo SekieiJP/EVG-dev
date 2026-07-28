@@ -148,6 +148,7 @@ run("archive recovery is available for queued jobs and manual save waits for fin
     true
   );
   assert.strictEqual(archivePanel.includes("未完了を再送"), true);
+  assert.strictEqual(archivePanel.includes("後続キュー"), true);
 });
 
 run("history player stats show the approved metric set only", () => {

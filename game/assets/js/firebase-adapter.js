@@ -410,7 +410,12 @@
           nextRoom
         );
         if (!transition.ok) return transition;
-        return this.exportArchiveGame(game, nextRoom, archiveId || nextRoom.archive.archiveId);
+        return this.exportArchiveGame(
+          game,
+          nextRoom,
+          archiveId || nextRoom.archive.archiveId,
+          nextRoom.archive
+        );
       }
       if (path === "/api/host/archive-retry") {
         const archiveSnapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/archive`));
@@ -423,7 +428,12 @@
         }
         const gameSnapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/completedGameDetails/${gameId}`));
         if (!gameSnapshot.exists()) return { ok: false, code: "not_found", error: "再送対象の完了ゲームが見つかりません。" };
-        return this.exportArchiveGame(normalizeCompletedGame(gameSnapshot.val()), null, archiveState.archiveId);
+        return this.exportArchiveGame(
+          normalizeCompletedGame(gameSnapshot.val()),
+          null,
+          archiveState.archiveId,
+          archiveState
+        );
       }
       if (path === "/api/host/archive-recalculate") {
         return this.callArchiveApi("/api/archive/recalculate", {
@@ -464,7 +474,12 @@
           includeRootPlayers: true,
         });
         if (archivedGame && shouldExportArchivedGame) {
-          const archiveResult = await this.exportArchiveGame(archivedGame, currentRoom, nextRoom.archive.archiveId);
+          const archiveResult = await this.exportArchiveGame(
+            archivedGame,
+            currentRoom,
+            nextRoom.archive.archiveId,
+            nextRoom.archive
+          );
           nextRoom.archive = archiveResult.archive || nextRoom.archive;
         }
         return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload).room });
@@ -485,7 +500,12 @@
       const transition = await this.commitHostAtomicUpdate(path, currentRoom, nextRoom);
       if (!transition.ok) return transition;
       if (finalizedGame && shouldExportFinalizedGame) {
-        const archiveResult = await this.exportArchiveGame(finalizedGame, nextRoom, nextRoom.archive.archiveId);
+        const archiveResult = await this.exportArchiveGame(
+          finalizedGame,
+          nextRoom,
+          nextRoom.archive.archiveId,
+          nextRoom.archive
+        );
         nextRoom.archive = archiveResult.archive || nextRoom.archive;
       }
       return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload).room });
@@ -749,22 +769,158 @@
       return snapshot.exists() ? normalizeCompletedGame(snapshot.val()) : null;
     }
 
-    async exportArchiveGame(game, sourceRoom, archiveId) {
-      const queued = queuedArchiveState(this.roomId, game.gameId, archiveId);
-      await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/archive`), queued);
+    async exportArchiveGame(game, sourceRoom, archiveId, archiveState) {
+      const requestedPendingGameIds = pendingArchiveGameIds(
+        archiveState || sourceRoom && sourceRoom.archive
+      ).filter((gameId) => gameId !== game.gameId);
+      const queuedTransition = await this.transitionArchiveState((currentArchive) => {
+        const current = currentArchive || {};
+        if (
+          ["queued", "failed"].includes(current.status) &&
+          current.gameId &&
+          current.gameId !== game.gameId
+        ) {
+          return undefined;
+        }
+        return queuedArchiveState(
+          this.roomId,
+          game.gameId,
+          current.gameId === game.gameId
+            ? current.archiveId || archiveId
+            : archiveId,
+          uniqueArchiveGameIds(
+            requestedPendingGameIds.concat(pendingArchiveGameIds(current))
+          )
+        );
+      });
+      if (!queuedTransition.committed) {
+        return {
+          ok: false,
+          status: "failed",
+          code: "archive_pending",
+          error: "別ゲームの未完了アーカイブがあります。先にそのゲームを再送してください。",
+          archive: queuedTransition.archive,
+        };
+      }
+      const queued = queuedTransition.archive;
       const archive = buildArchivePayload(game, sourceRoom, queued.archiveId);
       const response = await this.callArchiveApi("/api/archive/export", { archive });
-      const status = {
-        requestedAt: queued.requestedAt,
-        completedAt: nowIso(),
-        status: response && response.ok && response.status === "exported" ? "exported" : "failed",
-        archiveId: queued.archiveId,
-        gameId: game.gameId,
-        error: response && response.ok ? "" : response && (response.error || response.message) || "アーカイブ送信に失敗しました。",
-      };
-      if (response && response.exportedAt) status.exportedAt = response.exportedAt;
-      await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/archive`), status);
-      return Object.assign({}, response, { ok: status.status === "exported", archive: status });
+      const exported = Boolean(response && response.ok && response.status === "exported");
+      const completedAt = nowIso();
+      const completedTransition = await this.transitionArchiveState((currentArchive) => {
+        const current = currentArchive || {};
+        if (
+          current.gameId !== game.gameId ||
+          current.archiveId !== queued.archiveId
+        ) {
+          return undefined;
+        }
+        const livePendingGameIds = uniqueArchiveGameIds(
+          pendingArchiveGameIds(queued).concat(pendingArchiveGameIds(current))
+        ).filter((gameId) => gameId !== game.gameId);
+        if (exported && livePendingGameIds.length) {
+          return queuedArchiveState(
+            this.roomId,
+            livePendingGameIds[0],
+            "",
+            livePendingGameIds.slice(1)
+          );
+        }
+        const status = {
+          requestedAt: queued.requestedAt,
+          completedAt,
+          status: exported ? "exported" : "failed",
+          archiveId: queued.archiveId,
+          gameId: game.gameId,
+          error: exported ? "" : response && (response.error || response.message) || "アーカイブ送信に失敗しました。",
+          pendingGameIdsJson: JSON.stringify(livePendingGameIds),
+        };
+        if (response && response.exportedAt) status.exportedAt = response.exportedAt;
+        return status;
+      });
+      if (!completedTransition.committed) {
+        return Object.assign({}, response, {
+          ok: exported,
+          code: exported ? "archive_state_advanced" : "archive_state_changed",
+          archive: completedTransition.archive,
+        });
+      }
+      const completedArchive = completedTransition.archive;
+      if (
+        exported &&
+        completedArchive.status === "queued" &&
+        completedArchive.gameId !== game.gameId
+      ) {
+        const nextGameId = completedArchive.gameId;
+        const nextSnapshot = await this.sdk.get(
+          this.sdk.ref(
+            this.firebaseDb,
+            `/rooms/${this.roomId}/completedGameDetails/${nextGameId}`
+          )
+        );
+        if (!nextSnapshot.exists()) {
+          const missingTransition = await this.transitionArchiveState((currentArchive) => {
+            const current = currentArchive || {};
+            if (
+              current.gameId !== nextGameId ||
+              current.archiveId !== completedArchive.archiveId
+            ) {
+              return undefined;
+            }
+            return Object.assign({}, current, {
+              completedAt: nowIso(),
+              status: "failed",
+              error: `後続アーカイブ ${nextGameId} の完了詳細が見つかりません。`,
+            });
+          });
+          const missing = missingTransition.archive || completedArchive;
+          return {
+            ok: false,
+            status: "failed",
+            code: "archive_detail_missing",
+            error: missing.error,
+            archive: missing,
+          };
+        }
+        return this.exportArchiveGame(
+          normalizeCompletedGame(nextSnapshot.val()),
+          null,
+          completedArchive.archiveId,
+          completedArchive
+        );
+      }
+      return Object.assign({}, response, {
+        ok: completedArchive.status === "exported",
+        archive: completedArchive,
+      });
+    }
+
+    async transitionArchiveState(updater) {
+      const archiveRef = this.sdk.ref(
+        this.firebaseDb,
+        `/rooms/${this.roomId}/archive`
+      );
+      if (typeof this.sdk.runTransaction === "function") {
+        const result = await this.sdk.runTransaction(
+          archiveRef,
+          (currentArchive) => updater(currentArchive || null),
+          { applyLocally: false }
+        );
+        return {
+          committed: Boolean(result && result.committed),
+          archive: result && result.snapshot && result.snapshot.exists()
+            ? result.snapshot.val()
+            : null,
+        };
+      }
+      const snapshot = await this.sdk.get(archiveRef);
+      const currentArchive = snapshot.exists() ? snapshot.val() : null;
+      const nextArchive = updater(currentArchive);
+      if (nextArchive === undefined) {
+        return { committed: false, archive: currentArchive };
+      }
+      await this.sdk.set(archiveRef, nextArchive);
+      return { committed: true, archive: nextArchive };
     }
 
     async callArchiveApi(path, payload) {
@@ -1600,33 +1756,59 @@
     return `p_${(first >>> 0).toString(36)}${(second >>> 0).toString(36)}`;
   }
 
-  function queuedArchiveState(roomId, gameId, archiveId) {
+  function queuedArchiveState(roomId, gameId, archiveId, pendingGameIds) {
     return {
       requestedAt: nowIso(),
       status: "queued",
       archiveId: archiveId || cleanKey(`archive-${roomId}-${gameId}`),
       gameId: gameId || "",
       error: "",
+      pendingGameIdsJson: JSON.stringify(uniqueArchiveGameIds(pendingGameIds)),
     };
   }
 
   function queueArchiveForGame(room, currentArchive, game, roomId) {
     if (!room || !game || !game.gameId) return false;
     const existing = currentArchive || {};
+    const pendingGameIds = pendingArchiveGameIds(existing);
     if (
       ["queued", "failed"].includes(existing.status) &&
       existing.gameId &&
       existing.gameId !== game.gameId
     ) {
-      room.archive = Object.assign({}, existing);
+      room.archive = Object.assign({}, existing, {
+        pendingGameIdsJson: JSON.stringify(
+          uniqueArchiveGameIds(pendingGameIds.concat(game.gameId))
+        ),
+      });
       return false;
     }
     room.archive = queuedArchiveState(
       roomId,
       game.gameId,
-      existing.gameId === game.gameId ? existing.archiveId : ""
+      existing.gameId === game.gameId ? existing.archiveId : "",
+      pendingGameIds
     );
     return true;
+  }
+
+  function pendingArchiveGameIds(archive) {
+    if (!archive) return [];
+    const source = archive.pendingGameIdsJson !== undefined
+      ? archive.pendingGameIdsJson
+      : archive.pendingGameIds;
+    if (Array.isArray(source)) return uniqueArchiveGameIds(source);
+    if (typeof source !== "string" || !source.trim()) return [];
+    try {
+      const parsed = JSON.parse(source);
+      return Array.isArray(parsed) ? uniqueArchiveGameIds(parsed) : [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function uniqueArchiveGameIds(gameIds) {
+    return Array.from(new Set((gameIds || []).map(cleanKey).filter(Boolean)));
   }
 
   function archiveGameForCurrentRoom(room, engine) {
@@ -1649,13 +1831,16 @@
 
   function buildArchivePayload(game, room, archiveId) {
     const roomPlayers = room && room.players || [];
+    const savedPlayers = arrayFromFirebase(game.playerSnapshots);
     const rankingPlayers = (game.rankings || []).map((ranking) => ({
       uuid: ranking.uuid,
       name: ranking.name || ranking.uuid,
       skill: Number(ranking.currentSkill ?? ranking.skill ?? 0),
       stageSkillHistory: [],
     }));
-    const players = (roomPlayers.length ? roomPlayers : rankingPlayers).map((player) => ({
+    const players = (
+      savedPlayers.length ? savedPlayers : roomPlayers.length ? roomPlayers : rankingPlayers
+    ).map((player) => ({
       uuid: player.uuid,
       name: player.name || player.uuid,
       currentSkill: Number(player.skill ?? player.currentSkill ?? 0),
@@ -2248,6 +2433,7 @@
     hostAtomicUpdates,
     recoverCareerSkillState,
     archiveGameForCurrentRoom,
+    pendingArchiveGameIds,
     queueArchiveForGame,
     completedGamePublicDetailNode,
     publicProfileId,

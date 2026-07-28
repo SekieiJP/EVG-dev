@@ -1,0 +1,229 @@
+{
+  "source": "Anonymized minimum-shape fixture derived from the read-only 2026-07-29 production RTDB snapshot.",
+  "roomNodes": {
+    "meta": {
+      "roomId": "production-shape-room",
+      "schemaVersion": "firebase-rtdb-v2",
+      "activeGameId": "production-shape-game",
+      "status": "finished",
+      "title": "Anonymized production game",
+      "createdAt": "2026-06-12T10:28:16.683Z",
+      "updatedAt": "2026-06-12T11:41:20.987Z"
+    },
+    "public": {
+      "gameId": "production-shape-game",
+      "phase": "final",
+      "roomVersion": 32,
+      "currentStageIndex": 4,
+      "currentStageId": "stage-5"
+    },
+    "config": {
+      "schemaVersion": "1.0.0",
+      "gameMeta": {
+        "title": "Anonymized production game",
+        "createdAt": "2026-06-12T10:28:16.683Z"
+      },
+      "stages": [
+        {
+          "stageId": "stage-1",
+          "name": "Stage 1",
+          "params": { "N": 10, "X": 4, "P": 10, "Q": 5 },
+          "events": []
+        },
+        {
+          "stageId": "stage-2",
+          "name": "Stage 2",
+          "params": { "N": 10, "X": 4, "P": 10, "Q": 5 },
+          "events": []
+        },
+        {
+          "stageId": "stage-3",
+          "name": "Stage 3",
+          "params": { "N": 10, "X": 4, "P": 10, "Q": 5 },
+          "events": []
+        },
+        {
+          "stageId": "stage-4",
+          "name": "Stage 4",
+          "params": { "N": 10, "X": 4, "P": 10, "Q": 5 },
+          "events": []
+        },
+        {
+          "stageId": "stage-5",
+          "name": "Stage 5",
+          "params": { "N": 10, "X": 4, "P": 10, "Q": 5 },
+          "events": []
+        }
+      ]
+    },
+    "players": {
+      "player-1": {
+        "connected": true,
+        "joinedAt": "2026-06-12T10:30:00.000Z",
+        "lastSeenAt": "2026-06-12T11:41:20.987Z",
+        "name": "Player 1"
+      },
+      "player-2": {
+        "connected": true,
+        "joinedAt": "2026-06-12T10:30:00.000Z",
+        "lastSeenAt": "2026-06-12T11:41:20.987Z",
+        "name": "Player 2"
+      },
+      "player-3": {
+        "connected": true,
+        "joinedAt": "2026-06-12T10:30:00.000Z",
+        "lastSeenAt": "2026-06-12T11:41:20.987Z",
+        "name": "Player 3"
+      },
+      "player-4": {
+        "connected": true,
+        "joinedAt": "2026-06-12T10:30:00.000Z",
+        "lastSeenAt": "2026-06-12T11:41:20.987Z",
+        "name": "Player 4"
+      },
+      "player-5": {
+        "connected": true,
+        "joinedAt": "2026-06-12T10:30:00.000Z",
+        "lastSeenAt": "2026-06-12T11:41:20.987Z",
+        "name": "Player 5"
+      },
+      "player-6": {
+        "connected": true,
+        "joinedAt": "2026-06-12T10:30:00.000Z",
+        "lastSeenAt": "2026-06-12T11:41:20.987Z",
+        "name": "Player 6"
+      }
+    },
+    "playerStats": {
+      "player-1": { "currentSkill": 0, "updatedAt": "2026-06-12T11:41:20.987Z" },
+      "player-2": { "currentSkill": 0, "updatedAt": "2026-06-12T11:41:20.987Z" },
+      "player-3": { "currentSkill": 0, "updatedAt": "2026-06-12T11:41:20.987Z" },
+      "player-4": { "currentSkill": 0, "updatedAt": "2026-06-12T11:41:20.987Z" },
+      "player-5": { "currentSkill": 0, "updatedAt": "2026-06-12T11:41:20.987Z" },
+      "player-6": { "currentSkill": 0, "updatedAt": "2026-06-12T11:41:20.987Z" }
+    },
+    "scores": {
+      "player-1": { "total": 350 },
+      "player-2": { "total": 444 },
+      "player-3": { "total": 482 },
+      "player-4": { "total": 575 },
+      "player-5": { "total": 422 },
+      "player-6": { "total": 139 }
+    },
+    "results": {
+      "stage-1": {
+        "stageId": "stage-1",
+        "stageName": "Stage 1",
+        "calculatedAt": "2026-06-12T11:24:30.991Z",
+        "players": {
+          "player-1": { "uuid": "player-1", "name": "Player 1", "score": 28, "stageSkill": 90.58 },
+          "player-2": { "uuid": "player-2", "name": "Player 2", "score": 60, "stageSkill": 127.93 },
+          "player-3": { "uuid": "player-3", "name": "Player 3", "score": 42, "stageSkill": 95.67 },
+          "player-4": { "uuid": "player-4", "name": "Player 4", "score": 21, "stageSkill": 61.04 },
+          "player-5": { "uuid": "player-5", "name": "Player 5", "score": -24, "stageSkill": 7.39 },
+          "player-6": { "uuid": "player-6", "name": "Player 6", "score": -24, "stageSkill": 7.39 }
+        },
+        "rankings": {},
+        "timeline": {}
+      },
+      "stage-2": {
+        "stageId": "stage-2",
+        "stageName": "Stage 2",
+        "calculatedAt": "2026-06-12T11:27:37.989Z",
+        "players": {
+          "player-1": { "uuid": "player-1", "name": "Player 1", "score": 103, "stageSkill": 137.05 },
+          "player-2": { "uuid": "player-2", "name": "Player 2", "score": 31, "stageSkill": 83.92 },
+          "player-3": { "uuid": "player-3", "name": "Player 3", "score": -26, "stageSkill": 8.66 },
+          "player-4": { "uuid": "player-4", "name": "Player 4", "score": 25, "stageSkill": 80.3 },
+          "player-5": { "uuid": "player-5", "name": "Player 5", "score": 40, "stageSkill": 67.76 },
+          "player-6": { "uuid": "player-6", "name": "Player 6", "score": -18, "stageSkill": 51.9 }
+        },
+        "rankings": {},
+        "timeline": {}
+      },
+      "stage-3": {
+        "stageId": "stage-3",
+        "stageName": "Stage 3",
+        "calculatedAt": "2026-06-12T11:31:41.986Z",
+        "players": {
+          "player-1": { "uuid": "player-1", "name": "Player 1", "score": -46, "stageSkill": 8.17 },
+          "player-2": { "uuid": "player-2", "name": "Player 2", "score": 108, "stageSkill": 124.9 },
+          "player-3": { "uuid": "player-3", "name": "Player 3", "score": 51, "stageSkill": 83.28 },
+          "player-4": { "uuid": "player-4", "name": "Player 4", "score": -36, "stageSkill": 12.94 },
+          "player-5": { "uuid": "player-5", "name": "Player 5", "score": 51, "stageSkill": 83.28 },
+          "player-6": { "uuid": "player-6", "name": "Player 6", "score": -4, "stageSkill": 57.02 }
+        },
+        "rankings": {},
+        "timeline": {}
+      },
+      "stage-4": {
+        "stageId": "stage-4",
+        "stageName": "Stage 4",
+        "calculatedAt": "2026-06-12T11:36:28.980Z",
+        "players": {
+          "player-1": { "uuid": "player-1", "name": "Player 1", "score": 85, "stageSkill": 7.11 },
+          "player-2": { "uuid": "player-2", "name": "Player 2", "score": 85, "stageSkill": 7.11 },
+          "player-3": { "uuid": "player-3", "name": "Player 3", "score": 260, "stageSkill": 155.07 },
+          "player-4": { "uuid": "player-4", "name": "Player 4", "score": 260, "stageSkill": 155.07 },
+          "player-5": { "uuid": "player-5", "name": "Player 5", "score": 175, "stageSkill": 76 },
+          "player-6": { "uuid": "player-6", "name": "Player 6", "score": 185, "stageSkill": 91.65 }
+        },
+        "rankings": {},
+        "timeline": {}
+      },
+      "stage-5": {
+        "stageId": "stage-5",
+        "stageName": "Stage 5",
+        "calculatedAt": "2026-06-12T11:41:20.987Z",
+        "players": {
+          "player-1": { "uuid": "player-1", "name": "Player 1", "score": 180, "stageSkill": 46.9 },
+          "player-2": { "uuid": "player-2", "name": "Player 2", "score": 160, "stageSkill": 21.03 },
+          "player-3": { "uuid": "player-3", "name": "Player 3", "score": 155, "stageSkill": 14.56 },
+          "player-4": { "uuid": "player-4", "name": "Player 4", "score": 305, "stageSkill": 208.61 },
+          "player-5": { "uuid": "player-5", "name": "Player 5", "score": 180, "stageSkill": 46.9 },
+          "player-6": { "uuid": "player-6", "name": "Player 6", "score": 0 }
+        },
+        "rankings": {},
+        "timeline": {}
+      }
+    },
+    "completedGameDetails": {
+      "older-anonymized-game": {
+        "gameId": "older-anonymized-game",
+        "title": "Older game",
+        "finishedAt": "2026-06-01T00:00:00.000Z",
+        "stageResults": {
+          "old-stage": {
+            "stageId": "old-stage",
+            "calculatedAt": "2026-06-01T00:00:00.000Z",
+            "players": {}
+          }
+        }
+      }
+    },
+    "completedGameSummaries": {
+      "older-anonymized-game": {
+        "gameId": "older-anonymized-game",
+        "title": "Older game",
+        "finishedAt": "2026-06-01T00:00:00.000Z",
+        "stageCount": 1,
+        "playerCount": 0,
+        "rankings": {}
+      }
+    }
+  },
+  "rootPlayers": {
+    "player-1": { "currentSkill": 0, "stageSkillHistoryJson": "[]", "appliedSkillStageIdsJson": "[]" },
+    "player-2": { "currentSkill": 0, "stageSkillHistoryJson": "[]", "appliedSkillStageIdsJson": "[]" },
+    "player-3": { "currentSkill": 0, "stageSkillHistoryJson": "[]", "appliedSkillStageIdsJson": "[]" },
+    "player-4": { "currentSkill": 0, "stageSkillHistoryJson": "[]", "appliedSkillStageIdsJson": "[]" },
+    "player-5": { "currentSkill": 0, "stageSkillHistoryJson": "[]", "appliedSkillStageIdsJson": "[]" },
+    "player-6": { "currentSkill": 0, "stageSkillHistoryJson": "[]", "appliedSkillStageIdsJson": "[]" }
+  },
+  "expected": {
+    "finiteStageSkillCount": 29,
+    "historyLengths": [4, 5, 5, 5, 5, 5],
+    "currentSkillsDescending": [517.96, 364.89, 357.24, 289.81, 281.33, 207.96],
+    "currentGameStageCount": 5
+  }
+}

@@ -998,6 +998,7 @@
 
   function renderArchivePanel() {
     const archive = state.room.archive || {};
+    const pendingGameIds = parseArchivePendingGameIds(archive);
     const statusLabel = {
       queued: "送信待ち",
       exported: "保存済み",
@@ -1017,6 +1018,7 @@
           <strong class="archive-status is-${escapeAttr(archive.status || "none")}">${escapeHtml(statusLabel)}</strong>
         </div>
         ${archive.gameId ? `<p>${escapeHtml(archive.gameId)} / ${escapeHtml(archive.archiveId || "")}</p>` : ""}
+        ${pendingGameIds.length ? `<p class="muted">後続キュー: ${pendingGameIds.length}ゲーム</p>` : ""}
         ${archive.error ? `<p class="muted">${escapeHtml(archive.error)}</p>` : ""}
         <div class="form-actions">
           <button type="button" data-action="archive-current" ${canArchiveCurrent ? "" : "disabled"}>現在ゲームを保存</button>
@@ -1025,6 +1027,22 @@
         </div>
       </section>
     `;
+  }
+
+  function parseArchivePendingGameIds(archive) {
+    const source = archive && (
+      archive.pendingGameIdsJson !== undefined
+        ? archive.pendingGameIdsJson
+        : archive.pendingGameIds
+    );
+    if (Array.isArray(source)) return source.filter(Boolean);
+    if (typeof source !== "string" || !source.trim()) return [];
+    try {
+      const parsed = JSON.parse(source);
+      return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+    } catch (_error) {
+      return [];
+    }
   }
 
   function renderGameConfigOption(item) {

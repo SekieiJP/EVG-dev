@@ -214,6 +214,12 @@ async function main() {
       [`rooms/${roomId}/completedGameDetails/game-1`]: {
         gameId: "game-1",
         title: "Rules test repaired",
+        playerSnapshots: [{
+          uuid: "alice",
+          name: "Alice",
+          skill: 90,
+          stageSkillHistory: [40, 50],
+        }],
         stageResults: {
           "stage-001": { stageId: "stage-001" },
           "stage-002": { stageId: "stage-002" },
@@ -231,7 +237,24 @@ async function main() {
         gameId: "game-1",
         archiveId: "archive-game-1",
         requestedAt: "2026-07-29T00:00:06.000Z",
+        pendingGameIdsJson: "[\"game-2\"]",
       },
+    }));
+    await assertSucceeds(host.ref(`rooms/${roomId}/archive`).transaction((archive) => {
+      return Object.assign({}, archive || {}, {
+        pendingGameIdsJson: "[\"game-2\",\"game-3\"]",
+      });
+    }));
+    const queuedArchive = await assertSucceeds(
+      host.ref(`rooms/${roomId}/archive`).once("value")
+    );
+    if (queuedArchive.val().pendingGameIdsJson !== "[\"game-2\",\"game-3\"]") {
+      throw new Error("Host archive transaction did not preserve the pending queue");
+    }
+    await assertFails(alice.ref(`rooms/${roomId}/archive`).set({
+      status: "exported",
+      gameId: "game-1",
+      archiveId: "archive-game-1",
     }));
 
     await assertSucceeds(host.ref(`rooms/${roomId}/historyPlayers/p_alice`).set({

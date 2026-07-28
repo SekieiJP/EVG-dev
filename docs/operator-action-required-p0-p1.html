@@ -194,13 +194,13 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
       <li>表示が<strong>保存済み</strong>になり、エラーが空であることを確認する。</li>
       <li>Spreadsheetの <code>archive_log</code> に成功記録があり、<code>save_data</code>、<code>stage_results</code>、<code>stage_settings</code>、<code>game_history</code> に当該ゲームのデータがあることを確認する。</li>
       <li><strong>保存済み戦績を再集計</strong>を押し、GASの再集計応答が成功することを確認する。</li>
-      <li>既に <strong>未完了</strong> または長時間変わらない<strong>送信待ち</strong>のarchiveがある場合は、URL/API key/allowlistを直したうえで<strong>未完了を再送</strong>を押す。保存済みに変わり、同じ <code>archiveId</code> の行が重複しないことを確認する。</li>
+      <li>既に <strong>未完了</strong> または長時間変わらない<strong>送信待ち</strong>のarchiveがある場合は、URL/API key/allowlistを直したうえで<strong>未完了を再送</strong>を押す。先行ゲームに続いて、延期されていた後続ゲームも古い順に自動送信される。最後のゲームが保存済みに変わり、各 <code>archiveId</code> の行が重複しないことを確認する。</li>
     </ol>
 
     <p>2026-06-12終了済みの本番ゲームはSkill backfill後に5ステージの完了詳細へ修復されます。GAS設定反映後、同じHost画面の<strong>現在ゲームを保存</strong>からこの保存済み現ゲームを送信できます。手動送信でも全resultsを再確認し、修復詳細をRTDBへ原子的に保存してから同じgameId/archiveIdでGASへ送ります。新しいゲームを作成する前に、表示が<strong>保存済み</strong>となり、Spreadsheet側の5ステージを確認してください。</p>
 
     <div class="warning">
-      別ゲームのarchiveが<strong>送信待ち</strong>または<strong>未完了</strong>の間は、現在ゲームの保存を先に行わないでください。アプリも<code>archive_pending</code>として拒否します。必ず追跡中ゲームの<strong>未完了を再送</strong>を完了し、保存済みになってから次のゲームを送信してください。retry対象gameIdが追跡状態と異なる場合は<code>archive_mismatch</code>として拒否されます。
+      別ゲームのarchiveが<strong>送信待ち</strong>または<strong>未完了</strong>の間は、現在ゲームの手動保存を先に行わないでください。アプリも<code>archive_pending</code>として拒否します。ゲーム進行とRTDB完了履歴は継続でき、後続gameIdはFirebaseのキューへ保存されます。追跡中ゲームの<strong>未完了を再送</strong>すると、成功後に後続ゲームも古い順で自動送信されます。retry対象gameIdが追跡状態と異なる場合は<code>archive_mismatch</code>として拒否されます。
     </div>
 
     <p>再送の導線自体を事前検証する必要があり、未完了の実例がない場合は、<strong>本番イベントではない確認ゲーム</strong>だけで一時的に無効なarchive URLを配信して失敗状態を作り、正しいURLへ戻して再送する方法があります。この確認は公開切替を伴うため、通常の変更管理・承認手順で行ってください。</p>

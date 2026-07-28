@@ -225,6 +225,12 @@
     if (!room || !room.stageResults || Object.keys(room.stageResults).length === 0) return null;
     if ((room.completedGames || []).some((game) => game.gameId === room.gameId)) return null;
     const finishedAt = validIsoTimestamp(archivedAt) ? archivedAt : nowIso();
+    const participantIds = new Set();
+    Object.values(room.stageResults || {}).forEach((stageResult) => {
+      Object.keys(stageResult && stageResult.players || {}).forEach((uuid) => {
+        participantIds.add(uuid);
+      });
+    });
     return {
       gameId: room.gameId,
       title: room.config && room.config.gameMeta ? room.config.gameMeta.title : "game",
@@ -235,6 +241,14 @@
       scores: deepClone(room.scores || {}),
       rankings: cumulativeRankings(room),
       stageResults: deepClone(room.stageResults || {}),
+      playerSnapshots: (room.players || [])
+        .filter((player) => player && participantIds.has(player.uuid))
+        .map((player) => ({
+          uuid: player.uuid,
+          name: player.name || player.uuid,
+          skill: Number(player.skill || 0),
+          stageSkillHistory: deepClone(player.stageSkillHistory || []),
+        })),
     };
   }
 

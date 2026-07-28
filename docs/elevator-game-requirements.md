@@ -611,8 +611,10 @@ SpreadsheetはGAS archiveの出力先であり、進行中room・次ゲーム候
 - セーブデータは複数ゲームをまたいで永続化。
 - 1ゲーム終了または中断時にRTDBの確定payloadをGASへ送り、`game_history`、`save_data`、`stage_results`、`stage_settings`へ冪等にupsertする。
 - final確定または移行で既にRTDB完了詳細へ保存済みの現ゲームも、Hostが同じgameId/archiveIdを維持したまま手動送信できる。手動送信はfinal確定後だけ許可し、送信前に現ゲームの`results`全件を再読込して、修復した完了詳細をversion CAS付きでRTDBへ永続化してからGASへ送る。
-- `archive.status`が`queued`または`failed`のゲームを追跡中は、別ゲームのarchiveで状態を上書きせず、先行ゲームのretry完了を要求する。retryのgameIdは追跡中状態と完全一致させる。
-- GAS応答前のブラウザ終了等で`queued`が残った場合も、Hostは同じarchiveIdで明示的に再送できる。GAS archiveの成否は次ゲーム進行を止めず、別ゲームの自動送信だけを先行jobの完了まで延期する。
+- `archive.status`が`queued`または`failed`のゲームを追跡中は、別ゲームのarchiveで状態を上書きせず、後続の確定gameIdを`pendingGameIdsJson`へ重複なく古い順で保持する。retryのgameIdは追跡中状態と完全一致させる。
+- GAS応答前のブラウザ終了等で`queued`が残った場合も、Hostは同じarchiveIdで明示的に再送できる。GAS archiveの成否は次ゲーム進行を止めず、別ゲームの自動送信だけを先行jobの完了まで延期する。先行jobの送信成功後は、RTDBの完了詳細から後続キューを古い順に自動送信し、途中失敗時はそのgameId/archiveIdと残りキューをRTDBへ保持する。
+- GAS送信開始、成功、失敗、後続gameへの切替は`archive` nodeのtransactionで行う。複数Hostタブや同時のゲーム確定が後続キューを追加した場合も、単純な全体上書きでgameIdを失わない。
+- 完了ゲーム詳細には参加者の確定時点プロフィール（現在Skill、StageSkill履歴を含む）をHost専用`playerSnapshots`として保存する。後日retryするarchive payloadもこのスナップショットから9指標を再現し、現在roomの参加者構成に依存させない。
 - `save_data` には参加時点の表示名をスナップショットとして保存する。正系のプロフィールはRTDB root `players/{uid}` であり、現在の表示名、現在Skill、StageSkill履歴を管理する。
 - Playerの復帰は保存済み表示名で行い、復帰時の改名は行わない。復帰に失敗した場合は1回再試行し、失敗理由を表示したうえで新規参加フォームを表示し続ける。
 - Player画面にはフェーズを先へ進める「次へ」操作を置かず、Firebase購読によりHostのフェーズ遷移へ自動追従する。

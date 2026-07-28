@@ -396,9 +396,13 @@ rooms/{roomId}/archive
 
 GAS障害時もゲーム進行は止めない。Host画面に「アーカイブ未完了」と再送ボタンを出す。
 
-`queued`はGAS応答前のブラウザ終了等で残る可能性があるため、`failed`と同様に同一`archiveId`で明示再送できる。未完了jobがあるまま次ゲームへ進む場合はその状態を新roomへ持ち越し、後続ゲームのRTDB完了詳細は通常どおり確定するが、GAS自動送信だけを延期する。先行jobが`exported`になった後、後続finalゲームをHostが手動送信する。
+`queued`はGAS応答前のブラウザ終了等で残る可能性があるため、`failed`と同様に同一`archiveId`で明示再送できる。未完了jobがあるまま次ゲームへ進む場合はその状態を新roomへ持ち越し、後続ゲームのRTDB完了詳細は通常どおり確定する。後続gameIdは`pendingGameIdsJson`へ重複なく古い順で追加し、GAS自動送信だけを延期する。先行jobのretryが成功したら、完了詳細を読み直して後続キューを同じブラウザ処理内で古い順に送る。途中で失敗またはブラウザ終了した場合は、その時点のgameId/archiveIdを`failed`または`queued`として残し、未送信の残りキューも保持する。
+
+GAS呼出し前後の`queued`、`failed`、`exported`、次gameへの切替は`archive` nodeのRTDB transactionで更新する。ゲーム完了のmulti-location updateが同時に後続gameIdを追加した場合、transactionを再試行して新しいキューを併合し、古いブラウザ状態による全体`set`で取りこぼさない。
 
 final済み現ゲームの手動送信では、Hostが`results`全件を再読込し、部分的な`completedGameDetails`を検出した場合はsummary、公開詳細、Host詳細、本人詳細、`archive=queued`を`public.roomVersion + 1`と同じmulti-location updateで修復する。このRTDB確定後にだけGASへ送るため、送信途中で失敗して次ゲームへ移ってもfull payloadをretryできる。
+
+各完了ゲームのHost詳細には参加者だけの`playerSnapshots`を保存する。現在SkillとStageSkill履歴を確定時点で固定し、後続キューを翌日以降にretryしても、別ゲームのroom参加者や最新プロフィールでarchiveの9指標を置き換えない。
 
 ## クライアント構成
 
