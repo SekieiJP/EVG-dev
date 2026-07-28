@@ -1,6 +1,6 @@
 # Firebase RTDB 目標アーキテクチャ
 
-更新日: 2026-06-02
+更新日: 2026-07-29
 
 ## 目的
 
@@ -109,6 +109,11 @@ rooms/{roomId}
       params
       events
 
+  nextGameConfigs/{configId}
+    status                 # ACTIVE | ARCHIVED
+    config                 # 次ゲーム用テンプレート。Spreadsheetは読取り元にしない
+    updatedAt
+
   players/{uid}
     name
     connected
@@ -170,10 +175,20 @@ rooms/{roomId}
     archiveId
     error
 
+  completedGameSummaries/{gameId}
+    title
+    finishedAt
+    interrupted
+    publicRankings          # 表示名、得点、順位だけ
+
+  completedGameDetails/{gameId}
+    hostOnly                # Host allowlistだけが読む確定詳細
+
 players/{uid}
   profile
     currentName
     currentSkill
+    metrics                 # 9項目: current/average/total Skill、最高得点、参加ゲーム/ステージ数、強制下車数、予想正解率、優勝数
     updatedAt
   history/{gameId}
     summary
@@ -182,6 +197,9 @@ players/{uid}
     status
     stageSkill
     updatedAt
+
+  completedGamePlayerDetails/{gameId}
+    # 本人だけが読む個人内訳。公開履歴には複製しない。
 
 archives/{archiveId}
   roomId
@@ -256,7 +274,7 @@ Screenは演出に必要な集約済み結果を購読する。投票中に全ti
 
 ### History/Archive
 
-通常ゲーム中のUIからはRTDBの `players/{uid}/history` と `archives` の要約を読む。Spreadsheet由来の詳細履歴が必要な場合だけ、GAS archive read APIを使う。
+通常ゲーム中のUIからはRTDBの公開サマリ、本人詳細、Host詳細を読む。Spreadsheet由来の詳細を通常UIへ返すGAS read APIは持たない。Spreadsheetは監査・外部保存用のarchive destinationである。
 
 ## 書き込みモデル
 
@@ -311,14 +329,28 @@ Rulesでは `data.child('phase')` と `newData.child('phase')` の組み合わ�
 
 結果発表開始時はHostブラウザがticketを読み、決定的な集計関数で結果を計算する。
 
-書き込みは以下の順序にする。
+書き込みは二段階で行う。
 
-1. `public` transactionで `countdown` または `moving` から `reveal` へ進め、`roomVersion` を増やす。
-2. 同じ `stageId` に対して `results/{stageId}` を作成する。
-3. `scores/{uid}` と `playerStats/{uid}` を更新する。
-4. `operations/{operationId}` にcommit結果を書く。
+1. `public` transactionで `countdown` または `moving` から `reveal` へ進め、`roomVersion` を増やす。このtransaction内で対象stageIdと `results/{stageId}` が未作成であることを確認する。
+2. transaction成功後、**1回のmulti-location `update()`** で `results/{stageId}`、全 `scores/{uid}`、全 `playerStats/{uid}`、`players/{uid}/stageResults`、`operations/{operationId}` を同時に書く。順次 `set()` や複数回の `update()` は使わない。
 
-二重集計を防ぐため、Rulesまたはtransaction前チェックで `results/{stageId}` が既存なら拒否する。Sparkでは完全なサーバ再計算ができないため、Blaze移行時にCloud Functionsで再計算検証を追加する。
+このcommitでは、StageSkill履歴の追記と現在Skill（全履歴の上位5件、最高値を含む）の更新も同じpayloadに含める。二重集計を防ぐため、Rulesとtransaction前チェックで `results/{stageId}` が既存なら拒否する。Sparkでは完全なサーバ再計算ができないため、Blaze移行時にCloud Functionsで再計算検証を追加する。
+
+### 時刻同期と締切
+
+全クライアントは `/.info/serverTimeOffset` を購読し、`Date.now() + offset` を補正済みサーバ時刻として用いる。Hostは `ServerValue.TIMESTAMP` 基準で `countdownEndsAt`、`movingEndsAt`、`animationStartedAt`、`revealEndsAt` を書き、Player/Screenは同じ補正済み時刻で描画する。
+
+Spark + Rulesだけでは、クライアントが書いた時刻とFirebaseサーバ時刻を完全に比較する締切検証はできない。したがってSparkは信頼済みHostが締切を確定する運用とし、厳密な受理時刻を要件化する場合はBlaze + Cloud Functionsへ移行する。
+
+### 次ゲームと同日継続
+
+次ゲーム候補の正系は `rooms/{roomId}/nextGameConfigs/{configId}` である。Hostが候補を開始する際、直前ゲームのうち**次ゲーム開始日（Asia/Tokyo）と同じ日**にチケット提出を完了したプレイヤーだけを引き継ぐ。引継ぎ対象にはuid、表示名、現在Skill、StageSkill履歴を残し、ゲーム内score、ticket、stage result、現在ステージ位置は初期化する。前日以前の参加者と完全棄権者は現在ゲームの参加者にコピーしない。
+
+この判定はRTDBに保存したticket提出時刻および結果確定時刻をAsia/Tokyoへ変換して行う。Spreadsheetの `game_configs`、`current_game`、`players` は判定・開始の読取り元にしない。
+
+### 公開履歴の境界
+
+Player/Screenが読む公開履歴は `completedGameSummaries` のゲームサマリ、表示名、得点、順位、公開用現在Skillに限定する。ticket、予想回答、得点内訳、StageSkill履歴、uid/UUID、個人統計は公開ノードへ置かない。本人の詳細は `players/{uid}/completedGamePlayerDetails`、Hostの確定詳細は `completedGameDetails/{gameId}` に分け、Rulesでそれぞれ本人/Host allowlistだけに限定する。
 
 ## GAS Archive
 
@@ -337,6 +369,8 @@ Hostがfinal後、または中断保存時に、RTDBから以下をまとめてG
 - interrupted flag
 
 GASはSpreadsheetへ追記またはupsertする。`archiveId` と `gameId` で冪等にし、同じarchiveを再送しても二重保存しない。
+
+archive payloadの正本はRTDBの確定済み `results`、`scores`、プロフィール9指標、使用済みstage設定、game summaryから作る。Spreadsheetは `save_data`、`stage_results`、`stage_settings`、`game_history`、`archive_log` へ出力するだけで、RTDBへ戻すための復元元にはしない。
 
 ### Archive status
 

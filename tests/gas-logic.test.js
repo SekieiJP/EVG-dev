@@ -59,6 +59,9 @@ function loadGas() {
   buildPlayerGameSummary_,
   buildClientConfigSnippet_,
   normalizeGameConfigRow_,
+  normalizeArchivePayload_,
+  mergeArchiveRows_,
+  recalculateArchiveRecords_,
 });
 `, sandbox);
 }
@@ -381,4 +384,89 @@ run("GAS client config snippet contains deployed URL and deployment id", () => {
   assert.match(snippet, /GAS_API_KEY: "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO"/);
   assert.match(snippet, /USE_GAS_API: true/);
   assert.match(snippet, /POLL_INTERVAL_MS: 10000/);
+});
+
+run("GAS archive normalizer accepts Firebase completed-game nodes", () => {
+  const gas = loadGas();
+  const archive = gas.normalizeArchivePayload_({
+    archiveId: "archive-001",
+    gameId: "summer-party-2026",
+    interrupted: true,
+    gameSummary: { title: "Summer party", finalPhase: "ranking" },
+    finalRankings: [{ uuid: "alice", name: "Alice", score: 30, rank: 1 }],
+    players: {
+      alice: { name: "Alice", skill: 88, stageSkillHistory: [40, 48] },
+    },
+    playerSaveData: {
+      alice: { nameSnapshot: "Alice", summary: { gameCount: 1, wins: 1 } },
+    },
+    stageResults: {
+      "stage-001": {
+        players: {
+          alice: { score: 30, status: "success", stageSkill: 48, ticket: { boardFloor: 1 } },
+        },
+      },
+    },
+    stageSettings: {
+      "stage-001": { name: "First", params: { N: 6, X: 2, P: 10, Q: 1 } },
+    },
+  });
+  assert.strictEqual(archive.ok, true, archive.message);
+  assert.strictEqual(archive.records.saveData.length, 1);
+  assert.strictEqual(archive.records.stageResults.length, 1);
+  assert.strictEqual(archive.records.stageSettings.length, 1);
+  assert.strictEqual(archive.records.players.length, 1);
+  assert.strictEqual(archive.records.gameHistory[0].archiveId, "archive-001");
+  assert.strictEqual(archive.records.gameHistory[0].gameId, "summer-party-2026");
+  assert.strictEqual(JSON.parse(archive.records.gameHistory[0].summaryJson).interrupted, true);
+  assert.strictEqual(JSON.parse(archive.records.stageResults[0].resultJson).score, 30);
+
+  const invalid = gas.normalizeArchivePayload_({ archiveId: "only-archive" });
+  assert.strictEqual(invalid.ok, false);
+});
+
+run("GAS archive upsert keys make export retries idempotent", () => {
+  const gas = loadGas();
+  const original = [{ archiveId: "a-1", gameId: "g-1", uuid: "alice", score: 10 }];
+  const retry = gas.mergeArchiveRows_(original, [{ archiveId: "a-1", gameId: "g-1", uuid: "alice", score: 10 }], ["archiveId", "gameId", "uuid"]);
+  assert.strictEqual(retry.rows.length, 1);
+  assert.strictEqual(retry.inserted, 0);
+  assert.strictEqual(retry.updated, 0);
+  assert.strictEqual(retry.unchanged, 1);
+
+  const revised = gas.mergeArchiveRows_(retry.rows, [{ archiveId: "a-1", gameId: "g-1", uuid: "alice", score: 15 }], ["archiveId", "gameId", "uuid"]);
+  assert.strictEqual(revised.rows.length, 1);
+  assert.strictEqual(revised.updated, 1);
+  assert.strictEqual(revised.rows[0].score, 15);
+
+  const nextArchive = gas.mergeArchiveRows_(revised.rows, [{ archiveId: "a-2", gameId: "g-1", uuid: "alice", score: 15 }], ["archiveId", "gameId", "uuid"]);
+  assert.strictEqual(nextArchive.rows.length, 2);
+});
+
+run("GAS archive recalculation updates only a selected game and player skill history", () => {
+  const gas = loadGas();
+  const recalculated = gas.recalculateArchiveRecords_({
+    players: [{ uuid: "alice", name: "Alice", skill: 0, stageSkillHistoryJson: "[]" }],
+    saveData: [
+      { archiveId: "a-1", gameId: "g-1", uuid: "alice", nameSnapshot: "Alice", summaryJson: "{}" },
+      { archiveId: "a-2", gameId: "g-2", uuid: "alice", nameSnapshot: "Alice", summaryJson: "{}" },
+    ],
+    stageResults: [
+      { archiveId: "a-1", gameId: "g-1", uuid: "alice", stageId: "s-1", stageSkill: 30, score: 12, status: "success", resultJson: JSON.stringify({ ticket: { boardFloor: 1 }, predictionBreakdown: [{ noAnswer: false, matched: true }] }) },
+      { archiveId: "a-2", gameId: "g-2", uuid: "alice", stageId: "s-1", stageSkill: 40, score: 99, status: "forced_off", resultJson: JSON.stringify({ ticket: { boardFloor: 1 }, predictionBreakdown: [{ noAnswer: false, matched: false }] }) },
+    ],
+    gameHistory: [
+      { archiveId: "a-1", gameId: "g-1", summaryJson: JSON.stringify({ title: "one" }) },
+      { archiveId: "a-2", gameId: "g-2", summaryJson: JSON.stringify({ title: "two" }) },
+    ],
+  }, "g-1");
+  assert.strictEqual(recalculated.ok, true, recalculated.message);
+  const first = recalculated.records.saveData.find((row) => row.gameId === "g-1");
+  const second = recalculated.records.saveData.find((row) => row.gameId === "g-2");
+  assert.strictEqual(JSON.parse(first.summaryJson).bestScore, 12);
+  assert.strictEqual(JSON.parse(first.summaryJson).predictionAccuracy, 1);
+  assert.strictEqual(second.summaryJson, "{}");
+  assert.strictEqual(recalculated.records.players[0].skill, 70);
+  assert.strictEqual(JSON.parse(recalculated.records.gameHistory.find((row) => row.gameId === "g-1").summaryJson).scores.alice, 12);
+  assert.strictEqual(recalculated.records.gameHistory.find((row) => row.gameId === "g-2").summaryJson, JSON.stringify({ title: "two" }));
 });

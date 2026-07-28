@@ -104,13 +104,13 @@ run("firebase subscription errors are exposed in debug info and logs", () => {
   };
 
   adapter.listenRest(() => {});
-  cancelCallbacks.completedGameDetails(new Error("Permission denied"));
+  cancelCallbacks.historyPlayers(new Error("Permission denied"));
   cancelCallbacks["results/stage-001"](new Error("Stage denied"));
 
   const debug = adapter.getDebugInfo();
-  assert.strictEqual(debug.subscriptionErrors.completedGameDetails, "Permission denied");
+  assert.strictEqual(debug.subscriptionErrors.historyPlayers, "Permission denied");
   assert.strictEqual(debug.subscriptionErrors["results/stage-001"], "Stage denied");
-  assert.strictEqual(logs.some((entry) => entry.kind === "firebase.subscribe.error" && entry.detail.path === "completedGameDetails"), true);
+  assert.strictEqual(logs.some((entry) => entry.kind === "firebase.subscribe.error" && entry.detail.path === "historyPlayers"), true);
 });
 
 runAsync("firebase read errors include the rejected path", async () => {
@@ -147,7 +147,7 @@ run("firebase player updates write room player stats for self restore", () => {
 
   assert.strictEqual(updates["players/alice"].name, "Alice");
   assert.strictEqual(updates["playerStats/alice"].currentSkill, 42);
-  assert.deepStrictEqual(updates["playerStats/alice"].stageSkillHistory, [8, 9, 10, 11, 12]);
+  assert.deepStrictEqual(JSON.parse(updates["playerStats/alice"].stageSkillHistoryJson), [8, 9, 10, 11, 12]);
 });
 
 run("firebase root player node is the canonical saved player record", () => {
@@ -162,7 +162,7 @@ run("firebase root player node is the canonical saved player record", () => {
 
   assert.strictEqual(node.name, "Alice");
   assert.strictEqual(node.currentSkill, 18);
-  assert.deepStrictEqual(node.stageSkillHistory, [3, 7, 8]);
+  assert.deepStrictEqual(JSON.parse(node.stageSkillHistoryJson), [3, 7, 8]);
   assert.strictEqual(node.roomId, "unit-room");
 });
 
@@ -407,12 +407,14 @@ run("firebase subscriptions are scoped by screen role", () => {
   assert.deepStrictEqual(lockedHostPaths, ["meta", "public", "config", "roomSettings", "roles/hosts/host-uid"]);
   assert.strictEqual(hostPaths.includes("tickets"), false);
   assert.strictEqual(hostPaths.includes("results"), false);
-  assert.strictEqual(hostPaths.includes("completedGameDetails"), true);
+  assert.strictEqual(hostPaths.includes("completedGameDetails"), false);
+  assert.strictEqual(hostPaths.includes("historyPlayers"), true);
   assert.strictEqual(hostPaths.includes("completedGames"), false);
   assert.strictEqual(screenPaths.includes("tickets"), false);
   assert.strictEqual(screenPaths.includes("results"), false);
   assert.strictEqual(playerPaths.includes("tickets"), false);
   assert.strictEqual(playerPaths.includes("completedGameSummaries"), true);
+  assert.strictEqual(playerPaths.includes("historyPlayers"), false);
   assert.strictEqual(playerPaths.includes("completedGameDetails"), false);
   assert.strictEqual(playerPaths.includes("completedGamePlayerDetails/player-uid"), true);
   assert.strictEqual(playerPaths.includes("scores/player-uid"), true);
@@ -425,6 +427,136 @@ run("firebase subscriptions are scoped by screen role", () => {
     "results/stage-001/players/player-uid",
     "results/stage-001/rankings",
   ]);
+});
+
+run("firebase mutation reads exclude completed history unless next game needs it", () => {
+  const regular = EVGFirebaseAdapter.restMutationBaseReadPaths("host", "host-uid", true, false);
+  const nextGame = EVGFirebaseAdapter.restMutationBaseReadPaths("host", "host-uid", true, true);
+  const player = EVGFirebaseAdapter.restMutationBaseReadPaths("player", "player-uid", true, false);
+
+  assert.strictEqual(regular.includes("completedGameDetails"), false);
+  assert.strictEqual(regular.includes("completedGameSummaries"), false);
+  assert.strictEqual(regular.includes("historyPlayers"), true);
+  assert.strictEqual(nextGame.includes("completedGameDetails"), true);
+  assert.strictEqual(nextGame.includes("completedGameSummaries"), true);
+  assert.strictEqual(player.includes("completedGamePlayerDetails/player-uid"), false);
+});
+
+run("firebase public history nodes expose skill summaries and stage rankings only", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room.players[0].skill = 42;
+  room.completedGames = [{
+    gameId: "previous",
+    title: "Previous",
+    rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 20, skill: 42 }],
+    stageResults: {
+      "stage-001": {
+        stageId: "stage-001",
+        rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 20 }],
+        players: { alice: { uuid: "alice", name: "Alice", score: 20, predictionBreakdown: [{ answer: "secret" }] } },
+      },
+    },
+  }];
+
+  const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(room);
+  const publicProfiles = Object.values(nodes.historyPlayers);
+  assert.strictEqual(publicProfiles[0].currentSkill, 42);
+  assert.match(publicProfiles[0].profileId, /^p_[a-z0-9]+$/);
+  assert.strictEqual(nodes.completedGamePublicDetails.previous.stageResults["stage-001"].rankings[0].score, 20);
+  assert.strictEqual(nodes.completedGamePublicDetails.previous.stageResults["stage-001"].players, undefined);
+  assert.strictEqual(JSON.stringify(nodes.historyPlayers).includes('"uuid"'), false);
+  assert.strictEqual(JSON.stringify(nodes.completedGameSummaries).includes('"uuid"'), false);
+  assert.strictEqual(JSON.stringify(nodes.completedGamePublicDetails).includes('"uuid"'), false);
+});
+
+run("firebase committed tally preserves updated Skill in every authoritative node", () => {
+  global.BroadcastChannel = undefined;
+  let current = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  current = Engine.registerPlayer(current, "Alice", "alice").room;
+  current = Engine.registerPlayer(current, "Bob", "bob").room;
+  const stage = Engine.getCurrentStage(current);
+  current.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {} },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 4, predictions: {} },
+  };
+  current.phase = Engine.PHASES.COUNTDOWN;
+  current.roomVersion = 4;
+  current.historyPlayers = [{ profileId: "p_historical", name: "Historical", currentSkill: 88, updatedAt: "2026-07-28T00:00:00.000Z" }];
+  const tallied = Engine.tallyCurrentStage(current, "2026-07-29T00:00:00.000Z");
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  const committed = adapter.commitHostResult(current, tallied.room, 4);
+  assert.strictEqual(committed.ok, true);
+  assert.strictEqual(committed.room.players[0].skill, tallied.room.players[0].skill);
+  assert.deepStrictEqual(committed.room.players[0].stageSkillHistory, tallied.room.players[0].stageSkillHistory);
+  const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(committed.room);
+  assert.strictEqual(nodes.playerStats.alice.currentSkill, tallied.room.players[0].skill);
+  assert.strictEqual(nodes.historyPlayers[EVGFirebaseAdapter.publicProfileId("alice")].currentSkill, tallied.room.players[0].skill);
+  assert.strictEqual(EVGFirebaseAdapter.rootPlayerNode(committed.room.players[0], "unit-room").currentSkill, tallied.room.players[0].skill);
+});
+
+run("firebase host transition update is atomic across public results skill and player master", () => {
+  let current = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  current = Engine.registerPlayer(current, "Alice", "alice").room;
+  current = Engine.registerPlayer(current, "Bob", "bob").room;
+  const stage = Engine.getCurrentStage(current);
+  current.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {} },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 4, predictions: {} },
+  };
+  current.phase = Engine.PHASES.COUNTDOWN;
+  current.roomVersion = 4;
+  current.historyPlayers = [{ profileId: "p_historical", name: "Historical", currentSkill: 88, updatedAt: "2026-07-28T00:00:00.000Z" }];
+  const tallied = Engine.tallyCurrentStage(current);
+  assert.strictEqual(tallied.ok, true);
+  const next = tallied.room;
+  next.roomVersion = 5;
+
+  const updates = EVGFirebaseAdapter.hostAtomicUpdates("/api/host/commit-result", current, next, "unit-room", Engine);
+  assert.strictEqual(updates["rooms/unit-room/public"].roomVersion, 5);
+  assert.ok(updates["rooms/unit-room/results/stage-001"]);
+  assert.ok(updates["rooms/unit-room/scores"]);
+  assert.ok(updates["rooms/unit-room/playerStats"]);
+  assert.ok(updates["rooms/unit-room/historyPlayers"]);
+  assert.strictEqual(updates["rooms/unit-room/historyPlayers"].p_historical.currentSkill, 88);
+  assert.strictEqual(updates["players/alice"].roomId, "unit-room");
+});
+
+run("firebase final transition atomically persists completed history and queued archive", () => {
+  let current = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  current.config.stages = [current.config.stages[0]];
+  current = Engine.registerPlayer(current, "Alice", "alice").room;
+  current = Engine.registerPlayer(current, "Bob", "bob").room;
+  const stage = Engine.getCurrentStage(current);
+  current.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {} },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 4, predictions: {} },
+  };
+  current.phase = Engine.PHASES.COUNTDOWN;
+  current.roomVersion = 7;
+  const tallied = Engine.tallyCurrentStage(current, "2026-07-29T00:00:00.000Z").room;
+  const ranked = Engine.advancePhase(tallied, "show-ranking", "host", "2026-07-29T00:00:01.000Z").room;
+  const finalRoom = Engine.advancePhase(ranked, "next-stage", "host", "2026-07-29T00:00:02.000Z").room;
+  finalRoom.roomVersion = 8;
+  const archived = Engine.archiveCurrentGame(finalRoom, "2026-07-29T00:00:02.000Z");
+  finalRoom.completedGames.push(archived);
+  finalRoom.archive = {
+    requestedAt: "2026-07-29T00:00:02.000Z",
+    status: "queued",
+    archiveId: "archive-unit",
+    gameId: archived.gameId,
+    error: "",
+  };
+  const updates = EVGFirebaseAdapter.hostAtomicUpdates("/api/host/advance", ranked, finalRoom, "unit-room", Engine);
+  assert.ok(updates["rooms/unit-room/completedGameSummaries"]);
+  assert.ok(updates["rooms/unit-room/completedGamePublicDetails"]);
+  assert.ok(updates["rooms/unit-room/completedGameDetails"]);
+  assert.ok(updates["rooms/unit-room/completedGamePlayerDetails"]);
+  assert.strictEqual(updates["rooms/unit-room/archive"].status, "queued");
 });
 
 runAsync("firebase host remove player writes only removed player child nodes", async () => {

@@ -155,3 +155,32 @@ run("player result groups the stage score and StageSkill, then labels updated to
   assert.strictEqual(resultView.includes("Stage Score / StageSkill"), true);
   assert.strictEqual(resultView.includes("stage-result-metrics"), true);
 });
+
+run("history skill list accepts public history player statistics", () => {
+  const historyPlayers = section(appSource, "function getHistoryPlayers", "function getSelfHistoryPlayer");
+  assert.strictEqual(historyPlayers.includes("historyPlayers"), true);
+  assert.strictEqual(historyPlayers.includes("publicPlayerStats"), true);
+  assert.strictEqual(historyPlayers.includes("currentSkill"), true);
+  const historyView = section(appSource, "function renderHistoryView", "function getHistorySummaries");
+  assert.strictEqual(historyView.includes("現在Skill"), true);
+  assert.strictEqual(historyView.includes("Skill ${formatSkill(row.skill)}"), true);
+});
+
+run("history can synthesize the signed-in player from master data", () => {
+  const selfPlayer = section(appSource, "function getSelfHistoryPlayer", "function renderSettingsView");
+  ["selfHistoryPlayer", "masterPlayer", "playerMaster", "personalHistory"].forEach((field) => {
+    assert.strictEqual(selfPlayer.includes(field), true, field);
+  });
+  const localHistory = section(appSource, "function buildLocalPersonalHistory", "function playerParticipatedInHistoryGame");
+  assert.strictEqual(localHistory.includes("getSelfHistoryPlayer(uuid)"), true);
+});
+
+run("history renders participant ranks and fetches an unavailable game detail on demand", () => {
+  const detailRenderer = section(appSource, "function renderHistoryGameDetail", "function asHistoryArray");
+  assert.strictEqual(detailRenderer.includes("historyStageParticipantRows"), true);
+  assert.strictEqual(detailRenderer.includes("row.rank"), true);
+  const detailLoader = section(appSource, "function ensureHistoryGameDetail", "async function ensurePersonalHistoryCache");
+  assert.strictEqual(detailLoader.includes("detailGameId"), true);
+  assert.strictEqual(detailLoader.includes("hostView"), true);
+  assert.strictEqual(detailLoader.includes("Subscription data remains the preferred fallback"), true);
+});

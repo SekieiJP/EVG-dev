@@ -1,69 +1,39 @@
 # Architecture
 
-> Note: この文書は、GitHub Pages + GAS + Spreadsheet中心だった既存実装の構成メモです。Firebase RTDB + Rules + GAS archive only への抜本的リファクタリングでは、[Firebase RTDB 目標アーキテクチャ](./firebase-rtdb-target-architecture.md)を優先してください。
+本番構成の正本は [Firebase RTDB 目標アーキテクチャ](./firebase-rtdb-target-architecture.md) である。この文書は実装の配置と責務を要約する。GAS + Spreadsheet はアーカイブ専用であり、進行中ゲームのフォールバックではない。
 
 ## 構成
 
 ```text
 game/
-  index.html              # プレイヤー・ホスト・スクリーン共通SPA
-  assets/css/styles.css   # レスポンシブUIとスクリーン演出
-  assets/js/config.js     # GAS接続先などのビルド時定数
-  assets/js/engine.js     # ルール計算・Skill計算・状態遷移
-  assets/js/app.js        # ローカル検証用UI制御
-  assets/vendor/          # QRコード生成などの同梱ライブラリ
+  index.html              # Player / Host / Screen 共通SPA
+  assets/js/config.js     # Firebase Web設定
+  assets/js/engine.js     # 得点・Skill・状態遷移の純粋関数
+  assets/js/firebase/     # Auth、購読、command、result commit、archive client
+firebase/
+  database.rules.json     # uid/role/phase/node境界のRules
 gas/
-  src/Code.gs             # GAS Web App API
+  src/Code.gs             # 確定payloadをSpreadsheetへ冪等出力するarchive endpoint
 tests/
-  engine.test.js          # Nodeで実行するルールテスト
+  ...                     # Unit、Rules emulator、RTDB integration、Browser E2E
 ```
 
 ## 状態管理
 
-- 確定状態はGASの `current_game` シートにJSONスナップショットとして保存する。Spreadsheetの1セル上限を避けるため、JSONは複数行チャンクに分割する。
-- ブラウザ版は既定では未デプロイ環境の検証用に `localStorage` へ同じ形のルーム状態を保存する。`assets/js/config.js` でGAS通信を有効化した場合は、参加・投票・ホスト進行・状態ポーリングをGAS Web Appへ送る。未登録Playerと未認証Hostはポーリングせず、必要フェーズだけ10秒間隔で `/api/status` を取得する。
-- ルール計算は `engine.js` の純粋関数に集約し、ブラウザUIから直接呼び出す。
-- GAS版は Apps Script 単体で動くよう、主要ロジックを `Code.gs` に移植している。
-- GAS接続前に必要な情報は `assets/js/config.js` のビルド時定数で管理する。`apiKey` はデプロイIDを既定値とし、`getClientConfigSnippet()` でクライアント設定を確認できる。GASへのPOSTはApps ScriptのCORSプリフライトを避けるため、JSON文字列を `text/plain` で送る。ホスト操作は `apiKey` と `/api/host/auth` で取得する期限付き `hostToken` を要求する。
-- `roomVersion` はルーム更新ごとに増加し、変更なしの状態取得ではフルルームを返さない。Hostブラウザで計算した集計結果は `commit-result` としてGASへ保存し、GASは権限と競合だけを検証する。
-- HostとScreenが同一端末の別ウィンドウの場合、Screenは `BroadcastChannel` と `localStorage` でHostからroomを受け取り、GASポーリングを止められる。
-- GAS通信を伴う手動操作では読み込み表示を出し、通信中の追加操作を止める。定期ポーリングは画面をブロックしない。
-- Player本人のGAS個人戦績は、同一ゲーム・同一ステージ・同一結果数の間は `localStorage` キャッシュを使う。
-- Screenの参加URL QRコードは `assets/vendor/qrcode-generator` の同梱ライブラリで生成する。
+- 進行、投票、結果、現在Skill、次ゲーム候補、公開履歴の正系はFirebase RTDB。
+- Firebase Anonymous Authの `auth.uid` が書込み主体。Host権限は `roles/hosts/{uid}` allowlistでRulesが検証する。
+- `public` はphase、stage、時刻、roomVersionだけを持ち、Host commandは `expectedPhase` と `roomVersion` を検証するtransactionで確定する。
+- 画面はroom rootを購読しない。Host、Player、Screenは必要な小ノードを購読してViewModelを作る。HTTP polling、GAS status API、BroadcastChannelによる正系同期は使わない。
+- 結果commitはphase transaction後に、`results`、`scores`、`playerStats`、本人履歴、`operations` を一回のmulti-location updateで原子的に書く。順次書込みは禁止する。
+- StageSkillは毎ステージ記録し、現在Skillは最高値を含む上位5件の合計として同じcommitで更新する。累積戦歴の指標は9項目。
+- クライアントは `/.info/serverTimeOffset` により補正済みサーバ時刻を使う。進行中room全体はlocalStorageへ保存しない。
 
-## 主要データ
+## データ境界
 
-- `room.config`: スキーマバージョン、ゲームメタデータ、ステージ配列。
-- `room.players`: UUID、表示名、Skill履歴、接続状態。
-- `room.tickets[stageId][uuid]`: 乗車階、降車階、予想回答、棄権状態。
-- `room.stageResults[stageId]`: ステージ別集計、タイムライン、ランキング。
-- `room.scores[uuid]`: ゲーム内累積得点。
+- `rooms/{roomId}/nextGameConfigs` が次ゲームテンプレートの正系。Spreadsheet `game_configs` はアーカイブ出力のみ。
+- 同日継続は次ゲーム開始日（Asia/Tokyo）にticketを提出した直前ゲーム参加者だけを対象にする。プロフィール/Skillは継続し、ゲーム内score・ticket・結果は初期化する。
+- 公開履歴はゲームサマリ、表示名、得点、順位、公開用現在Skillだけ。ticket、予想、内訳、uid/UUID、StageSkill履歴、個人統計は本人詳細またはHost詳細に隔離する。
 
-## 状態遷移
+## アーカイブ
 
-```text
-lobby
-  -> stage_intro
-  -> voting
-  -> countdown
-  -> reveal
-  -> ranking
-  -> stage_intro または final
-```
-
-`countdown` は15秒で、ローカル版は期限到達時に自動集計する。GAS版ではホストの `reveal-result` APIで集計する。
-
-## 永続化シート
-
-`setupElevatorGameSheets()` が以下を作成する。
-
-- `config`
-- `save_data`
-- `stage_results`
-- `players`
-- `current_game`
-- `stage_settings`
-- `game_history`
-- `game_configs`
-
-`current_game` のチャンクJSONが進行中ゲームの主データで、`players` はUUID/現在名/Skill履歴のマスタとして維持する。ゲーム終了時または中断時に `save_data`、`stage_results`、`stage_settings`、`game_history` へ集計済みステージの履歴を保存する。`game_configs` はHostが手動登録する次ゲーム候補で、実績保存用の `stage_settings` とは分離する。
+finalまたは中断時、HostがRTDBの確定payloadをGASへ送る。GASは `archiveId` と `gameId` で `save_data`、`stage_results`、`stage_settings`、`game_history`、`archive_log` を冪等にupsertする。失敗はRTDB `archive.status` に記録し、再送できる。GAS停止中でも進行中ゲームはRTDBだけで完走する。

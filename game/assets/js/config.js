@@ -8,6 +8,8 @@
     FIREBASE_ROOM_ID: "elevator-game-live",
     FIREBASE_HOST_PASSWORD: "host",
     FIREBASE_SDK_VERSION: "10.12.5",
+    FIREBASE_ARCHIVE_GAS_URL: "",
+    FIREBASE_ARCHIVE_API_KEY: "",
     POLL_INTERVAL_MS: 10000,
   };
 })(typeof self !== "undefined" ? self : this);

@@ -82,6 +82,11 @@
     personalHistoryCache: loadJson(STORAGE_KEYS.personalHistoryCache, {}),
     historyLoadingUuid: "",
     historyError: "",
+    historyGameDetails: {},
+    historyDetailLoadingGameId: "",
+    historyDetailError: "",
+    historySelfMasterLoadedUuid: "",
+    historySelfMasterLoadingUuid: "",
     restoreError: "",
     syncing: false,
     revealWasIncomplete: false,
@@ -119,6 +124,9 @@
         getRole: () => state.role,
         getUuid: () => state.playerUuid,
         log: logClient,
+        onServerTimeOffset: (offsetMs) => {
+          state.serverTimeOffsetMs = Number(offsetMs || 0);
+        },
       })
     : null;
 
@@ -297,7 +305,7 @@
         return;
       }
       const result = await runMutation(
-        () => Engine.advancePhase(state.room, hostAction, "host"),
+        () => Engine.advancePhase(state.room, hostAction, "host", new Date(serverNow()).toISOString()),
         remoteHostPath(hostAction),
         { hostName: "host" }
       );
@@ -348,11 +356,26 @@
       }
     }
     if (action === "restart-current-config") {
-      if (!confirm("現在のゲームJSONでもう一度ゲームを開始します。参加者は再アクセス後に表示されます。")) return;
+      if (!confirm("現在のゲームJSONでもう一度ゲームを開始します。当日チケット購入済みの参加者だけを引き継ぎます。")) return;
       await startNextGameFromConfig(state.room.config, "host.config.restart");
     }
     if (action === "load-game-configs") {
       await loadGameConfigs(true);
+    }
+    if (action === "save-game-config") {
+      const configId = String(state.room.config.gameMeta && (state.room.config.gameMeta.configId || state.room.config.gameMeta.title) || "").trim();
+      const response = await maybeBusy("次ゲーム候補を保存中…", () => apiPost("/api/host/save-game-config", {
+        configId,
+        name: state.room.config.gameMeta && state.room.config.gameMeta.title,
+        status: "ACTIVE",
+        config: state.room.config,
+      }));
+      if (!response.ok) return showToast(response.error || "次ゲーム候補を保存できませんでした。");
+      state.nextGameConfigs = response.configs || [];
+      state.nextGameConfigsLoadedAt = new Date().toISOString();
+      state.nextGameConfigError = "";
+      showToast("現在の設定を次ゲーム候補へ保存しました。");
+      render();
     }
     if (action === "start-game-config") {
       const configId = button.dataset.configId || "";
@@ -361,9 +384,29 @@
       const completedStages = Object.keys(state.room.stageResults || {}).length;
       const message = interrupted
         ? `進行中のゲームを中断し、集計済み${completedStages}ステージ分を保存して次ゲームを開始します。未集計の投票や現在ステージの途中経過は破棄されます。`
-        : "次ゲームを開始しますか？参加者は次ゲーム開始後にアクセスした端末だけ表示されます。";
+        : "次ゲームを開始しますか？当日チケット購入済みの参加者だけを引き継ぎます。";
       if (!confirm(message)) return;
       await startGameConfig(configId);
+    }
+    if (action === "archive-current") {
+      const response = await maybeBusy("アーカイブ送信中…", () => apiPost("/api/host/archive-current", {}));
+      if (response.archive) state.room.archive = response.archive;
+      showToast(response.ok ? "アーカイブを保存しました。" : response.error || "アーカイブ保存に失敗しました。");
+      render();
+    }
+    if (action === "archive-retry") {
+      const response = await maybeBusy("アーカイブを再送中…", () => apiPost("/api/host/archive-retry", {
+        gameId: state.room.archive && state.room.archive.gameId || "",
+      }));
+      if (response.archive) state.room.archive = response.archive;
+      showToast(response.ok ? "アーカイブを再送しました。" : response.error || "アーカイブ再送に失敗しました。");
+      render();
+    }
+    if (action === "archive-recalculate") {
+      const response = await maybeBusy("アーカイブを再集計中…", () => apiPost("/api/host/archive-recalculate", {
+        gameId: button.dataset.gameId || "",
+      }));
+      showToast(response.ok ? "保存済み戦績を再集計しました。" : response.error || "再集計に失敗しました。");
     }
     if (action === "import-stage") {
       const textarea = $("#stageJson");
@@ -411,6 +454,7 @@
     if (action === "select-history-game") {
       state.selectedHistoryGameId = button.dataset.gameId || "";
       render();
+      ensureHistoryGameDetail(state.selectedHistoryGameId);
     }
   }
 
@@ -530,12 +574,14 @@
           <label>過去のUUID<input name="restoreUuid" autocomplete="off" placeholder="UUIDを貼り付け" value="${escapeAttr(state.playerUuid || "")}" required></label>
           <button type="submit">引き継ぐ</button>
         </form>
+        ${renderPublicSkillList()}
       </section>
     `;
   }
 
   function renderPlayerBody(stage, ticket, result) {
     if (!stage) return `<div class="panel">ステージがありません。</div>`;
+    if (state.room.phase === Engine.PHASES.LOBBY) return renderPublicSkillList();
     if ([Engine.PHASES.VOTING, Engine.PHASES.COUNTDOWN].includes(state.room.phase)) {
       return renderTicketForm(stage, ticket);
     }
@@ -556,6 +602,16 @@
           <p class="muted">${renderTicketSummary(ticket)}</p>
         </div>
       </div>
+    `;
+  }
+
+  function renderPublicSkillList() {
+    const rows = buildHistoryRankings();
+    return `
+      <section class="panel public-skill-list">
+        <h2>通算Skill</h2>
+        ${rows.map((row) => `<div class="ranking-row ${row.uuid === state.playerUuid ? "is-self" : ""}"><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatSkill(row.skill)}</strong></div>`).join("") || `<p class="muted">戦績はまだありません。</p>`}
+      </section>
     `;
   }
 
@@ -741,6 +797,7 @@
           </section>
           ${renderInternalStatusPanel()}
           ${renderNextGamePanel()}
+          ${renderArchivePanel()}
           <section class="panel wide">
             <h2>設定</h2>
             <div class="form-actions">
@@ -808,10 +865,13 @@
 
   function renderHostNextPanel() {
     const next = nextHostAction();
+    const stalledSeconds = hostTallyStallSeconds();
     return `
       <section class="panel host-next-panel">
         <h2>進行</h2>
+        ${stalledSeconds >= 10 ? `<div class="host-stall-warning" role="alert"><strong>集計結果が未生成のまま${formatScore(stalledSeconds)}秒停止しています。</strong><p>「結果を復旧」を押すと、保存済みチケットから再集計して原子的に保存します。</p></div>` : ""}
         <button class="primary host-next-button" type="button" data-action="host-action" data-host-action="${escapeAttr(next.action || "")}" ${next.enabled ? "" : "disabled"}>次へ</button>
+        ${stalledSeconds >= 10 ? `<button type="button" data-action="host-action" data-host-action="tally">結果を復旧</button>` : ""}
         <p class="muted">${escapeHtml(next.description)}</p>
       </section>
     `;
@@ -921,10 +981,45 @@
         <div class="panel-heading">
           <div>
             <h2>次ゲーム</h2>
-            <p class="muted">Firebase版では、次ゲーム設定は当面JSON Importで開始します。</p>
+            <p class="muted">Firebase RTDBの候補から開始します。当日チケット購入済みの参加者だけをSkill履歴付きで引き継ぎます。</p>
+          </div>
+          <div class="form-actions">
+            <button type="button" data-action="load-game-configs">候補を更新</button>
+            <button type="button" data-action="save-game-config">現在設定を候補へ保存</button>
           </div>
         </div>
-        <p class="muted">設定JSON Importを使用してください。</p>
+        ${state.nextGameConfigError ? `<p class="muted">${escapeHtml(state.nextGameConfigError)}</p>` : ""}
+        ${state.nextGameConfigs.length
+          ? `<div class="game-config-list">${state.nextGameConfigs.map(renderGameConfigOption).join("")}</div>`
+          : `<p class="muted">${state.nextGameConfigsLoadedAt ? "ACTIVEな候補はありません。" : "「候補を更新」でFirebaseから読み込みます。"}</p>`}
+      </section>
+    `;
+  }
+
+  function renderArchivePanel() {
+    const archive = state.room.archive || {};
+    const statusLabel = {
+      queued: "送信待ち",
+      exported: "保存済み",
+      failed: "未完了",
+    }[archive.status] || "未送信";
+    const canArchiveCurrent = Object.keys(state.room.stageResults || {}).length > 0;
+    return `
+      <section class="panel wide archive-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>戦績アーカイブ</h2>
+            <p class="muted">進行中状態はFirebase、完了戦績の二次保存だけGAS + Spreadsheetへ送ります。</p>
+          </div>
+          <strong class="archive-status is-${escapeAttr(archive.status || "none")}">${escapeHtml(statusLabel)}</strong>
+        </div>
+        ${archive.gameId ? `<p>${escapeHtml(archive.gameId)} / ${escapeHtml(archive.archiveId || "")}</p>` : ""}
+        ${archive.error ? `<p class="muted">${escapeHtml(archive.error)}</p>` : ""}
+        <div class="form-actions">
+          <button type="button" data-action="archive-current" ${canArchiveCurrent ? "" : "disabled"}>現在ゲームを保存</button>
+          <button type="button" data-action="archive-retry" ${archive.status === "failed" ? "" : "disabled"}>未完了を再送</button>
+          <button type="button" data-action="archive-recalculate" data-game-id="${escapeAttr(archive.gameId || "")}">保存済み戦績を再集計</button>
+        </div>
       </section>
     `;
   }
@@ -1358,12 +1453,12 @@
 
   function renderHistoryView() {
     const rankings = buildHistoryRankings();
-    const selectedUuid = state.playerUuid || "";
-    const selected = state.room.players.find((player) => player.uuid === selectedUuid);
+    const selectedUuid = state.selectedHistoryUuid || state.playerUuid || "";
+    const selected = getSelfHistoryPlayer(selectedUuid);
     const historyEntry = getPersonalHistoryCache(selectedUuid);
     const summaries = getHistorySummaries();
     const selectedGameId = state.selectedHistoryGameId || (summaries[0] && summaries[0].gameId) || "";
-    const selectedGame = getHistoryGames().find((game) => game.gameId === selectedGameId) || null;
+    const selectedGame = getHistoryGameDetail(selectedGameId);
     const selectedSummary = summaries.find((game) => game.gameId === selectedGameId) || selectedGame || null;
     return `
       <section class="shell">
@@ -1382,11 +1477,11 @@
             ${selectedSummary ? renderHistoryGameDetail(selectedSummary, selectedGame) : `<p class="muted">なし</p>`}
           </section>
           <section class="panel">
-            <h2>ランキング</h2>
+            <h2>現在Skill</h2>
             ${rankings.map((row) => `
-              <button class="ranking-row ${row.uuid === state.playerUuid ? "is-self" : ""}" data-action="select-history" data-uuid="${escapeAttr(row.uuid)}" ${row.uuid === state.playerUuid ? "" : "disabled"}>
-                <span>${row.rank}. ${escapeHtml(row.name)}</span><strong>${formatScore(row.score)}</strong>
-              </button>
+              ${row.uuid === state.playerUuid
+                ? `<button class="ranking-row is-self" data-action="select-history" data-uuid="${escapeAttr(row.uuid)}"><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>Skill ${formatSkill(row.skill)}</strong></button>`
+                : `<div class="ranking-row"><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>Skill ${formatSkill(row.skill)}</strong></div>`}
             `).join("") || `<p class="muted">なし</p>`}
           </section>
           <section class="panel">
@@ -1407,9 +1502,14 @@
   }
 
   function getHistorySummaries() {
-    const summaries = (state.room.completedGameSummaries || []).map((game) => Engine.deepClone(game));
+    const summaries = uniqueHistoryGames([
+      ...asHistoryArray(state.room.completedGameSummaries),
+      ...asHistoryArray(state.room.historyGameSummaries),
+      ...asHistoryArray(state.room.publicGameSummaries),
+      ...asHistoryArray(state.room.publicHistoryGames),
+    ]).map((game) => Engine.deepClone(game));
     const summaryIds = new Set(summaries.map((game) => game.gameId));
-    (state.room.completedGames || []).forEach((game) => {
+    getAvailableHistoryGameDetails().forEach((game) => {
       if (summaryIds.has(game.gameId)) return;
       summaries.push({
         gameId: game.gameId,
@@ -1425,8 +1525,9 @@
   }
 
   function renderHistoryGameDetail(summary, detail) {
-    const rankings = summary.rankings || detail && detail.rankings || [];
-    const stages = detail && detail.stageResults ? Object.values(detail.stageResults) : [];
+    const rankings = asHistoryArray(summary.rankings || detail && detail.rankings);
+    const stages = historyGameStages(detail || summary);
+    const detailLoading = state.historyDetailLoadingGameId === summary.gameId;
     return `
       <div class="history-game-detail">
         <p class="muted">${escapeHtml(summary.finishedAt ? formatTime(summary.finishedAt) : summary.gameId)} ${summary.interrupted ? "中断" : ""}</p>
@@ -1437,19 +1538,136 @@
         </div>
         ${stages.length ? `
           <div class="mini-list">
-            ${stages.map((stageResult) => {
-              const playerRows = Object.values(stageResult.players || {});
+            ${stages.map((stageResult, index) => {
+              const playerRows = historyStageParticipantRows(stageResult);
               return `
-                <div class="mini-row">
-                  <span>${escapeHtml(stageResult.stageId || "")}</span>
-                  <strong>${playerRows.map((row) => `${escapeHtml(row.name || row.uuid)} ${formatScore(row.score)}`).join(" / ") || "-"}</strong>
+                <div class="history-stage-result">
+                  <strong>${escapeHtml(stageResult.name || stageResult.stageName || stageResult.stageId || `Stage ${index + 1}`)}</strong>
+                  ${playerRows.length ? `<div class="mini-list">${playerRows.map((row) => `
+                    <div class="mini-row"><span>${row.rank ? `${formatScore(row.rank)}. ` : ""}${escapeHtml(row.name || row.uuid || "-")}</span><strong>${formatScore(row.score)}</strong></div>
+                  `).join("")}</div>` : `<p class="muted">参加者スコアは未取得です。</p>`}
                 </div>
               `;
             }).join("")}
           </div>
-        ` : `<p class="muted">詳細はHostまたは本人のみ表示されます。</p>`}
+        ` : detailLoading ? `<p class="muted">ゲーム詳細を読み込み中…</p>` : `<p class="muted">詳細はHostまたは本人の購読データが届くと表示されます。</p>`}
+        ${state.historyDetailError ? `<p class="muted">${escapeHtml(state.historyDetailError)}</p>` : ""}
       </div>
     `;
+  }
+
+  function asHistoryArray(value) {
+    if (Array.isArray(value)) return value.filter(Boolean);
+    if (value && typeof value === "object") return Object.entries(value).map(([key, item]) => {
+      if (item && typeof item === "object" && !Array.isArray(item) && !item.uuid && !item.gameId && !item.stageId) {
+        return Object.assign({ uuid: key }, item);
+      }
+      return item && typeof item === "object" && !Array.isArray(item)
+        ? Object.assign({}, item, { uuid: item.uuid || key })
+        : item;
+    }).filter(Boolean);
+    return [];
+  }
+
+  function uniqueHistoryGames(games) {
+    const byId = new Map();
+    games.filter(Boolean).forEach((game) => {
+      const id = game.gameId || game.id;
+      if (!id) return;
+      const previous = byId.get(id) || {};
+      byId.set(id, Object.assign({}, previous, game, {
+        stageResults: game.stageResults || previous.stageResults,
+        stages: game.stages || previous.stages,
+      }));
+    });
+    return [...byId.values()];
+  }
+
+  function getAvailableHistoryGameDetails() {
+    return uniqueHistoryGames([
+      ...asHistoryArray(state.room.completedGames),
+      ...asHistoryArray(state.room.completedGameDetails),
+      ...asHistoryArray(state.room.historyGameDetails),
+      ...asHistoryArray(state.room.hostHistoryGameDetails),
+      ...asHistoryArray(state.room.publicHistoryGameDetails),
+      ...asHistoryArray(state.room.publicHistoryGames),
+      ...Object.values(state.historyGameDetails || {}),
+    ]);
+  }
+
+  function getHistoryGameDetail(gameId) {
+    if (!gameId) return null;
+    return getAvailableHistoryGameDetails().find((game) => game.gameId === gameId || game.id === gameId) || null;
+  }
+
+  function historyGameStages(game) {
+    if (!game) return [];
+    return asHistoryArray(game.stageResults || game.stages || game.publicStages || game.stageDetails);
+  }
+
+  function historyStageParticipantRows(stage) {
+    const source = stage && (stage.participants || stage.playerRows || stage.participantScores || stage.players || stage.rankings || stage.scores);
+    const rows = source && !Array.isArray(source) && typeof source === "object"
+      ? Object.entries(source).map(([uuid, value]) => typeof value === "object" && value !== null
+        ? Object.assign({ uuid }, value)
+        : { uuid, score: value })
+      : asHistoryArray(source);
+    return rows.map((row, index) => Object.assign({ rank: index + 1 }, row, {
+      rank: Number(row.rank || row.stageRank || index + 1),
+      score: Number(row.score ?? row.stageScore ?? row.total ?? 0),
+    })).sort((a, b) => a.rank - b.rank || b.score - a.score || String(a.name || a.uuid).localeCompare(String(b.name || b.uuid), "ja"));
+  }
+
+  function getHistoryPlayers() {
+    const sources = [
+      state.room.historyPlayers,
+      state.room.publicHistoryPlayers,
+      state.room.publicPlayers,
+      state.room.publicPlayerList,
+      state.room.players,
+      state.room.publicPlayerStats,
+      state.room.historyPlayerStats,
+      state.room.playerStats,
+    ];
+    const byUuid = new Map();
+    sources.forEach((source) => {
+      asHistoryArray(source).forEach((item) => {
+        if (!item || typeof item !== "object") return;
+        const uuid = item.profileId || item.uuid || item.playerUuid || item.uid;
+        if (!uuid) return;
+        const previous = byUuid.get(uuid) || { uuid };
+        byUuid.set(uuid, Object.assign({}, previous, item, {
+          uuid,
+          name: item.name || item.displayName || previous.name || uuid,
+          skill: Number(item.currentSkill ?? item.skill ?? previous.skill ?? 0),
+          stageSkillHistory: item.stageSkillHistory || item.skillHistory || previous.stageSkillHistory || [],
+        }));
+      });
+    });
+    return [...byUuid.values()];
+  }
+
+  function getSelfHistoryPlayer(uuid = state.playerUuid) {
+    if (!uuid) return null;
+    const rosterPlayer = getHistoryPlayers().find((player) => player.uuid === uuid);
+    const selfSources = [
+      state.room.selfHistoryPlayer,
+      state.room.historySelfPlayer,
+      state.room.selfPlayer,
+      state.room.masterPlayer,
+      state.room.playerMaster,
+      state.room.me,
+      state.room.personalHistory && state.room.personalHistory.player,
+      state.room.personalHistory && state.room.personalHistory.summary,
+    ];
+    const master = selfSources.find((item) => item && typeof item === "object") || {};
+    if (!rosterPlayer && !Object.keys(master).length) return null;
+    return Object.assign({}, rosterPlayer || {}, master, {
+      uuid,
+      name: (rosterPlayer && rosterPlayer.name) || master.name || master.displayName || uuid,
+      skill: Number(master.currentSkill ?? master.skill ?? (rosterPlayer && rosterPlayer.skill) ?? 0),
+      stageSkillHistory: master.stageSkillHistory || master.skillHistory || (rosterPlayer && rosterPlayer.stageSkillHistory) || [],
+    });
   }
 
   function renderSettingsView() {
@@ -1619,6 +1837,9 @@
         description: canTally() ? "集計して結果発表へ進みます。" : `移動中です。あと${movingSeconds()}秒で結果発表へ進めます。`,
       };
     }
+    if (state.room.phase === Engine.PHASES.REVEAL && !getCurrentStageResult()) {
+      return { action: "tally", enabled: true, description: "結果が欠落しています。保存済みチケットから復旧します。" };
+    }
     if (state.room.phase === Engine.PHASES.REVEAL) return { action: "show-ranking", enabled: true, description: "順位表示へ進みます。" };
     if (state.room.phase === Engine.PHASES.RANKING) {
       return {
@@ -1673,8 +1894,19 @@
   }
 
   function canTally() {
+    if (state.room.phase === Engine.PHASES.REVEAL && !getCurrentStageResult()) return true;
     if (state.room.phase === Engine.PHASES.TALLYING) return movingSeconds() <= 0;
     return state.room.phase === Engine.PHASES.COUNTDOWN && isRemoteMoving() && movingSeconds() <= 0;
+  }
+
+  function hostTallyStallSeconds() {
+    const stage = Engine.getCurrentStage(state.room);
+    if (!stage || state.room.stageResults[stage.stageId] || !canTally()) return 0;
+    const dueAt = state.room.phase === Engine.PHASES.REVEAL
+      ? (state.room.animationStartedAt || state.room.updatedAt)
+      : (state.room.tallyingEndsAt || state.room.countdownEndsAt);
+    const due = dueAt ? new Date(dueAt).getTime() : serverNow();
+    return Math.max(0, Math.floor((serverNow() - (Number.isFinite(due) ? due : serverNow())) / 1000));
   }
 
   function countdownSeconds() {
@@ -1966,7 +2198,7 @@
   async function commitHostTally(message) {
     try {
       const baseVersion = Number(state.room.roomVersion || 0);
-      const localResult = Engine.advancePhase(state.room, "tally", "host");
+      const localResult = Engine.advancePhase(state.room, "tally", "host", new Date(serverNow()).toISOString());
       if (!localResult.ok) {
         showToast(localResult.error || "操作できません。");
         return false;
@@ -2005,10 +2237,11 @@
   }
 
   async function loadGameConfigs(showLoading) {
-    state.nextGameConfigs = [];
-    state.nextGameConfigsLoadedAt = "";
-    state.nextGameConfigError = "Firebase版では次ゲーム候補の読み込みは未対応です。設定JSON Importを使用してください。";
-    if (showLoading) showToast(state.nextGameConfigError);
+    const response = await maybeBusy(showLoading ? "次ゲーム候補を読み込み中…" : "", () => apiGet("/api/host/game-configs", {}));
+    state.nextGameConfigs = response && response.ok ? response.configs || [] : [];
+    state.nextGameConfigsLoadedAt = new Date().toISOString();
+    state.nextGameConfigError = response && response.ok ? "" : response && (response.error || response.message) || "次ゲーム候補を読み込めませんでした。";
+    if (showLoading) showToast(response && response.ok ? "次ゲーム候補を更新しました。" : state.nextGameConfigError);
     render();
   }
 
@@ -2024,14 +2257,14 @@
     if (!result.ok) return showToast(result.error);
     state.room = result.room;
     saveRoom(logKind || "host.config.import", "host");
-    showToast("次ゲームを開始しました。参加者はアクセス後に表示されます。");
+    showToast("次ゲームを開始しました。当日参加者を引き継ぎ、持ち点をリセットしました。");
     render();
   }
 
   async function startGameConfig(configId) {
     const beforeGameId = state.room.gameId;
     const result = await runMutation(
-      () => ({ ok: false, room: state.room, error: "Firebase版では使用できません。" }),
+      () => ({ ok: false, room: state.room, error: "次ゲーム候補を取得できません。" }),
       "/api/host/start-game-config",
       { configId }
     );
@@ -2093,13 +2326,83 @@
       fetchedAt: new Date().toISOString(),
       data,
     };
+    savePersonalHistoryCacheState();
+  }
+
+  function savePersonalHistoryCacheState() {
     localStorage.setItem(STORAGE_KEYS.personalHistoryCache, JSON.stringify(state.personalHistoryCache));
   }
 
   function ensureVisibleHistoryCache() {
     if (state.role !== "history") return;
     const uuid = state.selectedHistoryUuid || state.playerUuid;
+    ensureHistorySelfMaster(uuid);
     ensurePersonalHistoryCache(uuid);
+    const firstSummary = getHistorySummaries()[0];
+    ensureHistoryGameDetail(state.selectedHistoryGameId || (firstSummary && firstSummary.gameId));
+  }
+
+  async function ensureHistorySelfMaster(uuid) {
+    if (!uuid || uuid !== state.playerUuid || state.historySelfMasterLoadedUuid === uuid || state.historySelfMasterLoadingUuid === uuid) return;
+    if (!firebaseAdapter || !firebaseAdapter.get) return;
+    state.historySelfMasterLoadingUuid = uuid;
+    try {
+      const response = await apiGet(`/api/history/player-master/${encodeURIComponent(uuid)}`, { uuid });
+      if (response && response.ok && response.player) {
+        state.room.selfHistoryPlayer = response.player;
+        state.historySelfMasterLoadedUuid = uuid;
+        delete state.personalHistoryCache[historyStageCacheKey(uuid)];
+        savePersonalHistoryCacheState();
+        render();
+        ensurePersonalHistoryCache(uuid);
+      }
+    } catch (error) {
+      logClient("history.master.error", { uuid, error: error.message });
+    } finally {
+      state.historySelfMasterLoadingUuid = "";
+    }
+  }
+
+  function historyGameHasParticipantDetails(game) {
+    return historyGameStages(game).some((stage) => historyStageParticipantRows(stage).length > 0);
+  }
+
+  async function ensureHistoryGameDetail(gameId) {
+    if (state.role !== "history" || !gameId || state.historyDetailLoadingGameId === gameId) return;
+    const subscribedDetail = getHistoryGameDetail(gameId);
+    if (subscribedDetail && historyGameHasParticipantDetails(subscribedDetail)) return;
+    if (!firebaseAdapter || !firebaseAdapter.get) return;
+    state.historyDetailLoadingGameId = gameId;
+    state.historyDetailError = "";
+    render();
+    try {
+      // The adapter can return a public stage detail, the authenticated player's detail,
+      // or a complete Host detail.  Subscription data remains the preferred fallback.
+      const response = await apiGet("/api/history/games", {
+        gameId,
+        detailGameId: gameId,
+        includeDetail: true,
+        hostView: Boolean(state.hostAuthed && state.hostToken),
+      });
+      const candidates = [
+        response && response.detail,
+        response && response.game,
+        ...asHistoryArray(response && response.details),
+        ...asHistoryArray(response && response.games),
+      ].filter(Boolean);
+      const detail = candidates.find((game) => game.gameId === gameId || game.id === gameId);
+      if (detail) {
+        state.historyGameDetails[gameId] = detail;
+      } else if (response && response.ok === false) {
+        state.historyDetailError = response.error || "ゲーム詳細を読み込めませんでした。";
+      }
+    } catch (error) {
+      state.historyDetailError = "ゲーム詳細を読み込めませんでした。";
+      logClient("history.detail.error", { gameId, error: error.message });
+    } finally {
+      state.historyDetailLoadingGameId = "";
+      render();
+    }
   }
 
   async function ensurePersonalHistoryCache(uuid) {
@@ -2125,7 +2428,7 @@
       .flatMap((game) => Object.values(game.stageResults || {}))
       .map((stageResult) => stageResult.players && stageResult.players[uuid])
       .filter(Boolean);
-    const player = state.room.players.find((item) => item.uuid === uuid) || {};
+    const player = getSelfHistoryPlayer(uuid) || {};
     const historySkills = Array.isArray(player.stageSkillHistory) ? player.stageSkillHistory : Object.values(player.stageSkillHistory || {});
     const fallbackSkills = stages.map((stage) => stage.stageSkill).filter((value) => value !== null && value !== undefined);
     const stageSkills = (historySkills.length ? historySkills : fallbackSkills)
@@ -2518,7 +2821,7 @@
   }
 
   function getHistoryGames() {
-    const games = (state.room.completedGames || []).map((game) => Engine.deepClone(game));
+    const games = getAvailableHistoryGameDetails().map((game) => Engine.deepClone(game));
     if (Object.keys(state.room.stageResults || {}).length) {
       games.push({
         gameId: state.room.gameId,
@@ -2533,19 +2836,19 @@
 
   function buildHistoryRankings() {
     const games = getHistoryGames();
-    const rows = state.room.players
+    const rows = getHistoryPlayers()
       .map((player) => ({
         uuid: player.uuid,
         name: player.name,
         score: games.reduce((sum, game) => sum + Number((game.scores || {})[player.uuid] || 0), 0),
         skill: player.skill || 0,
       }))
-      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, "ja"));
-    let previousScore = null;
+      .sort((a, b) => b.skill - a.skill || b.score - a.score || a.name.localeCompare(b.name, "ja"));
+    let previousSkill = null;
     let previousRank = 0;
     return rows.map((row, index) => {
-      const rank = row.score === previousScore ? previousRank : index + 1;
-      previousScore = row.score;
+      const rank = row.skill === previousSkill ? previousRank : index + 1;
+      previousSkill = row.skill;
       previousRank = rank;
       return Object.assign({ rank }, row);
     });

@@ -7,6 +7,7 @@ const EVG_SHEETS = {
   stageSettings: 'stage_settings',
   gameHistory: 'game_history',
   gameConfigs: 'game_configs',
+  archiveLog: 'archive_log',
 };
 
 const EVG_CURRENT_GAME_CHUNK_SIZE = 45000;
@@ -15,6 +16,9 @@ const EVG_HOST_TOKEN_PREFIX = 'host-token:';
 const EVG_DEFAULT_HOST_SESSION_MINUTES = 240;
 const EVG_DEPLOYMENT_ID = 'AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO';
 const EVG_DEPLOYED_WEB_APP_URL = 'https://script.google.com/macros/s/' + EVG_DEPLOYMENT_ID + '/exec';
+const EVG_FIREBASE_API_KEY = 'AIzaSyBeuaiLFETXxULlOVthVrWimZ3kXCS81rc';
+const EVG_FIREBASE_DATABASE_URL = 'https://elevator-game-live-default-rtdb.asia-southeast1.firebasedatabase.app';
+const EVG_FIREBASE_ROOM_ID = 'elevator-game-live';
 
 const EVG_PHASES = {
   LOBBY: 'lobby',
@@ -117,23 +121,27 @@ function doPost(e) {
 function setupElevatorGameSheets() {
   const ss = SpreadsheetApp.getActive();
   ensureSheet_(ss, EVG_SHEETS.config, ['key', 'value']);
-  ensureSheet_(ss, EVG_SHEETS.saveData, ['uuid', 'gameId', 'nameSnapshot', 'summaryJson', 'createdAt']);
-  ensureSheet_(ss, EVG_SHEETS.stageResults, ['uuid', 'gameId', 'stageId', 'stageSkill', 'score', 'status', 'resultJson', 'createdAt']);
-  ensureSheet_(ss, EVG_SHEETS.players, ['uuid', 'name', 'skill', 'stageSkillHistoryJson', 'updatedAt']);
-  ensureSheet_(ss, EVG_SHEETS.currentGame, ['key', 'chunkIndex', 'json', 'updatedAt']);
-  ensureSheet_(ss, EVG_SHEETS.stageSettings, ['gameId', 'stageId', 'stageJson', 'createdAt']);
-  ensureSheet_(ss, EVG_SHEETS.gameHistory, ['gameId', 'summaryJson', 'createdAt']);
-  ensureSheet_(ss, EVG_SHEETS.gameConfigs, ['configId', 'name', 'status', 'sortOrder', 'configJson', 'notes', 'createdAt', 'updatedAt']);
+  ensureSheet_(ss, EVG_SHEETS.saveData, ['uuid', 'gameId', 'nameSnapshot', 'summaryJson', 'createdAt', 'archiveId']);
+  ensureSheet_(ss, EVG_SHEETS.stageResults, ['uuid', 'gameId', 'stageId', 'stageSkill', 'score', 'status', 'resultJson', 'createdAt', 'archiveId']);
+  ensureSheet_(ss, EVG_SHEETS.players, ['uuid', 'name', 'skill', 'stageSkillHistoryJson', 'updatedAt', 'archiveId', 'gameId']);
+  ensureSheet_(ss, EVG_SHEETS.stageSettings, ['gameId', 'stageId', 'stageJson', 'createdAt', 'archiveId']);
+  ensureSheet_(ss, EVG_SHEETS.gameHistory, ['gameId', 'summaryJson', 'createdAt', 'archiveId']);
+  ensureSheet_(ss, EVG_SHEETS.archiveLog, ['archiveId', 'gameId', 'requestedAt', 'completedAt', 'status', 'error']);
   ensureConfigDefaults_(ss.getSheetByName(EVG_SHEETS.config));
-  ensureGameConfigDefaults_(ss.getSheetByName(EVG_SHEETS.gameConfigs));
-  if (!getRoom_()) {
-    saveRoom_(createInitialRoom_(EVG_DEFAULT_CONFIG));
-  }
 }
 
 function ensureRuntimeReady_() {
   const ss = SpreadsheetApp.getActive();
-  const missing = Object.keys(EVG_SHEETS).map(function(key) { return EVG_SHEETS[key]; })
+  const required = [
+    EVG_SHEETS.config,
+    EVG_SHEETS.saveData,
+    EVG_SHEETS.stageResults,
+    EVG_SHEETS.players,
+    EVG_SHEETS.stageSettings,
+    EVG_SHEETS.gameHistory,
+    EVG_SHEETS.archiveLog,
+  ];
+  const missing = required
     .filter(function(sheetName) { return !ss.getSheetByName(sheetName); });
   if (missing.length) {
     return error_('setup_required', 'setupElevatorGameSheets()を先に実行してください: ' + missing.join(', '), 500);
@@ -172,13 +180,7 @@ function route_(e, method) {
       response = apiAuth;
       return json_(response);
     }
-    if (method === 'GET' && path === '/api/time') response = { serverTime: new Date().toISOString() };
-    else if (method === 'GET' && path === '/api/status') response = publicStatus_(getRoom_() || createInitialRoom_(EVG_DEFAULT_CONFIG), payload);
-    else if (method === 'GET' && (path === '/api/room/state' || path === '/api/screen/state')) response = publicRoom_(getRoom_() || createInitialRoom_(EVG_DEFAULT_CONFIG), payload);
-    else if (method === 'GET' && path === '/api/host/game-configs') response = listGameConfigs_(payload);
-    else if (method === 'GET' && path === '/api/history/games') response = getHistoryGames_();
-    else if (method === 'GET' && path.indexOf('/api/history/player/') === 0) response = getPlayerHistory_(path.split('/').pop(), payload.uuid);
-    else if (method === 'POST') response = mutateRoute_(path, payload);
+    if (method === 'POST' && (path === '/api/archive/export' || path === '/api/archive/recalculate')) response = mutateRoute_(path, payload);
     else response = error_('not_found', 'Unknown endpoint: ' + path, 404);
     return json_(response);
   } catch (err) {
@@ -191,43 +193,16 @@ function route_(e, method) {
 }
 
 function mutateRoute_(path, payload) {
-  if (path === '/api/host/auth') return authHost_(payload.password);
+  if (path !== '/api/archive/export' && path !== '/api/archive/recalculate') {
+    return error_('not_found', 'Unknown endpoint: ' + path, 404);
+  }
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    let room = getRoom_() || createInitialRoom_(EVG_DEFAULT_CONFIG);
-    let result;
-    if (path === '/api/player/join') result = registerPlayer_(room, payload.name, payload.uuid);
-    else if (path === '/api/player/restore') result = restorePlayer_(room, payload.uuid);
-    else if (path === '/api/player/rename') result = renamePlayer_(room, payload.uuid, payload.name);
-    else if (path === '/api/player/proceed-next') result = acknowledgePlayerNext_(room, payload.uuid);
-    else if (path === '/api/ticket/submit') result = submitTicket_(room, payload.uuid, payload.ticket || payload);
-    else if (path === '/api/ticket/abstain') result = abstain_(room, payload.uuid);
-    else if (path.indexOf('/api/host/') === 0) {
-      const hostAuth = verifyHostToken_(payload.hostToken);
-      if (!hostAuth.ok) return hostAuth;
-      if (path === '/api/host/start-stage') result = advancePhase_(room, 'start-stage', payload.hostName || 'host');
-      else if (path === '/api/host/open-voting') result = advancePhase_(room, 'open-voting', payload.hostName || 'host');
-      else if (path === '/api/host/close-voting') result = advancePhase_(room, 'close-voting', payload.hostName || 'host');
-      else if (path === '/api/host/reveal-result') result = tallyCurrentStage_(room, payload.hostName || 'host');
-      else if (path === '/api/host/commit-result') result = commitHostResult_(room, payload.room, payload.baseVersion, payload.hostName || 'host');
-      else if (path === '/api/host/show-ranking') result = advancePhase_(room, 'show-ranking', payload.hostName || 'host');
-      else if (path === '/api/host/skip-animation') result = advancePhase_(room, 'skip-animation', payload.hostName || 'host');
-      else if (path === '/api/host/advance') result = advancePhase_(room, 'next-stage', payload.hostName || 'host');
-      else if (path === '/api/host/recalculate') result = recalculate_(room);
-      else if (path === '/api/host/import-config') result = importConfig_(room, payload.config, payload.preservePlayers !== false);
-      else if (path === '/api/host/start-game-config') result = startGameConfig_(room, payload.configId);
-      else if (path === '/api/host/update-config') result = updateConfig_(room, payload.config);
-      else return error_('not_found', 'Unknown endpoint: ' + path, 404);
-    }
-    else return error_('not_found', 'Unknown endpoint: ' + path, 404);
-    if (result && result.room) {
-      saveRoom_(result.room);
-      syncPlayersSheet_(result.room);
-      syncStageSettingsSheet_(result.room);
-      if (result.room.phase === EVG_PHASES.FINAL) persistGameHistory_(result.room);
-    }
-    return Object.assign({}, result, { room: result && result.room ? publicRoom_(result.room, payload) : undefined });
+    const firebaseHost = verifyFirebaseArchiveHost_(payload);
+    if (!firebaseHost.ok) return firebaseHost;
+    if (path === '/api/archive/export') return exportArchive_(payload.archive || payload);
+    return recalculateArchivedData_(payload.gameId || (payload.archive && payload.archive.gameId));
   } finally {
     lock.releaseLock();
   }
@@ -1006,6 +981,8 @@ function syncPlayersSheet_(room) {
       skill: Number(row.skill || 0),
       stageSkillHistory: parseJson_(row.stageSkillHistoryJson, []),
       updatedAt: row.updatedAt,
+      archiveId: row.archiveId || '',
+      gameId: row.gameId || '',
     };
   });
   (room.players || []).forEach(function(player) {
@@ -1015,25 +992,27 @@ function syncPlayersSheet_(room) {
       skill: Number(player.skill || 0),
       stageSkillHistory: clone_(player.stageSkillHistory || []),
       updatedAt: new Date().toISOString(),
+      archiveId: byUuid[player.uuid] && byUuid[player.uuid].archiveId ? byUuid[player.uuid].archiveId : '',
+      gameId: byUuid[player.uuid] && byUuid[player.uuid].gameId ? byUuid[player.uuid].gameId : '',
     };
   });
   const rows = Object.keys(byUuid).sort().map(function(uuid) {
     const player = byUuid[uuid];
-    return [player.uuid, player.name, player.skill || 0, JSON.stringify(player.stageSkillHistory || []), player.updatedAt || new Date().toISOString()];
+    return [player.uuid, player.name, player.skill || 0, JSON.stringify(player.stageSkillHistory || []), player.updatedAt || new Date().toISOString(), player.archiveId || '', player.gameId || ''];
   });
   if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
-  if (rows.length) sheet.getRange(2, 1, rows.length, 5).setValues(rows);
+  if (rows.length) sheet.getRange(2, 1, rows.length, 7).setValues(rows);
 }
 
 function syncStageSettingsSheet_(room) {
   const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.stageSettings);
   const existing = rowsAsObjects_(sheet).filter(function(row) { return row.gameId !== room.gameId; });
-  const rows = existing.map(function(row) { return [row.gameId, row.stageId, row.stageJson, row.createdAt]; });
+  const rows = existing.map(function(row) { return [row.gameId, row.stageId, row.stageJson, row.createdAt, row.archiveId || '']; });
   (room.config.stages || []).forEach(function(stage) {
-    rows.push([room.gameId, stage.stageId, JSON.stringify(stage), new Date().toISOString()]);
+    rows.push([room.gameId, stage.stageId, JSON.stringify(stage), new Date().toISOString(), '']);
   });
   if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
-  if (rows.length) sheet.getRange(2, 1, rows.length, 4).setValues(rows);
+  if (rows.length) sheet.getRange(2, 1, rows.length, 5).setValues(rows);
 }
 
 function persistCurrentGameIfNeeded_(room) {
@@ -1075,6 +1054,412 @@ function persistGameHistory_(room) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Firebase archive adapter
+//
+// The Firebase client sends a completed (or deliberately interrupted) game to
+// this adapter. Active-room helpers below are retained only as un-routed
+// migration code; route_ accepts archive export/recalculation endpoints only.
+// The normalizer and merge helpers are deliberately side-effect free so the
+// archive-client contract can be tested without SpreadsheetApp.
+
+function exportArchive_(payload) {
+  const normalized = normalizeArchivePayload_(payload);
+  if (!normalized.ok) {
+    const invalidResponse = archiveStatusResponse_('failed', normalized.archiveId, normalized.gameId, normalized.message);
+    writeArchiveLog_(invalidResponse, payload && payload.requestedAt);
+    return invalidResponse;
+  }
+  if (typeof SpreadsheetApp === 'undefined') {
+    return archiveStatusResponse_('failed', normalized.archiveId, normalized.gameId, 'SpreadsheetApp is unavailable.');
+  }
+  try {
+    const ss = SpreadsheetApp.getActive();
+    const records = normalized.records;
+    const writes = {
+      saveData: upsertArchiveSheet_(ss.getSheetByName(EVG_SHEETS.saveData), records.saveData, ['archiveId', 'gameId', 'uuid']),
+      stageResults: upsertArchiveSheet_(ss.getSheetByName(EVG_SHEETS.stageResults), records.stageResults, ['archiveId', 'gameId', 'uuid', 'stageId']),
+      stageSettings: upsertArchiveSheet_(ss.getSheetByName(EVG_SHEETS.stageSettings), records.stageSettings, ['archiveId', 'gameId', 'stageId']),
+      gameHistory: upsertArchiveSheet_(ss.getSheetByName(EVG_SHEETS.gameHistory), records.gameHistory, ['archiveId', 'gameId']),
+      // players is a UUID master. archiveId/gameId are retained as provenance,
+      // while UUID remains the row identity so a retry cannot create a player.
+      players: upsertArchiveSheet_(ss.getSheetByName(EVG_SHEETS.players), records.players, ['uuid']),
+    };
+    const response = archiveStatusResponse_('exported', normalized.archiveId, normalized.gameId, '', writes);
+    writeArchiveLog_(response, normalized.requestedAt);
+    return response;
+  } catch (err) {
+    console.error(err && err.stack ? err.stack : err);
+    const response = archiveStatusResponse_('failed', normalized.archiveId, normalized.gameId, String(err && err.message ? err.message : err));
+    writeArchiveLog_(response, normalized.requestedAt);
+    return response;
+  }
+}
+
+function writeArchiveLog_(response, requestedAt) {
+  if (typeof SpreadsheetApp === 'undefined' || !response) return;
+  try {
+    const sheet = SpreadsheetApp.getActive().getSheetByName(EVG_SHEETS.archiveLog);
+    if (!sheet || !response.archiveId) return;
+    upsertArchiveSheet_(sheet, [{
+      archiveId: response.archiveId,
+      gameId: response.gameId || '',
+      requestedAt: archiveTimestamp_(requestedAt),
+      completedAt: new Date().toISOString(),
+      status: response.status || (response.ok ? 'exported' : 'failed'),
+      error: response.error || '',
+    }], ['archiveId']);
+  } catch (err) {
+    console.error('archive_log write failed: ' + String(err && err.message ? err.message : err));
+  }
+}
+
+function archiveStatusResponse_(status, archiveId, gameId, error, writes) {
+  const response = {
+    ok: status !== 'failed',
+    status: status,
+    archiveId: archiveId || '',
+    gameId: gameId || '',
+    error: error || '',
+  };
+  if (status === 'exported') response.exportedAt = new Date().toISOString();
+  if (writes) response.writes = writes;
+  return response;
+}
+
+function normalizeArchivePayload_(payload) {
+  const source = payload && payload.archive ? payload.archive : (payload || {});
+  const archiveId = String(source.archiveId || '').trim();
+  const gameId = String(source.gameId || '').trim();
+  if (!archiveId || !gameId) {
+    return { ok: false, archiveId: archiveId, gameId: gameId, message: 'archiveId と gameId は必須です。' };
+  }
+  const createdAt = archiveTimestamp_(source.exportedAt || source.archivedAt || source.requestedAt || source.finishedAt || source.createdAt);
+  const players = normalizeArchivePlayers_(source.players, createdAt);
+  const stageResults = normalizeArchiveStageResults_(source.stageResults, archiveId, gameId, createdAt);
+  const stageSettings = normalizeArchiveStageSettings_(source.stageSettings || (source.config && source.config.stages), archiveId, gameId, createdAt);
+  const summary = archiveObject_(source.gameHistory || source.gameSummary || source.summary);
+  const rankings = Array.isArray(source.finalRankings) ? clone_(source.finalRankings) : (Array.isArray(summary.rankings) ? clone_(summary.rankings) : []);
+  const historySummary = Object.assign({}, summary, {
+    rankings: rankings,
+    interrupted: source.interrupted !== undefined ? Boolean(source.interrupted) : Boolean(summary.interrupted),
+    finalPhase: source.finalPhase || summary.finalPhase || '',
+    stageCount: source.stageCount !== undefined ? Number(source.stageCount || 0) : (summary.stageCount !== undefined ? Number(summary.stageCount || 0) : distinctArchiveStageCount_(stageResults)),
+  });
+  const saveData = normalizeArchiveSaveData_(source.saveData || source.playerSaveData, players, archiveId, gameId, createdAt);
+  const playerRows = buildArchivePlayerRows_(players, saveData, stageResults, archiveId, gameId, createdAt);
+  return {
+    ok: true,
+    archiveId: archiveId,
+    gameId: gameId,
+    requestedAt: createdAt,
+    records: {
+      saveData: dedupeArchiveRecords_(saveData, ['archiveId', 'gameId', 'uuid']),
+      stageResults: dedupeArchiveRecords_(stageResults, ['archiveId', 'gameId', 'uuid', 'stageId']),
+      stageSettings: dedupeArchiveRecords_(stageSettings, ['archiveId', 'gameId', 'stageId']),
+      gameHistory: [{ archiveId: archiveId, gameId: gameId, summaryJson: JSON.stringify(historySummary), createdAt: createdAt }],
+      players: dedupeArchiveRecords_(playerRows, ['uuid']),
+    },
+  };
+}
+
+function archiveObject_(value) {
+  if (!value) return {};
+  if (typeof value === 'string') return parseJson_(value, {});
+  return typeof value === 'object' && !Array.isArray(value) ? clone_(value) : {};
+}
+
+function archiveTimestamp_(value) {
+  const date = value ? new Date(value) : new Date();
+  return isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+}
+
+function archiveArray_(value, keyName) {
+  if (Array.isArray(value)) return value.map(clone_);
+  if (!value || typeof value !== 'object') return [];
+  return Object.keys(value).map(function(key) {
+    const item = archiveObject_(value[key]);
+    if (keyName && !item[keyName]) item[keyName] = key;
+    return item;
+  });
+}
+
+function normalizeArchivePlayers_(value, fallbackUpdatedAt) {
+  return archiveArray_(value, 'uuid').map(function(player) {
+    return {
+      uuid: String(player.uuid || player.id || '').trim(),
+      name: String(player.name || player.displayName || player.nameSnapshot || '').trim(),
+      skill: Number(player.skill !== undefined ? player.skill : player.currentSkill || 0),
+      stageSkillHistory: Array.isArray(player.stageSkillHistory) ? clone_(player.stageSkillHistory) : parseJson_(player.stageSkillHistoryJson, []),
+      updatedAt: archiveTimestamp_(player.updatedAt || fallbackUpdatedAt),
+    };
+  }).filter(function(player) { return Boolean(player.uuid); });
+}
+
+function normalizeArchiveSaveData_(value, players, archiveId, gameId, createdAt) {
+  const supplied = archiveArray_(value, 'uuid');
+  const rows = supplied.map(function(item) {
+    const summary = archiveObject_(item.summary || item.summaryJson);
+    return {
+      archiveId: archiveId,
+      uuid: String(item.uuid || '').trim(),
+      gameId: gameId,
+      nameSnapshot: String(item.nameSnapshot || item.name || '').trim(),
+      summaryJson: JSON.stringify(summary),
+      createdAt: archiveTimestamp_(item.createdAt || createdAt),
+    };
+  }).filter(function(item) { return Boolean(item.uuid); });
+  if (rows.length) return rows;
+  return (players || []).map(function(player) {
+    return {
+      archiveId: archiveId,
+      uuid: player.uuid,
+      gameId: gameId,
+      nameSnapshot: player.name,
+      summaryJson: JSON.stringify({ currentSkill: player.skill || 0 }),
+      createdAt: createdAt,
+    };
+  });
+}
+
+function normalizeArchiveStageResults_(value, archiveId, gameId, createdAt) {
+  const rows = [];
+  if (Array.isArray(value)) {
+    value.forEach(function(item) { appendArchiveStageResult_(rows, item, item && item.stageId, archiveId, gameId, createdAt); });
+  } else if (value && typeof value === 'object') {
+    Object.keys(value).forEach(function(stageId) {
+      const stage = value[stageId];
+      if (stage && stage.players && typeof stage.players === 'object') {
+        Object.keys(stage.players).forEach(function(uuid) {
+          const result = archiveObject_(stage.players[uuid]);
+          result.uuid = result.uuid || uuid;
+          appendArchiveStageResult_(rows, result, stage.stageId || stageId, archiveId, gameId, createdAt);
+        });
+      } else if (Array.isArray(stage)) {
+        stage.forEach(function(item) { appendArchiveStageResult_(rows, item, stageId, archiveId, gameId, createdAt); });
+      } else {
+        appendArchiveStageResult_(rows, stage, stageId, archiveId, gameId, createdAt);
+      }
+    });
+  }
+  return rows;
+}
+
+function appendArchiveStageResult_(rows, value, fallbackStageId, archiveId, gameId, createdAt) {
+  const item = archiveObject_(value);
+  const uuid = String(item.uuid || '').trim();
+  const stageId = String(item.stageId || fallbackStageId || '').trim();
+  if (!uuid || !stageId) return;
+  const result = archiveObject_(item.result || item.resultJson);
+  const resultJson = Object.keys(result).length ? result : item;
+  rows.push({
+    archiveId: archiveId,
+    uuid: uuid,
+    gameId: gameId,
+    stageId: stageId,
+    stageSkill: item.stageSkill !== undefined ? item.stageSkill : (resultJson.stageSkill !== undefined ? resultJson.stageSkill : ''),
+    score: item.score !== undefined ? item.score : (resultJson.score || 0),
+    status: item.status || resultJson.status || '',
+    resultJson: JSON.stringify(resultJson),
+    createdAt: archiveTimestamp_(item.createdAt || createdAt),
+  });
+}
+
+function normalizeArchiveStageSettings_(value, archiveId, gameId, createdAt) {
+  return archiveArray_(value, 'stageId').map(function(stage) {
+    const stageId = String(stage.stageId || '').trim();
+    if (!stageId) return null;
+    return { archiveId: archiveId, gameId: gameId, stageId: stageId, stageJson: JSON.stringify(stage), createdAt: archiveTimestamp_(stage.createdAt || createdAt) };
+  }).filter(Boolean);
+}
+
+function buildArchivePlayerRows_(players, saveData, stageResults, archiveId, gameId, createdAt) {
+  const byUuid = {};
+  (players || []).forEach(function(player) { byUuid[player.uuid] = player; });
+  (saveData || []).forEach(function(save) {
+    if (!byUuid[save.uuid]) byUuid[save.uuid] = { uuid: save.uuid, name: save.nameSnapshot, skill: 0, stageSkillHistory: [] };
+  });
+  (stageResults || []).forEach(function(result) {
+    if (!byUuid[result.uuid]) byUuid[result.uuid] = { uuid: result.uuid, name: '', skill: 0, stageSkillHistory: [] };
+  });
+  return Object.keys(byUuid).map(function(uuid) {
+    const player = byUuid[uuid];
+    return {
+      uuid: uuid,
+      name: player.name || uuid,
+      skill: Number(player.skill || 0),
+      stageSkillHistoryJson: JSON.stringify(player.stageSkillHistory || []),
+      updatedAt: archiveTimestamp_(player.updatedAt || createdAt),
+      archiveId: archiveId,
+      gameId: gameId,
+    };
+  });
+}
+
+function distinctArchiveStageCount_(rows) {
+  const seen = {};
+  (rows || []).forEach(function(row) { seen[row.stageId] = true; });
+  return Object.keys(seen).length;
+}
+
+function archiveRecordKey_(record, keyFields) {
+  return (keyFields || []).map(function(field) { return String(record[field] === undefined || record[field] === null ? '' : record[field]); }).join('\u001f');
+}
+
+function dedupeArchiveRecords_(records, keyFields) {
+  const indexed = {};
+  (records || []).forEach(function(record) { indexed[archiveRecordKey_(record, keyFields)] = clone_(record); });
+  return Object.keys(indexed).map(function(key) { return indexed[key]; });
+}
+
+function mergeArchiveRows_(existingRows, incomingRows, keyFields) {
+  const rows = (existingRows || []).map(clone_);
+  const index = {};
+  rows.forEach(function(row, rowIndex) { index[archiveRecordKey_(row, keyFields)] = rowIndex; });
+  const changes = { inserted: 0, updated: 0, unchanged: 0 };
+  (incomingRows || []).forEach(function(record) {
+    const key = archiveRecordKey_(record, keyFields);
+    if (index[key] === undefined) {
+      index[key] = rows.length;
+      rows.push(clone_(record));
+      changes.inserted += 1;
+      return;
+    }
+    const rowIndex = index[key];
+    const merged = Object.assign({}, rows[rowIndex], clone_(record));
+    if (JSON.stringify(rows[rowIndex]) === JSON.stringify(merged)) changes.unchanged += 1;
+    else {
+      rows[rowIndex] = merged;
+      changes.updated += 1;
+    }
+  });
+  return Object.assign({ rows: rows }, changes);
+}
+
+function upsertArchiveSheet_(sheet, records, keyFields) {
+  if (!sheet) throw new Error('Archive sheet is missing. Run setupElevatorGameSheets() first.');
+  const merged = mergeArchiveRows_(rowsAsObjects_(sheet), records, keyFields);
+  replaceSheetObjectRows_(sheet, merged.rows);
+  return { inserted: merged.inserted, updated: merged.updated, unchanged: merged.unchanged };
+}
+
+function replaceSheetObjectRows_(sheet, rows) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+  if (rows.length) sheet.getRange(2, 1, rows.length, headers.length).setValues(rows.map(function(row) {
+    return headers.map(function(header) { return row[header] === undefined ? '' : row[header]; });
+  }));
+}
+
+function recalculateArchivedData_(gameId) {
+  if (typeof SpreadsheetApp === 'undefined') return archiveStatusResponse_('failed', '', gameId || '', 'SpreadsheetApp is unavailable.');
+  try {
+    const ss = SpreadsheetApp.getActive();
+    const source = {
+      saveData: rowsAsObjects_(ss.getSheetByName(EVG_SHEETS.saveData)),
+      stageResults: rowsAsObjects_(ss.getSheetByName(EVG_SHEETS.stageResults)),
+      players: rowsAsObjects_(ss.getSheetByName(EVG_SHEETS.players)),
+      gameHistory: rowsAsObjects_(ss.getSheetByName(EVG_SHEETS.gameHistory)),
+    };
+    const recalculated = recalculateArchiveRecords_(source, gameId);
+    if (!recalculated.ok) return archiveStatusResponse_('failed', '', gameId || '', recalculated.message);
+    replaceSheetObjectRows_(ss.getSheetByName(EVG_SHEETS.saveData), recalculated.records.saveData);
+    replaceSheetObjectRows_(ss.getSheetByName(EVG_SHEETS.players), recalculated.records.players);
+    replaceSheetObjectRows_(ss.getSheetByName(EVG_SHEETS.gameHistory), recalculated.records.gameHistory);
+    return archiveStatusResponse_('exported', '', gameId || 'all', '', { saveData: recalculated.updatedSaveData, players: recalculated.updatedPlayers, gameHistory: recalculated.updatedGameHistory });
+  } catch (err) {
+    console.error(err && err.stack ? err.stack : err);
+    return archiveStatusResponse_('failed', '', gameId || '', String(err && err.message ? err.message : err));
+  }
+}
+
+function recalculateArchiveRecords_(source, selectedGameId) {
+  const targetGameId = String(selectedGameId || '').trim();
+  const saveData = (source.saveData || []).map(clone_);
+  const stageResults = (source.stageResults || []).map(clone_);
+  const players = (source.players || []).map(clone_);
+  const gameHistory = (source.gameHistory || []).map(clone_);
+  const gameIds = {};
+  saveData.concat(stageResults, gameHistory).forEach(function(row) { if (row.gameId) gameIds[row.gameId] = true; });
+  if (targetGameId && !gameIds[targetGameId]) return { ok: false, message: '指定された gameId のアーカイブが見つかりません。' };
+  const selected = function(gameId) { return !targetGameId || gameId === targetGameId; };
+  const playerNames = {};
+  players.forEach(function(player) { playerNames[player.uuid] = player.name || player.uuid; });
+  saveData.forEach(function(save) { if (!playerNames[save.uuid]) playerNames[save.uuid] = save.nameSnapshot || save.uuid; });
+  const skillsByUuid = {};
+  stageResults.forEach(function(row) {
+    const skill = Number(row.stageSkill);
+    if (isFinite(skill) && String(row.stageSkill) !== '') (skillsByUuid[row.uuid] = skillsByUuid[row.uuid] || []).push(skill);
+  });
+  const byGame = {};
+  stageResults.forEach(function(row) {
+    if (!row.gameId) return;
+    const result = archiveObject_(row.resultJson);
+    const game = byGame[row.gameId] = byGame[row.gameId] || {};
+    const player = game[row.uuid] = game[row.uuid] || { score: 0, rows: [], predictions: [] };
+    player.score = round_(player.score + Number(row.score || result.score || 0));
+    player.rows.push({ row: row, result: result });
+    (result.predictionBreakdown || []).forEach(function(item) { if (!item.noAnswer) player.predictions.push(item); });
+  });
+  let updatedSaveData = 0;
+  saveData.forEach(function(save) {
+    if (!selected(save.gameId)) return;
+    const gamePlayer = byGame[save.gameId] && byGame[save.gameId][save.uuid] ? byGame[save.gameId][save.uuid] : { score: 0, rows: [], predictions: [] };
+    const ranks = archiveRankings_(byGame[save.gameId] || {}, playerNames);
+    const ranking = ranks.find(function(item) { return item.uuid === save.uuid; }) || {};
+    const history = skillsByUuid[save.uuid] || [];
+    const existing = archiveObject_(save.summaryJson);
+    const ticketed = gamePlayer.rows.filter(function(item) { return !item.result.ticket || !item.result.ticket.abstained; });
+    const forcedOff = gamePlayer.rows.filter(function(item) { return item.result.status === 'forced_off' || item.row.status === 'forced_off'; }).length;
+    const correct = gamePlayer.predictions.filter(function(item) { return item.matched; }).length;
+    const next = Object.assign({}, existing, {
+      currentSkill: currentSkill_(history),
+      averageSkill: average_(history),
+      totalSkill: round_(history.reduce(function(sum, skill) { return sum + Number(skill || 0); }, 0)),
+      bestScore: gamePlayer.rows.length ? Math.max.apply(null, gamePlayer.rows.map(function(item) { return Number(item.row.score || item.result.score || 0); })) : 0,
+      gameCount: (saveData || []).filter(function(row) { return row.uuid === save.uuid; }).length,
+      stageCount: ticketed.length,
+      forcedOffCount: forcedOff,
+      predictionAccuracy: gamePlayer.predictions.length ? round_(correct / gamePlayer.predictions.length) : null,
+      wins: (saveData || []).filter(function(row) {
+        const gameRanks = archiveRankings_(byGame[row.gameId] || {}, playerNames);
+        const own = gameRanks.find(function(item) { return item.uuid === save.uuid; });
+        return own && own.rank === 1;
+      }).length,
+      rank: ranking.rank || null,
+    });
+    save.summaryJson = JSON.stringify(next);
+    updatedSaveData += 1;
+  });
+  let updatedPlayers = 0;
+  players.forEach(function(player) {
+    const history = skillsByUuid[player.uuid] || [];
+    player.skill = currentSkill_(history);
+    player.stageSkillHistoryJson = JSON.stringify(history);
+    player.updatedAt = new Date().toISOString();
+    updatedPlayers += 1;
+  });
+  let updatedGameHistory = 0;
+  gameHistory.forEach(function(historyRow) {
+    if (!selected(historyRow.gameId)) return;
+    const summary = archiveObject_(historyRow.summaryJson);
+    const rankings = archiveRankings_(byGame[historyRow.gameId] || {}, playerNames);
+    const scores = {};
+    rankings.forEach(function(item) { scores[item.uuid] = item.score; });
+    historyRow.summaryJson = JSON.stringify(Object.assign({}, summary, { rankings: rankings, scores: scores, stageCount: distinctArchiveStageCount_(stageResults.filter(function(row) { return row.gameId === historyRow.gameId; })) }));
+    updatedGameHistory += 1;
+  });
+  return { ok: true, records: { saveData: saveData, players: players, gameHistory: gameHistory }, updatedSaveData: updatedSaveData, updatedPlayers: updatedPlayers, updatedGameHistory: updatedGameHistory };
+}
+
+function archiveRankings_(gamePlayers, playerNames) {
+  return Object.keys(gamePlayers || {}).map(function(uuid) {
+    return { uuid: uuid, name: playerNames[uuid] || uuid, score: Number(gamePlayers[uuid].score || 0) };
+  }).sort(function(a, b) {
+    return b.score - a.score || String(a.name).localeCompare(String(b.name), 'ja');
+  }).map(withRank_);
+}
+
 function ensureSheet_(ss, name, headers) {
   let sheet = ss.getSheetByName(name);
   if (!sheet) sheet = ss.insertSheet(name);
@@ -1094,6 +1479,9 @@ function ensureConfigDefaults_(sheet) {
     hostSessionMinutes: String(EVG_DEFAULT_HOST_SESSION_MINUTES),
     pollCacheSeconds: '2',
     webAppUrl: EVG_DEPLOYED_WEB_APP_URL,
+    firebaseApiKey: EVG_FIREBASE_API_KEY,
+    firebaseDatabaseUrl: EVG_FIREBASE_DATABASE_URL,
+    firebaseRoomId: EVG_FIREBASE_ROOM_ID,
   };
   const rows = rowsAsObjects_(sheet);
   Object.keys(defaults).forEach(function(key) {
@@ -1181,6 +1569,37 @@ function verifyApiKeyValue_(payload, configured) {
   if (!configured) return { ok: true };
   if (String(payload.apiKey || '') === String(configured)) return { ok: true };
   return error_('auth', 'APIキーが一致しません。', 403);
+}
+
+function verifyFirebaseArchiveHost_(payload) {
+  const token = String(payload && payload.firebaseIdToken || '').trim();
+  const configuredRoomId = String(getConfigValue_('firebaseRoomId', EVG_FIREBASE_ROOM_ID) || EVG_FIREBASE_ROOM_ID);
+  const roomId = String(payload && payload.roomId || configuredRoomId);
+  if (!token) return error_('auth', 'Firebase ID tokenがありません。', 403);
+  if (roomId !== configuredRoomId) return error_('auth', 'Firebase roomIdが一致しません。', 403);
+  if (typeof UrlFetchApp === 'undefined') return error_('auth', 'Firebase Host検証を実行できません。', 503);
+  try {
+    const firebaseApiKey = String(getConfigValue_('firebaseApiKey', EVG_FIREBASE_API_KEY) || EVG_FIREBASE_API_KEY);
+    const lookup = UrlFetchApp.fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' + encodeURIComponent(firebaseApiKey), {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ idToken: token }),
+      muteHttpExceptions: true,
+    });
+    if (lookup.getResponseCode() !== 200) return error_('auth', 'Firebase ID tokenを検証できません。', 403);
+    const identity = parseJson_(lookup.getContentText(), {});
+    const uid = identity.users && identity.users[0] && identity.users[0].localId;
+    if (!uid) return error_('auth', 'Firebase uidを取得できません。', 403);
+    const databaseUrl = String(getConfigValue_('firebaseDatabaseUrl', EVG_FIREBASE_DATABASE_URL) || EVG_FIREBASE_DATABASE_URL).replace(/\/+$/, '');
+    const allowlistUrl = databaseUrl + '/rooms/' + encodeURIComponent(roomId) + '/roles/hosts/' + encodeURIComponent(uid) + '.json?auth=' + encodeURIComponent(token);
+    const allowlist = UrlFetchApp.fetch(allowlistUrl, { method: 'get', muteHttpExceptions: true });
+    if (allowlist.getResponseCode() !== 200 || String(allowlist.getContentText()).trim() !== 'true') {
+      return error_('auth', 'Firebase Host allowlistに登録されていません。', 403);
+    }
+    return { ok: true, uid: uid, roomId: roomId };
+  } catch (err) {
+    return error_('auth', 'Firebase Host検証に失敗しました: ' + String(err && err.message ? err.message : err), 403);
+  }
 }
 
 function issueHostToken_() {

@@ -56,9 +56,10 @@
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
           "$uid": {
             ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true)",
-            ".write": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true)",
+            ".write": "auth != null && (root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true || (auth.uid === $uid && root.child('players').child($uid).exists() && newData.child('currentSkill').val() === root.child('players').child($uid).child('currentSkill').val() && newData.child('stageSkillHistoryJson').val() === root.child('players').child($uid).child('stageSkillHistoryJson').val() && newData.child('appliedSkillStageIdsJson').val() === root.child('players').child($uid).child('appliedSkillStageIdsJson').val()))",
             "currentSkill": { ".validate": "newData.isNumber()" },
-            "stageSkillHistory": { ".validate": true },
+            "stageSkillHistoryJson": { ".validate": "newData.isString() && newData.val().length <= 100000" },
+            "appliedSkillStageIdsJson": { ".validate": "newData.isString() && newData.val().length <= 100000" },
             "updatedAt": { ".validate": "newData.isString()" },
             "$other": { ".validate": false }
           }
@@ -117,6 +118,10 @@
           ".read": "auth != null",
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
         },
+        "completedGamePublicDetails": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
+        },
         "completedGameDetails": {
           ".read": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
@@ -127,6 +132,23 @@
             ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true)",
             ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
           }
+        },
+        "historyPlayers": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+          "$profileId": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+            ".validate": "newData.hasChildren(['profileId', 'name', 'currentSkill', 'updatedAt']) && newData.child('profileId').val() === $profileId",
+            "profileId": { ".validate": "newData.isString() && newData.val().length > 2 && newData.val().length <= 32" },
+            "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24" },
+            "currentSkill": { ".validate": "newData.isNumber()" },
+            "updatedAt": { ".validate": "newData.isString()" },
+            "$other": { ".validate": false }
+          }
+        },
+        "nextGameConfigs": {
+          ".read": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
         },
         "operations": {
           ".read": "auth != null",
@@ -159,11 +181,12 @@
     "players": {
       "$uid": {
         ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child(data.child('roomId').val()).child('roles').child('hosts').child(auth.uid).val() === true)",
-        ".write": "auth != null && (auth.uid === $uid || root.child('rooms').child(newData.child('roomId').val()).child('roles').child('hosts').child(auth.uid).val() === true)",
-        ".validate": "newData.hasChildren(['name', 'currentSkill', 'stageSkillHistory', 'joinedAt', 'lastSeenAt', 'updatedAt', 'roomId'])",
+        ".write": "auth != null && (root.child('rooms').child(newData.child('roomId').val()).child('roles').child('hosts').child(auth.uid).val() === true || (auth.uid === $uid && ((!data.exists() && newData.child('currentSkill').val() === 0 && newData.child('stageSkillHistoryJson').val() === '[]' && newData.child('appliedSkillStageIdsJson').val() === '[]') || (data.exists() && newData.child('currentSkill').val() === data.child('currentSkill').val() && newData.child('stageSkillHistoryJson').val() === data.child('stageSkillHistoryJson').val() && newData.child('appliedSkillStageIdsJson').val() === data.child('appliedSkillStageIdsJson').val()))))",
+        ".validate": "newData.hasChildren(['name', 'currentSkill', 'stageSkillHistoryJson', 'appliedSkillStageIdsJson', 'joinedAt', 'lastSeenAt', 'updatedAt', 'roomId'])",
         "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24" },
         "currentSkill": { ".validate": "newData.isNumber()" },
-        "stageSkillHistory": { ".validate": true },
+        "stageSkillHistoryJson": { ".validate": "newData.isString() && newData.val().length <= 100000" },
+        "appliedSkillStageIdsJson": { ".validate": "newData.isString() && newData.val().length <= 100000" },
         "joinedAt": { ".validate": "newData.isString()" },
         "lastSeenAt": { ".validate": "newData.isString()" },
         "updatedAt": { ".validate": "newData.isString()" },

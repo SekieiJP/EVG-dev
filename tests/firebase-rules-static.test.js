@@ -43,8 +43,8 @@ run("player master and self stats writes are explicitly scoped", () => {
   assert.match(rules.players.$uid[".read"], /auth\.uid === \$uid/);
   assert.match(rules.players.$uid[".write"], /auth\.uid === \$uid/);
   assert.match(rules.players.$uid[".write"], /roles'\)\.child\('hosts/);
+  assert.match(rules.players.$uid[".write"], /stageSkillHistory/);
   assert.match(rules.players.$uid[".validate"], /currentSkill/);
-  assert.match(rules.players.$uid[".validate"], /stageSkillHistory/);
   assert.strictEqual(rules.players.$uid.$other[".validate"], false);
 });
 
@@ -57,6 +57,17 @@ run("completed game history is split into public summaries and scoped details", 
   assert.match(roomRules.completedGamePlayerDetails[".write"], /roles'\)\.child\('hosts/);
   assert.match(roomRules.completedGamePlayerDetails.$uid[".read"], /auth\.uid === \$uid/);
   assert.match(roomRules.completedGamePlayerDetails.$uid[".write"], /roles'\)\.child\('hosts/);
+  assert.strictEqual(roomRules.completedGamePublicDetails[".read"], "auth != null");
+  assert.match(roomRules.completedGamePublicDetails[".write"], /roles'\)\.child\('hosts/);
+  assert.strictEqual(roomRules.historyPlayers[".read"], "auth != null");
+  assert.match(roomRules.historyPlayers.$profileId[".write"], /roles'\)\.child\('hosts/);
+  assert.match(roomRules.historyPlayers.$profileId[".validate"], /currentSkill/);
+  assert.doesNotMatch(roomRules.historyPlayers.$profileId[".validate"], /uuid|uid/);
+});
+
+run("firebase next-game config catalog is host scoped", () => {
+  assert.match(roomRules.nextGameConfigs[".read"], /roles'\)\.child\('hosts/);
+  assert.match(roomRules.nextGameConfigs[".write"], /roles'\)\.child\('hosts/);
 });
 
 run("room settings allow separated bgm and se audio controls", () => {

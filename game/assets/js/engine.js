@@ -136,7 +136,7 @@
   function createNextGameRoom(room, config, nextGameStartedAt) {
     const next = createInitialRoom(config);
     const startedAt = validIsoTimestamp(nextGameStartedAt) ? nextGameStartedAt : nowIso();
-    const archived = archiveCurrentGame(room);
+    const archived = archiveCurrentGame(room, startedAt);
     next.completedGames = archived ? (room.completedGames || []).concat(archived) : deepClone(room.completedGames || []);
     next.players = nextGamePlayers(room, startedAt);
     next.scores = next.players.reduce((scores, player) => {
@@ -220,15 +220,17 @@
     return { room: next, ok: true };
   }
 
-  function archiveCurrentGame(room) {
+  function archiveCurrentGame(room, archivedAt) {
     if (!room || !room.stageResults || Object.keys(room.stageResults).length === 0) return null;
     if ((room.completedGames || []).some((game) => game.gameId === room.gameId)) return null;
+    const finishedAt = validIsoTimestamp(archivedAt) ? archivedAt : nowIso();
     return {
       gameId: room.gameId,
       title: room.config && room.config.gameMeta ? room.config.gameMeta.title : "game",
-      finishedAt: nowIso(),
+      finishedAt,
       interrupted: room.phase !== PHASES.FINAL,
       finalPhase: room.phase,
+      config: deepClone(room.config || {}),
       scores: deepClone(room.scores || {}),
       rankings: cumulativeRankings(room),
       stageResults: deepClone(room.stageResults || {}),
@@ -332,10 +334,10 @@
     return { room: next, ok: true, player };
   }
 
-  function submitTicket(room, uuid, ticket) {
+  function submitTicket(room, uuid, ticket, submittedAt) {
     const stage = getCurrentStage(room);
     if (!stage) return { room, ok: false, error: "ステージがありません。" };
-    if (!canSubmitTicket(room)) {
+    if (!canSubmitTicket(room, submittedAt)) {
       return { room, ok: false, error: "現在はチケット購入を受け付けていません。" };
     }
     const player = room.players.find((item) => item.uuid === uuid);
@@ -347,17 +349,17 @@
     next.tickets[stageId] = next.tickets[stageId] || {};
     next.tickets[stageId][uuid] = Object.assign({}, validation.ticket, {
       uuid,
-      submittedAt: nowIso(),
+      submittedAt: validIsoTimestamp(submittedAt) ? submittedAt : nowIso(),
       abstained: false,
     });
-    next.updatedAt = nowIso();
+    next.updatedAt = validIsoTimestamp(submittedAt) ? submittedAt : nowIso();
     return { room: next, ok: true, ticket: next.tickets[stageId][uuid] };
   }
 
-  function abstain(room, uuid) {
+  function abstain(room, uuid, submittedAt) {
     const stage = getCurrentStage(room);
     if (!stage) return { room, ok: false, error: "ステージがありません。" };
-    if (!canSubmitTicket(room)) {
+    if (!canSubmitTicket(room, submittedAt)) {
       return { room, ok: false, error: "現在は棄権を受け付けていません。" };
     }
     const player = room.players.find((item) => item.uuid === uuid);
@@ -368,9 +370,9 @@
       uuid,
       abstained: true,
       predictions: {},
-      submittedAt: nowIso(),
+      submittedAt: validIsoTimestamp(submittedAt) ? submittedAt : nowIso(),
     };
-    next.updatedAt = nowIso();
+    next.updatedAt = validIsoTimestamp(submittedAt) ? submittedAt : nowIso();
     return { room: next, ok: true };
   }
 
@@ -406,30 +408,37 @@
     return String(raw).trim().slice(0, 64);
   }
 
-  function tallyCurrentStage(room) {
+  function tallyCurrentStage(room, calculatedAt) {
     const stage = getCurrentStage(room);
     if (!stage) return { room, ok: false, error: "ステージがありません。" };
-    if (![PHASES.COUNTDOWN, PHASES.TALLYING].includes(room.phase)) {
+    const recoveringMissingResult = room.phase === PHASES.REVEAL && !(room.stageResults && room.stageResults[stage.stageId]);
+    if (![PHASES.COUNTDOWN, PHASES.TALLYING].includes(room.phase) && !recoveringMissingResult) {
       return { room, ok: false, error: "現在は集計できません。" };
     }
     if (room.stageResults && room.stageResults[stage.stageId]) {
       return { room, ok: false, error: "このステージはすでに集計済みです。" };
     }
     const stageTickets = room.tickets[stage.stageId] || {};
-    const result = calculateStage(stage, room.players, stageTickets);
+    const resultAt = validIsoTimestamp(calculatedAt) ? calculatedAt : nowIso();
+    const result = calculateStage(stage, room.players, stageTickets, resultAt);
     const next = deepClone(room);
     next.stageResults[stage.stageId] = result;
     next.phase = PHASES.REVEAL;
-    next.animationStartedAt = nowIso();
-    Object.values(result.players).forEach((playerResult) => {
-      next.scores[playerResult.uuid] = (next.scores[playerResult.uuid] || 0) + playerResult.score;
-    });
+    next.animationStartedAt = recoveringMissingResult && room.animationStartedAt ? room.animationStartedAt : resultAt;
+    if (recoveringMissingResult) {
+      next.scores = rebuildCurrentGameScores(next);
+    } else {
+      Object.values(result.players).forEach((playerResult) => {
+        next.scores[playerResult.uuid] = (next.scores[playerResult.uuid] || 0) + playerResult.score;
+      });
+    }
     applyStageSkills(next, result);
-    next.updatedAt = nowIso();
+    result.recovered = recoveringMissingResult;
+    next.updatedAt = resultAt;
     return { room: next, ok: true, result };
   }
 
-  function calculateStage(stage, players, ticketsByUuid) {
+  function calculateStage(stage, players, ticketsByUuid, calculatedAt) {
     const params = stage.params;
     const playerMap = {};
     const validTickets = {};
@@ -593,7 +602,7 @@
       rankings,
       timeline,
       stats,
-      calculatedAt: nowIso(),
+      calculatedAt: validIsoTimestamp(calculatedAt) ? calculatedAt : nowIso(),
     };
   }
 
@@ -767,13 +776,34 @@
       const player = room.players.find((entry) => entry.uuid === item.uuid);
       if (player) {
         player.stageSkillHistory = player.stageSkillHistory || [];
+        player.appliedSkillStageIds = Array.isArray(player.appliedSkillStageIds)
+          ? player.appliedSkillStageIds
+          : Object.values(player.appliedSkillStageIds || {});
         item.skillBefore = calculateCurrentSkill(player.stageSkillHistory);
-        player.stageSkillHistory.push(stageSkill);
+        const alreadyApplied = player.appliedSkillStageIds.includes(result.stageId);
+        if (!alreadyApplied) {
+          player.stageSkillHistory.push(stageSkill);
+          player.appliedSkillStageIds.push(result.stageId);
+        }
         player.skill = calculateCurrentSkill(player.stageSkillHistory);
         item.skillAfter = player.skill;
         item.skillDelta = roundScore(item.skillAfter - item.skillBefore);
       }
     });
+  }
+
+  function rebuildCurrentGameScores(room) {
+    const scores = (room.players || []).reduce((acc, player) => {
+      acc[player.uuid] = 0;
+      return acc;
+    }, {});
+    Object.values(room.stageResults || {}).forEach((stageResult) => {
+      Object.values(stageResult.players || {}).forEach((playerResult) => {
+        if (!playerResult || !playerResult.uuid) return;
+        scores[playerResult.uuid] = roundScore((scores[playerResult.uuid] || 0) + Number(playerResult.score || 0));
+      });
+    });
+    return scores;
   }
 
   function calculateCurrentSkill(history) {
@@ -861,11 +891,12 @@
     });
   }
 
-  function advancePhase(room, action, actor) {
+  function advancePhase(room, action, actor, commandAt) {
     const next = deepClone(room);
     const stage = getCurrentStage(next);
     const label = actor || "host";
-    const log = { at: nowIso(), actor: label, action };
+    const at = validIsoTimestamp(commandAt) ? commandAt : nowIso();
+    const log = { at, actor: label, action };
     if (action === "start-stage") {
       if (next.phase !== PHASES.LOBBY) return { room, ok: false, error: "現在はステージ説明へ進めません。" };
       next.phase = PHASES.STAGE_INTRO;
@@ -876,16 +907,17 @@
     } else if (action === "close-voting") {
       if (next.phase !== PHASES.VOTING) return { room, ok: false, error: "現在は締切できません。" };
       next.phase = PHASES.COUNTDOWN;
-      next.countdownEndsAt = new Date(Date.now() + 15000).toISOString();
-      next.tallyingEndsAt = new Date(Date.now() + 18000).toISOString();
+      const commandMs = new Date(at).getTime();
+      next.countdownEndsAt = new Date(commandMs + 15000).toISOString();
+      next.tallyingEndsAt = new Date(commandMs + 18000).toISOString();
     } else if (action === "tally") {
-      return tallyCurrentStage(next);
+      return tallyCurrentStage(next, at);
     } else if (action === "show-ranking") {
       if (next.phase !== PHASES.REVEAL) return { room, ok: false, error: "現在は順位発表へ進めません。" };
       next.phase = PHASES.RANKING;
     } else if (action === "skip-animation") {
       if (next.phase !== PHASES.REVEAL) return { room, ok: false, error: "現在はスキップできません。" };
-      next.animationSkippedAt = nowIso();
+      next.animationSkippedAt = at;
       next.phase = PHASES.RANKING;
     } else if (action === "next-stage") {
       if (next.phase !== PHASES.RANKING) return { room, ok: false, error: "現在は次へ進めません。" };
@@ -906,7 +938,7 @@
     }
     next.operations.unshift(log);
     next.operations = next.operations.slice(0, 100);
-    next.updatedAt = nowIso();
+    next.updatedAt = at;
     return { room: next, ok: true, stage };
   }
 
@@ -934,11 +966,12 @@
     return warnings;
   }
 
-  function canSubmitTicket(room) {
+  function canSubmitTicket(room, submittedAt) {
     if (room.phase === PHASES.VOTING) return true;
     if (room.phase !== PHASES.COUNTDOWN) return false;
     if (!room.countdownEndsAt) return false;
-    return Date.now() <= new Date(room.countdownEndsAt).getTime();
+    const currentMs = validIsoTimestamp(submittedAt) ? new Date(submittedAt).getTime() : Date.now();
+    return currentMs <= new Date(room.countdownEndsAt).getTime();
   }
 
   function intervalOverlapsZone(interval, event) {
@@ -1010,6 +1043,7 @@
     DEFAULT_CONFIG,
     createInitialRoom,
     createNextGameRoom,
+    archiveCurrentGame,
     normalizeConfig,
     getCurrentStage,
     registerPlayer,

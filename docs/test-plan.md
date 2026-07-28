@@ -1,116 +1,66 @@
 # Test Plan
 
+本計画では Firebase Realtime Database（RTDB）を進行中ゲームの正系とする。GAS は終了・中断済みゲームのアーカイブだけを対象とし、進行、投票、フェーズ同期のテスト対象にはしない。
+
 ## 自動テスト
 
 ```sh
 node tests/engine.test.js
 node tests/multiplayer-flow.test.js
-node tests/gas-logic.test.js
+npx firebase emulators:exec --only auth,database "npm test"
+npx playwright test
 ```
 
-対象:
+### Unit tests
 
-- 同一階指定は乗車成功時に成功階数1階・運賃1階分になる。
-- 1階から10階の指定は、成功階数10階・運賃10階分になる。
-- 定員超過時は当該階の既存乗客と乗車希望者が強制下車になり、既存乗客は強制下車前に人数判定を通過した階数分だけ得点する。
-- 禁止階を指定した投票は受理されるが、乗車失敗としてQペナルティのみ発生する。
-- E3a区間倍率は成功階単位のP側にのみ適用され、Qペナルティには掛からない。
-- E4特別階は人数判定通過後に当該階にいたプレイヤーへ加点される。
-- E1予想イベントの正解・無回答点が適用される。
-- E1予想イベントで `metric` と `correctAnswer` が両方ある場合は、ゲーム結果メトリクスを優先する。
-- E1範囲選択は、数値メトリクスが選択範囲内に入った場合に正解になる。
-- E1プレイヤー指名は、予想イベント得点を加える前の最高得点者UUIDで正誤判定する。
-- 現在Skill値は最高StageSkillを除外し、2〜5番目を合算する。
-- 複数プレイヤーの参加、重複名拒否、投票、棄権、締切、集計、次ステージへの名前反映が破綻しない。
-- チケット送信・棄権は受付/カウントダウン中だけ許可し、カウントダウン終了後は拒否する。
-- 同一ステージの二重集計を拒否し、累積得点とSkillの二重加算を防ぐ。
-- GAS版ロジックでも、不正フェーズ操作、未参加者の棄権、締切後送信、二重集計を拒否する。
-- 次ゲーム設定のimportでは、参加者とSkill履歴を保持し、前ゲーム結果を戦歴用に退避する。
-- Playerの中間ランキング画面の「次へ」は、ゲーム全体のフェーズを進めない。
-- GAS版では、APIキー不一致、hostTokenなし、hostToken期限切れのホスト操作を拒否する。
-- GAS版では、`current_game` を複数行チャンクで保存でき、同名ゲームIDに連番を付ける。
-- GAS版では、Player向け状態から他人のチケットと発表前の現在ステージ結果を隠す。
-- GAS版では、`save_data` に12指標、`stage_results` にStageSkill込みのステージ結果を保存する。
-- GAS版では、`game_configs` のACTIVE候補から次ゲームを開始できる。前ゲーム参加者はセーブデータに保持し、次ゲーム画面にはアクセス後に復元されたプレイヤーだけを表示する。
-- GAS版では、進行途中の中断時に集計済みステージだけを履歴保存して次ゲームへ移行できる。
-- Host画面は、保存済み `hostToken` の期限切れ時にパスワード入力画面へ戻り、再認証できる。
-- Screen端末は、`assets/audio/` のBGM/SE mp3をフェーズ変更と結果発表タイムラインに応じて再生する。
+- 同一階指定、強制下車、禁止階、E1〜E8、倍率計算、二重集計拒否を検証する。
+- StageSkill と現在Skillを検証する。現在Skillは全StageSkillの上位5件の合計であり、最高値を除外しない。
+- 累積戦歴の9指標（現在Skill、平均Skill、合計Skill、最高得点、参加ゲーム数、参加ステージ数、強制下車回数、予想イベント正解率、優勝回数）を検証する。
+- 同日継続は、次ゲーム開始日と同じAsia/Tokyo日付にticketを提出したプレイヤーだけを残し、ゲーム内score/ticket/stage resultを初期化することを検証する。
+- RTDB小ノードのserializer/deserializer、公開履歴payload、本人詳細payload、GAS archive payloadを検証する。
 
-## 複数プレイヤーブラウザハーネス
+### RTDB Rules emulator tests
 
-```sh
-python3 -m http.server 8000
-```
+- 未認証者は読み書きできない。
+- Playerは自分のプロフィール、ticket、ticketPresenceだけを書け、他人のデータ、`public`、`results`、`scores` は書けない。
+- Host allowlist uidだけが `public` transaction、設定、次ゲーム候補、結果commit、archive状態を変更できる。
+- `lobby -> stage_intro -> voting -> countdown -> moving -> reveal -> ranking -> stage_intro/final` 以外の遷移を拒否する。
+- phase transactionは `expectedPhase` と `roomVersion` が一致しないと拒否する。
+- 同じ `results/{stageId}` の二重作成を拒否する。
+- 公開履歴に他人のticket、予想回答、内訳、StageSkill履歴、uid/UUIDが含まれず、個人詳細は本人だけ、Host詳細はHostだけが読める。
 
-`http://127.0.0.1:8000/tests/multiplayer-browser-harness.html` を開く。
+### RTDB integration tests
 
-- Host、Screen、Player A/B/C を同一ページのiframeで並べて操作できる。
-- Player A/B/C は `testSlot` クエリでUUID保存先を分けるため、同一ブラウザ・同一localStorage内でも複数プレイヤーとして参加できる。
-- Reset Local Roomで `evg.room.v1` とテスト用UUIDを消して、複数人フローを最初から確認できる。
+- Host、Player A/B、Screenが小ノード購読だけで全フェーズを完走する。room rootの購読・transactionが発生しない。
+- Host操作後、Player/Screenは定期HTTP pollingや「次へ」操作を必要とせずフェーズへ自動追従する。
+- `/.info/serverTimeOffset` を使い、異なるクライアント時計でも同じ締切・演出開始時刻を描画する。
+- 結果commitが一つのmulti-location updateで `results`、`scores`、`playerStats`、本人履歴、`operations` を反映し、途中状態を公開しない。
+- Host再読込、ネットワーク一時切断、別Hostの競合操作で、RTDBの確定phase/versionが戻らない。
+- Player/Screen/未認証Hostの初回アクセスではroomを作成しない。allowlist済みHostのセットアップだけが作成する。
+- finalまたは中断後、GAS archive失敗でもゲームは完了し、`archive.status=failed` から同じarchiveIdを再送できる。
+- 次ゲーム候補はRTDB `nextGameConfigs` から読み、Spreadsheet `game_configs` への読取りを行わない。
 
-## 手動テスト
+### Browser E2E
 
-1. `python3 -m http.server 8000 -d game` で起動する。
-2. `?view=player&testSlot=player-a` と `?view=player&testSlot=player-b` で2名以上参加する。
-3. `?view=host` でパスワード `host` を入力する。
-4. ホストで「説明」→「受付」を押す。
-5. プレイヤーでチケットを購入する。
-6. ホストで「締切」を押し、15秒後または「集計」で結果を出す。
-7. `?view=screen` でカウントダウン、結果発表、ランキングを確認する。
-8. 結果発表中、未到達の強制下車階が赤背景にならず、階数・かご・プレイヤー状態が列分離されて重ならないことを確認する。
-9. 結果発表の最終階到達後、Screen端末で画面を自由にスクロールできることを確認する。
-10. Player画面では、Screenの最終階演出が終わるまでステージ結果が表示されず、結果発表中の案内だけが出ることを確認する。
-11. 中間ランキングでPlayerの「次へ」を押さずにHostが次ステージへ進んでも、Player画面はランキングのまま残ることを確認する。「次へ」を押すとホストの現在状態へ追従することを確認する。
-12. Host受付中の参加者一覧に、各プレイヤーの現在Skillが表示されることを確認する。
-13. `?view=settings` でUUIDコピー、名前変更、通信ログを確認する。
-14. `?view=history` で累積ランキングと個人統計を確認する。
-15. 最終結果後にHostで次ゲーム設定JSONをImportし、参加者が残り、得点がリセットされ、Historyに前ゲームの戦歴が残ることを確認する。
-16. GAS版ではHostで `game_configs` 候補を読み込み、ACTIVEな候補だけが表示されることを確認する。
-17. 候補から次ゲームを開始し、Playerは最終結果から自動遷移せず、「次ゲームへ」を押した時だけ新ゲームへ追従することを確認する。
-18. Screenは最終結果表示を維持し、新しい `gameId` を検出した後に次ゲームへ切り替わることを確認する。
-19. 1ステージ以上を集計後、最終結果前にHostで「中断して開始」を実行し、集計済みステージだけが戦歴に残ることを確認する。
-20. Screenで `assets/audio/` に音声ファイルを配置し、フェーズBGM、締切SE、乗車/上昇/下車/強制下車SEが発火することを確認する。
+Playwrightで独立したHost、Player A、Player B、Screen contextを使う。
 
-## GAS確認
+1. Host allowlist uidでログインし、Player A/Bが匿名ログインして参加する。
+2. Hostがステージ説明、投票開始、締切、結果発表、ランキング、次ステージ/最終結果を進める。
+3. Playerはticketを送信し、結果発表後に本人のscore/StageSkill/現在Skillを確認する。
+4. Playerがランキングに留まるボタンを押さなくても、Hostの次フェーズへ自動追従することを確認する。
+5. Screenでカウントダウン、結果発表、音声トリガー、最終階後のスクロールを確認する。
+6. タイトル/公開履歴には公開サマリだけが見え、Player AからPlayer Bの個人詳細が読めないことを確認する。
+7. final後にHostがRTDBのACTIVEな次ゲーム候補を選び、同日ticket提出者だけが継続することを確認する。
 
-Apps Script上で以下を確認する。
+## GAS archive確認
 
-1. `setupElevatorGameSheets()` が必要なシートとヘッダーを作成し、`apiKey` にデプロイIDを設定する。
-2. `config` シートの `hostPassword` を本番値へ変更する。
-3. `getClientConfigSnippet()` が、デプロイURLとデプロイIDを含む `config.js` 内容を返す。
-4. `/api/host/auth` で `hostToken` を取得でき、`hostToken` なしの `/api/host/*` が拒否される。
-5. `hostPassword` がSpreadsheet上で数値セルになっていても、同じ数字の入力でHost認証できる。
-6. `doPost` に `/api/player/join` 相当のpayloadを渡して参加登録できる。
-7. `doPost` に `/api/ticket/submit` 相当のpayloadを渡して投票できる。
-8. ホスト進行APIで集計後、`current_game` のチャンクJSONと `players` シートが更新される。
-9. 最終結果後、`save_data`、`stage_results`、`stage_settings`、`game_history` が更新される。
-10. `game_configs` のACTIVE候補だけがHostに表示される。
-11. `configId` 指定で次ゲームが開始され、前ゲーム参加者は画面に自動表示されず、同じ候補を再利用してもgameId衝突時に `_2`, `_3` が付く。
-12. 進行途中で「中断して開始」を実行すると、集計済みステージだけが履歴保存され、サマリに `interrupted=true` が残る。
-13. Host画面を開いたまま `hostToken` 期限が切れると、パスワード入力画面に戻り再認証できる。
-14. UUID復元で、現在ゲーム外の過去UUIDから名前とSkill履歴を復元できる。
-15. 参加登録前Player画面と未認証Host画面で定期ポーリングが発生しない。
-16. Apps Script実行ログにpath、role、uuid、処理時間、エラー種別がJSONで残る。
-17. `/api/status` に現在の `roomVersion` を渡すと `unchanged` が返り、フルルームが返らない。
-18. `/api/host/commit-result` がHostブラウザで計算した結果roomを保存し、バージョン不一致と二重集計を拒否する。
-19. 同一端末Screen同期モードで、Host操作後にGASポーリングなしでScreenが更新される。
-20. 参加登録、Host認証、投票、戦績取得中に読み込み表示が出て、通信中は追加操作できない。
-21. 同一ゲーム・同一ステージ・同一結果数では、Player本人の個人戦績がローカルキャッシュから表示される。
-22. Host/Screen画面の起動時に、Player UUIDが保存済みでも `/api/player/restore` が送られない。
-23. `v=player`、`view=player`、URLパラメータなしのPlayer入口でHost/Screenタブに遷移できない。
-24. 認証済みHost画面で、締切カウントダウンと移動中演出終了後に単一の「次へ」ボタンで結果発表へ進める。
-25. 結果発表演出の最終階到達後、Hostがランキングへ進める前にPlayerで個人結果を表示できる。
-26. Player入力欄フォーカス中に状態ポーリング再描画で入力が消えない。
-27. History画面で全員ランキングは見えるが、個人詳細は本人UUIDの端末だけ表示される。
-28. GAS通信失敗時に最大3回まで短いリトライが行われ、通信ログに `api.retry` が残る。
-29. Playerが中間ランキング表示中にページをリロードしても、同じランキング画面に戻る。
-30. Playerが「次へ」を押さないままHostが次ステージへ進めても、Playerはランキング画面のまま残る。
-31. その後Playerが「次へ」を押すとHostの現在フェーズへ追従し、新ゲーム開始後は古いランキング保持が復元されない。
-32. Player最終結果画面で「次ゲームへ」を押すまで新ゲームへ遷移せず、押下後にHostの新ゲームへ追従する。
+1. finalまたは中断後のarchive payloadが `archiveId` と `gameId` を含むことを確認する。
+2. 同一archiveIdの再送がSpreadsheetの `save_data`、`stage_results`、`stage_settings`、`game_history` を二重作成しないことを確認する。
+3. `archive_log` に成功・失敗・エラーが残り、失敗時にRTDBの `archive.status=failed` と再送導線が表示されることを確認する。
+4. GAS停止中でも、RTDBだけで進行中ゲームを最後まで完走できることを確認する。
 
-## 残テスト
+## 負荷・実機テスト
 
-- 実GAS Web App URLでのCORS/認証/パスルーティング確認。
-- 100人規模のポーリング負荷試験。
-- iOS SafariとAndroid Chromeでのタップターゲット、フォーム、localStorage挙動確認。
-- スクリーン音声素材追加後の自動再生制限確認。
+- 50 Player bot + Host + Screenで、同時接続、ticket submit、phase transition、Screen/Player反映遅延、RTDB download bytes、Rules拒否数を測定する。
+- 100人同時接続の目標を満たせない場合は、購読粒度を見直し、SparkからBlazeへの移行を判定する。
+- iOS Safari、Android Chrome、主要PCブラウザで匿名Auth、RTDB再接続、フォーム、音声の自動再生制限を確認する。

@@ -14,6 +14,7 @@
       this.getRole = options.getRole || (() => "player");
       this.getUuid = options.getUuid || (() => "");
       this.log = options.log || (() => {});
+      this.onServerTimeOffset = options.onServerTimeOffset || (() => {});
       this.channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(CHANNEL_NAME) : null;
       this.roomId = cleanKey(this.config.FIREBASE_ROOM_ID || "elevator-game-live");
       this.auth = loadJson(AUTH_KEY, null);
@@ -29,6 +30,7 @@
         lastRulesError: "",
         lastTransactionPublic: null,
         subscriptionErrors: {},
+        serverTimeOffsetMs: 0,
       };
     }
 
@@ -67,6 +69,19 @@
       this.auth = { uid: user.uid, idToken: await user.getIdToken(), mock: false };
       localStorage.setItem(AUTH_KEY, JSON.stringify(this.auth));
       this.firebaseDb = sdk.getDatabase(this.firebaseApp);
+      this.serverTimeOffsetUnsubscribe = sdk.onValue(
+        sdk.ref(this.firebaseDb, "/.info/serverTimeOffset"),
+        (snapshot) => {
+          const offset = Number(snapshot.val() || 0);
+          this.debug.serverTimeOffsetMs = Number.isFinite(offset) ? offset : 0;
+          this.onServerTimeOffset(this.debug.serverTimeOffsetMs);
+        },
+        (error) => {
+          const message = error && error.message ? error.message : String(error || "server time offset subscription failed");
+          this.debug.subscriptionErrors[".info/serverTimeOffset"] = message;
+          this.log("firebase.server-time.error", { message });
+        }
+      );
       if (this.getRole() === "host") {
         this.debug.isHostAllowed = await this.isHostAllowed();
       }
@@ -101,6 +116,7 @@
       const unsubscribers = [];
       const initializedBasePaths = new Set();
       let stageUnsubscribers = [];
+      let lobbyHistoryUnsubscribe = null;
       let currentStageId = "";
       this.debug = {
         basePaths: firebaseBaseSubscriptionPaths(this.getRole(), this.auth.uid, this.mock || this.getRole() !== "host" || this.debug.isHostAllowed),
@@ -111,6 +127,7 @@
         lastRulesError: this.debug.lastRulesError || "",
         lastTransactionPublic: this.debug.lastTransactionPublic || null,
         subscriptionErrors: Object.assign({}, this.debug.subscriptionErrors || {}),
+        serverTimeOffsetMs: Number(this.debug.serverTimeOffsetMs || 0),
       };
       const handleSubscriptionError = (path, error) => {
         const message = error && error.message ? error.message : String(error || "subscription failed");
@@ -128,6 +145,7 @@
           if (path === `roles/hosts/${this.auth.uid}`) this.debug.isHostAllowed = snapshot.val() === true;
           initializedBasePaths.add(path);
           updateStageSubscriptions();
+          updateLobbyHistorySubscription();
           emit();
         }, (error) => handleSubscriptionError(path, error));
         unsubscribers.push(unsubscribe);
@@ -156,8 +174,27 @@
         );
         this.debug.stagePaths.forEach(attachStage);
       };
+      const updateLobbyHistorySubscription = () => {
+        if (this.getRole() !== "player") return;
+        const shouldListen = Boolean(nodes.public && nodes.public.phase === "lobby");
+        if (shouldListen && !lobbyHistoryUnsubscribe) {
+          lobbyHistoryUnsubscribe = this.sdk.onValue(
+            this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/historyPlayers`),
+            (snapshot) => {
+              nodes.historyPlayers = snapshot.val();
+              emit();
+            },
+            (error) => handleSubscriptionError("historyPlayers", error)
+          );
+        } else if (!shouldListen && lobbyHistoryUnsubscribe) {
+          lobbyHistoryUnsubscribe();
+          lobbyHistoryUnsubscribe = null;
+          delete nodes.historyPlayers;
+        }
+      };
       this.debug.basePaths.forEach(attach);
       return () => {
+        if (lobbyHistoryUnsubscribe) lobbyHistoryUnsubscribe();
         stageUnsubscribers.forEach((unsubscribe) => unsubscribe());
         unsubscribers.forEach((unsubscribe) => unsubscribe());
       };
@@ -176,25 +213,60 @@
         lastRulesError: this.debug.lastRulesError || "",
         lastTransactionPublic: this.debug.lastTransactionPublic || null,
         subscriptionErrors: Object.assign({}, this.debug.subscriptionErrors || {}),
+        serverTimeOffsetMs: Number(this.debug.serverTimeOffsetMs || 0),
       };
+    }
+
+    serverNowIso() {
+      return new Date(Date.now() + Number(this.debug.serverTimeOffsetMs || 0)).toISOString();
     }
 
     async get(path, payload) {
       await this.init();
+      payload = payload || {};
+      if (path === "/api/host/game-configs") {
+        const hostAuth = this.verifyHost(payload.hostToken);
+        if (!hostAuth.ok) return hostAuth;
+        if (!(await this.isHostAllowed())) return { ok: false, code: "auth", error: "このFirebase uidはHost allowlistに登録されていません。" };
+        return {
+          ok: true,
+          configs: await this.readGameConfigs(),
+          serverTime: nowIso(),
+        };
+      }
+      if (path.indexOf("/api/history/game/") === 0) {
+        const gameId = cleanKey(path.split("/").pop());
+        if (!gameId) return { ok: false, code: "bad_request", error: "gameIdを指定してください。" };
+        const hostAuth = this.verifyHost(payload.hostToken);
+        const canReadHostDetail = hostAuth.ok && await this.isHostAllowed();
+        const game = await this.readCompletedGameDetail(gameId, canReadHostDetail);
+        return game
+          ? { ok: true, game, detailScope: canReadHostDetail ? "host" : "public" }
+          : { ok: false, code: "not_found", error: "ゲーム履歴が見つかりません。" };
+      }
+      if (path.indexOf("/api/history/player-master/") === 0) {
+        const uuid = path.split("/").pop();
+        if (!uuid || uuid !== this.auth.uid || uuid !== payload.uuid) {
+          return { ok: false, code: "forbidden", error: "自分自身の戦績のみ取得できます。" };
+        }
+        const player = await this.readRootPlayer(uuid);
+        return player ? { ok: true, player: masterPlayerForHistory(uuid, player) } : { ok: false, code: "not_found", error: "UUIDが見つかりません。" };
+      }
+      if (path === "/api/history/games" && payload.includeDetail && (payload.detailGameId || payload.gameId)) {
+        const gameId = cleanKey(payload.detailGameId || payload.gameId);
+        const hostAuth = this.verifyHost(payload.hostToken);
+        const canReadHostDetail = hostAuth.ok && await this.isHostAllowed();
+        const detail = await this.readCompletedGameDetail(gameId, canReadHostDetail);
+        return detail
+          ? { ok: true, detail, game: detail, detailScope: canReadHostDetail ? "host" : "public" }
+          : { ok: false, code: "not_found", error: "ゲーム履歴が見つかりません。" };
+      }
       const room = await this.readRoom();
       if (!room) {
         return { ok: false, code: "not_initialized", error: "ゲームルームがまだ初期化されていません。Hostで認証してください。" };
       }
       if (path === "/api/status" || path === "/api/room/state" || path === "/api/screen/state") {
         return this.publicStatus(room, payload || {});
-      }
-      if (path === "/api/host/game-configs") {
-        return {
-          ok: true,
-          configs: [],
-          serverTime: nowIso(),
-          message: "Firebase版では次ゲーム候補の読み込みは未対応です。設定JSON Importを使用してください。",
-        };
       }
       if (path === "/api/history/games") {
         return this.historyGames(room, payload || {});
@@ -229,15 +301,15 @@
       } else if (path === "/api/player/rename") {
         result = this.engine.renamePlayer(room, payload.uuid, payload.name);
       } else if (path === "/api/ticket/submit") {
-        result = this.engine.submitTicket(room, payload.uuid, payload.ticket || payload);
+        result = this.engine.submitTicket(room, payload.uuid, payload.ticket || payload, this.serverNowIso());
       } else if (path === "/api/ticket/abstain") {
-        result = this.engine.abstain(room, payload.uuid);
+        result = this.engine.abstain(room, payload.uuid, this.serverNowIso());
       } else if (path === "/api/host/commit-result") {
         result = this.commitHostResult(room, payload.room, payload.baseVersion);
       } else if (path === "/api/host/remove-player") {
         result = this.engine.removePlayerFromRoom(room, payload.uuid, payload.hostName || "host");
       } else if (path === "/api/host/import-config") {
-        result = { ok: true, room: room.players.length || Object.keys(room.stageResults || {}).length ? this.engine.createNextGameRoom(room, payload.config) : this.engine.createInitialRoom(payload.config) };
+        result = { ok: true, room: room.players.length || Object.keys(room.stageResults || {}).length ? this.engine.createNextGameRoom(room, payload.config, this.serverNowIso()) : this.engine.createInitialRoom(payload.config) };
       } else if (path === "/api/host/update-config") {
         const next = this.engine.deepClone(room);
         next.config = this.engine.normalizeConfig(payload.config);
@@ -245,13 +317,15 @@
         next.updatedAt = nowIso();
         result = { ok: true, room: next };
       } else if (path === "/api/host/start-game-config") {
-        result = { ok: false, code: "not_supported", error: "Firebase Spark版では事前登録ゲーム設定の開始は未実装です。" };
+        result = payload.config
+          ? { ok: true, room: room.players.length || Object.keys(room.stageResults || {}).length ? this.engine.createNextGameRoom(room, payload.config, this.serverNowIso()) : this.engine.createInitialRoom(payload.config) }
+          : { ok: false, code: "not_found", error: "次ゲーム設定が見つかりません。" };
       } else if (path.indexOf("/api/host/") === 0) {
         const hostAuth = this.verifyHost(payload.hostToken);
         if (!hostAuth.ok) return hostAuth;
         const hostAction = hostActionFromPath(path);
         if (!hostAction) return { ok: false, code: "not_found", error: `Unknown endpoint: ${path}` };
-        result = this.engine.advancePhase(room, hostAction, payload.hostName || "host");
+        result = this.engine.advancePhase(room, hostAction, payload.hostName || "host", this.serverNowIso());
       } else {
         result = { ok: false, code: "not_found", error: `Unknown endpoint: ${path}` };
       }
@@ -264,7 +338,55 @@
       if (!(await this.isHostAllowed())) {
         return { ok: false, code: "auth", error: "このFirebase uidはHost allowlistに登録されていません。" };
       }
-      const room = await this.readRoom();
+      if (path === "/api/host/save-game-config") {
+        const config = this.engine.normalizeConfig(payload.config || this.engine.DEFAULT_CONFIG);
+        const configId = cleanKey(payload.configId || config.gameMeta && (config.gameMeta.configId || config.gameMeta.title) || `config-${Date.now()}`);
+        const node = {
+          configId,
+          name: String(payload.name || config.gameMeta && config.gameMeta.title || configId).slice(0, 80),
+          status: payload.status === "INACTIVE" ? "INACTIVE" : "ACTIVE",
+          stageCount: (config.stages || []).length,
+          updatedAt: nowIso(),
+          config,
+        };
+        await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/nextGameConfigs/${configId}`), node);
+        return { ok: true, config: node, configs: await this.readGameConfigs() };
+      }
+      if (path === "/api/host/delete-game-config") {
+        const configId = cleanKey(payload.configId);
+        if (!configId) return { ok: false, code: "bad_request", error: "configIdを指定してください。" };
+        await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/nextGameConfigs/${configId}`), null);
+        return { ok: true, configs: await this.readGameConfigs() };
+      }
+      if (path === "/api/host/archive-current") {
+        const archiveRoom = await this.readRestRoom({ purpose: "mutation", includeCompletedGames: true });
+        const game = this.engine.archiveCurrentGame(archiveRoom);
+        if (!game) return { ok: false, code: "not_ready", error: "アーカイブできる集計済みステージがありません。" };
+        return this.exportArchiveGame(game, archiveRoom);
+      }
+      if (path === "/api/host/archive-retry") {
+        const archiveSnapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/archive`));
+        const archiveState = archiveSnapshot.exists() ? archiveSnapshot.val() || {} : {};
+        const gameId = cleanKey(payload.gameId || archiveState.gameId);
+        if (!gameId) return { ok: false, code: "not_found", error: "再送対象のgameIdがありません。" };
+        const gameSnapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/completedGameDetails/${gameId}`));
+        if (!gameSnapshot.exists()) return { ok: false, code: "not_found", error: "再送対象の完了ゲームが見つかりません。" };
+        return this.exportArchiveGame(normalizeCompletedGame(gameSnapshot.val()), null, archiveState.archiveId);
+      }
+      if (path === "/api/host/archive-recalculate") {
+        return this.callArchiveApi("/api/archive/recalculate", {
+          gameId: payload.gameId || "",
+        });
+      }
+      if (path === "/api/host/start-game-config") {
+        const configId = cleanKey(payload.configId);
+        const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/nextGameConfigs/${configId}`));
+        if (!snapshot.exists() || !snapshot.val() || snapshot.val().status !== "ACTIVE") {
+          return { ok: false, code: "not_found", error: "有効な次ゲーム設定が見つかりません。" };
+        }
+        payload = Object.assign({}, payload, { config: snapshot.val().config });
+      }
+      const room = await this.readRestRoom({ purpose: "mutation", includeCompletedGames: ["/api/host/import-config", "/api/host/start-game-config"].includes(path) });
       if (!room && path !== "/api/host/import-config" && path !== "/api/host/update-config") {
         return { ok: false, code: "not_initialized", error: "ゲームルームがまだ初期化されていません。Host認証をやり直してください。" };
       }
@@ -272,26 +394,46 @@
       const result = this.applyMutation(path, payload, currentRoom);
       if (!result.ok) return result;
 
-      if (path === "/api/host/import-config" || path === "/api/host/update-config") {
-        const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom);
+      if (path === "/api/host/import-config" || path === "/api/host/start-game-config" || path === "/api/host/update-config") {
+        const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom, this.serverNowIso());
+        const currentGameAlreadyArchived = (currentRoom.completedGames || []).some((game) => game.gameId === currentRoom.gameId);
+        const archivedGame = !currentGameAlreadyArchived && (path === "/api/host/import-config" || path === "/api/host/start-game-config")
+          ? (nextRoom.completedGames || []).find((game) => game.gameId === currentRoom.gameId)
+          : null;
+        if (archivedGame) nextRoom.archive = queuedArchiveState(this.roomId, archivedGame.gameId);
         await this.writeRestRoomChildren(nextRoom, {
           previousRoom: currentRoom,
-          clearVolatile: path === "/api/host/import-config",
+          clearVolatile: path === "/api/host/import-config" || path === "/api/host/start-game-config",
+          includeRootPlayers: true,
         });
-        if (path === "/api/host/import-config") await this.writeRootPlayersFromRoom(nextRoom);
+        if (archivedGame) {
+          const archiveResult = await this.exportArchiveGame(archivedGame, currentRoom, nextRoom.archive.archiveId);
+          nextRoom.archive = archiveResult.archive || nextRoom.archive;
+        }
         return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload).room });
       }
 
-      const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom);
-      const transition = await this.commitPublicTransition(currentRoom, nextRoom);
+      const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom, this.serverNowIso());
+      const finalizedGame = path === "/api/host/advance" &&
+        currentRoom.phase !== this.engine.PHASES.FINAL &&
+        nextRoom.phase === this.engine.PHASES.FINAL
+        ? this.engine.archiveCurrentGame(nextRoom, this.serverNowIso())
+        : null;
+      if (finalizedGame) {
+        nextRoom.completedGames = (nextRoom.completedGames || []).concat(finalizedGame);
+        nextRoom.archive = queuedArchiveState(this.roomId, finalizedGame.gameId);
+      }
+      const transition = await this.commitHostAtomicUpdate(path, currentRoom, nextRoom);
       if (!transition.ok) return transition;
-      await this.writeHostSideEffects(path, currentRoom, nextRoom);
-      const refreshed = await this.readRoom();
-      return Object.assign({}, result, { room: this.publicRoom(refreshed || nextRoom, payload).room });
+      if (finalizedGame) {
+        const archiveResult = await this.exportArchiveGame(finalizedGame, nextRoom, nextRoom.archive.archiveId);
+        nextRoom.archive = archiveResult.archive || nextRoom.archive;
+      }
+      return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload).room });
     }
 
     async postRestPlayer(path, payload) {
-      const room = await this.readRoom();
+      const room = await this.readRestRoom({ purpose: "mutation" });
       if (!room) return { ok: false, code: "not_initialized", error: "ゲームルームがまだ初期化されていません。" };
       const requestedUuid = String(payload && payload.uuid || this.auth.uid || "").trim();
       if (requestedUuid && requestedUuid !== this.auth.uid) {
@@ -318,10 +460,10 @@
       if (!result.ok) return result;
       const updates = playerUpdates(path, result.room, this.auth.uid);
       if (!Object.keys(updates).length) return { ok: false, code: "not_supported", error: "この操作はFirebase Player更新に未対応です。" };
-      await this.writeRestChildUpdates(updates);
       if (["/api/player/join", "/api/player/restore", "/api/player/rename"].includes(path) && result.player) {
         await this.writeRootPlayer(result.player);
       }
+      await this.writeRestChildUpdates(updates);
       return Object.assign({}, result, { room: this.publicRoom(result.room, playerPayload) });
     }
 
@@ -362,6 +504,7 @@
           await this.writeRestRoomChildren(initializedRoom(this.engine, this.roomId));
         } else {
           await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta/updatedAt`), nowIso());
+          await this.backfillHistoryIndexes();
         }
         return;
       }
@@ -401,11 +544,10 @@
       next.roomId = room.roomId;
       next.gameId = room.gameId;
       next.config = room.config;
-      next.players = room.players;
       next.tickets = room.tickets;
       next.completedGames = room.completedGames || [];
       next.operations = room.operations || [];
-      next.operations.unshift({ at: nowIso(), actor: "host", action: "firebase-commit-result" });
+      next.operations.unshift({ at: this.serverNowIso(), actor: "host", action: "firebase-commit-result" });
       touch(next);
       return { ok: true, room: next, result: next.stageResults[stage.stageId] };
     }
@@ -499,8 +641,12 @@
       return { ok: true };
     }
 
-    async readRestRoom() {
-      const base = await this.readRestNodes(restBaseReadPaths(this.getRole(), this.auth.uid, this.mock || this.getRole() !== "host" || this.debug.isHostAllowed));
+    async readRestRoom(options = {}) {
+      const hostAllowed = this.mock || this.getRole() !== "host" || this.debug.isHostAllowed;
+      const paths = options.purpose === "mutation"
+        ? restMutationBaseReadPaths(this.getRole(), this.auth.uid, hostAllowed, Boolean(options.includeCompletedGames))
+        : restBaseReadPaths(this.getRole(), this.auth.uid, hostAllowed);
+      const base = await this.readRestNodes(paths);
       if (!base.public) return null;
       if (base.roles && base.roles.hosts && base.roles.hosts[this.auth.uid]) this.debug.isHostAllowed = true;
       const stageId = currentStageIdFromNodes(base);
@@ -514,6 +660,84 @@
         mergeNodes(base, stage);
       }
       return roomFromFirebaseNodes(base, this.engine);
+    }
+
+    async readGameConfigs() {
+      const normalize = (item) => Object.assign({}, item, {
+        title: item && item.config && item.config.gameMeta && item.config.gameMeta.title || item && item.name || "",
+        stageCount: Number(item && item.stageCount || item && item.config && item.config.stages && item.config.stages.length || 0),
+        stageNames: (item && item.config && item.config.stages || []).map((stage) => stage.name || stage.stageId),
+        valid: Boolean(item && item.config && item.config.stages && item.config.stages.length),
+      });
+      if (this.mock) {
+        const room = this.readMockRoom();
+        return Object.values(room && room.nextGameConfigs || {}).filter((item) => item && item.status !== "INACTIVE").map(normalize);
+      }
+      const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/nextGameConfigs`));
+      return Object.values(snapshot.exists() ? snapshot.val() || {} : {})
+        .filter((item) => item && item.status !== "INACTIVE")
+        .map(normalize)
+        .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    }
+
+    async readCompletedGameDetail(gameId, hostDetail) {
+      if (this.mock) {
+        const room = this.readMockRoom();
+        const game = (room && room.completedGames || []).find((item) => item.gameId === gameId);
+        return hostDetail ? game || null : completedGamePublicDetailNode(game);
+      }
+      const path = hostDetail ? "completedGameDetails" : "completedGamePublicDetails";
+      const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}/${gameId}`));
+      return snapshot.exists() ? normalizeCompletedGame(snapshot.val()) : null;
+    }
+
+    async exportArchiveGame(game, sourceRoom, archiveId) {
+      const queued = queuedArchiveState(this.roomId, game.gameId, archiveId);
+      await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/archive`), queued);
+      const archive = buildArchivePayload(game, sourceRoom, queued.archiveId);
+      const response = await this.callArchiveApi("/api/archive/export", { archive });
+      const status = {
+        requestedAt: queued.requestedAt,
+        completedAt: nowIso(),
+        status: response && response.ok && response.status === "exported" ? "exported" : "failed",
+        archiveId: queued.archiveId,
+        gameId: game.gameId,
+        error: response && response.ok ? "" : response && (response.error || response.message) || "アーカイブ送信に失敗しました。",
+      };
+      if (response && response.exportedAt) status.exportedAt = response.exportedAt;
+      await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/archive`), status);
+      return Object.assign({}, response, { ok: status.status === "exported", archive: status });
+    }
+
+    async callArchiveApi(path, payload) {
+      const url = String(this.config.FIREBASE_ARCHIVE_GAS_URL || "").trim();
+      if (!url) {
+        return { ok: false, status: "failed", error: "FIREBASE_ARCHIVE_GAS_URLが未設定です。" };
+      }
+      if (!this.mock && this.firebaseAuth && this.firebaseAuth.currentUser) {
+        try {
+          this.auth.idToken = await this.firebaseAuth.currentUser.getIdToken(true);
+        } catch (error) {
+          return { ok: false, status: "failed", error: `Firebase ID tokenを更新できません: ${error.message}` };
+        }
+      }
+      const request = Object.assign({}, payload || {}, {
+        path,
+        apiKey: this.config.FIREBASE_ARCHIVE_API_KEY || "",
+        firebaseIdToken: this.auth && this.auth.idToken || "",
+        roomId: this.roomId,
+      });
+      try {
+        const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}path=${encodeURIComponent(path)}`, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify(request),
+        });
+        if (!response.ok) return { ok: false, status: "failed", error: `Archive HTTP ${response.status}` };
+        return await response.json();
+      } catch (error) {
+        return { ok: false, status: "failed", error: error && error.message ? error.message : String(error) };
+      }
     }
 
     async readRestNodes(paths) {
@@ -561,11 +785,17 @@
       });
       if (publicNode) writes.push(["public", publicNode]);
       if (this.sdk.update) {
+        const rootUpdate = Boolean(options.includeRootPlayers);
         const updates = writes.reduce((acc, [path, value]) => {
-          acc[path] = value;
+          acc[rootUpdate ? `rooms/${this.roomId}/${path}` : path] = value;
           return acc;
         }, {});
-        await this.sdk.update(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`), updates);
+        if (rootUpdate) {
+          (room.players || []).filter((player) => player && player.uuid).forEach((player) => {
+            updates[`players/${player.uuid}`] = rootPlayerNode(player, this.roomId);
+          });
+        }
+        await this.sdk.update(this.sdk.ref(this.firebaseDb, rootUpdate ? "/" : `/rooms/${this.roomId}`), updates);
         return { ok: true };
       }
       for (const [path, value] of writes) {
@@ -605,6 +835,18 @@
       await Promise.all(players.map((player) => this.writeRootPlayer(player)));
     }
 
+    async backfillHistoryIndexes() {
+      const room = await this.readRestRoom({ purpose: "mutation", includeCompletedGames: true });
+      if (!room) return;
+      const nodes = roomToFirebaseNodes(room);
+      await this.sdk.update(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`), {
+        historyPlayers: emptyObjectToNull(nodes.historyPlayers),
+        completedGameSummaries: emptyObjectToNull(nodes.completedGameSummaries),
+        completedGamePublicDetails: emptyObjectToNull(nodes.completedGamePublicDetails),
+        completedGamePlayerDetails: emptyObjectToNull(nodes.completedGamePlayerDetails),
+      });
+    }
+
     async isHostAllowed() {
       if (this.mock) return true;
       const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/roles/hosts/${this.auth.uid}`));
@@ -636,6 +878,38 @@
       } catch (error) {
         this.debug.lastRulesError = error.message || String(error);
         return { ok: false, code: "rules", error: error.message || "Firebase Rulesにより更新が拒否されました。" };
+      }
+    }
+
+    async commitHostAtomicUpdate(path, currentRoom, nextRoom) {
+      const updates = hostAtomicUpdates(path, currentRoom, nextRoom, this.roomId, this.engine);
+      try {
+        await this.sdk.update(this.sdk.ref(this.firebaseDb, "/"), updates);
+        this.debug.lastTransactionPublic = compactStatus(nextRoom);
+        return { ok: true };
+      } catch (error) {
+        this.debug.lastRulesError = error && error.message ? error.message : String(error);
+        let actualPublic = null;
+        try {
+          const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/public`));
+          actualPublic = snapshot.exists() ? snapshot.val() : null;
+          this.debug.lastTransactionPublic = actualPublic;
+        } catch (readError) {
+          this.log("firebase.atomic-refresh.error", { message: readError && readError.message ? readError.message : String(readError) });
+        }
+        const conflict = actualPublic && !publicMatches(actualPublic, compactStatus(currentRoom));
+        return {
+          ok: false,
+          code: conflict ? "version_conflict" : "rules_or_conflict",
+          error: conflict
+            ? "DB上のフェーズまたはバージョンが更新されています。再読み込みしてください。"
+            : (this.debug.lastRulesError || "Firebase Rulesにより原子的更新が拒否されました。"),
+          debug: {
+            expectedPublic: compactStatus(currentRoom),
+            attemptedPublic: compactStatus(nextRoom),
+            actualPublic,
+          },
+        };
       }
     }
 
@@ -704,8 +978,10 @@
       ticketPresence: ticketPresence(room, stage && stage.stageId),
       results: room.stageResults || {},
       completedGameSummaries: keyBy(completedGameSummaries(room.completedGames || []), "gameId", (summary) => summary),
+      completedGamePublicDetails: keyBy(room.completedGames || [], "gameId", completedGamePublicDetailNode),
       completedGameDetails: keyBy(room.completedGames || [], "gameId", completedGameDetailNode),
       completedGamePlayerDetails: completedGamePlayerDetails(room.completedGames || []),
+      historyPlayers: keyBy(historyPlayers(room), "profileId", (player) => player),
       scores: Object.keys(room.scores || {}).reduce((acc, uuid) => {
         acc[uuid] = { total: room.scores[uuid], updatedAt: room.updatedAt || nowIso() };
         return acc;
@@ -742,7 +1018,8 @@
         lastSeenAt: player.lastSeenAt || "",
         pendingName: player.pendingName || null,
         skill: Number(stats.currentSkill || 0),
-        stageSkillHistory: Array.isArray(stats.stageSkillHistory) ? stats.stageSkillHistory : Object.values(stats.stageSkillHistory || {}),
+        stageSkillHistory: storedArray(stats.stageSkillHistoryJson, stats.stageSkillHistory).map(Number).filter(Number.isFinite),
+        appliedSkillStageIds: storedArray(stats.appliedSkillStageIdsJson, stats.appliedSkillStageIds).map(String),
       };
     });
     const scores = Object.keys(nodes.scores || {}).reduce((acc, uuid) => {
@@ -760,6 +1037,16 @@
       ? normalizeCompletedGames(nodes.completedGamePlayerDetails[uid] || {})
       : [];
     const completedGames = completedGameDetails.length ? completedGameDetails : mergePersonalGamesWithSummaries(personalCompletedGames, completedGameSummariesValue);
+    const historyPlayersValue = Object.keys(nodes.historyPlayers || {}).map((uuid) => {
+      const player = nodes.historyPlayers[uuid] || {};
+      return {
+        profileId: uuid,
+        name: player.name || uuid,
+        skill: Number(player.currentSkill ?? player.skill ?? 0),
+        currentSkill: Number(player.currentSkill ?? player.skill ?? 0),
+        updatedAt: player.updatedAt || "",
+      };
+    });
     return normalizeRoomShape({
       roomId: nodes.meta && nodes.meta.roomId || fallback.roomId,
       hostUid: firstHostUid(nodes.roles) || (nodes.meta && nodes.meta.hostUid) || "",
@@ -773,6 +1060,7 @@
       scores,
       completedGames,
       completedGameSummaries: completedGameSummariesValue,
+      historyPlayers: historyPlayersValue,
       operations: Object.values(nodes.operations || {}).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))),
       countdownEndsAt: status.countdownEndsAt || null,
       tallyingEndsAt: status.tallyingEndsAt || null,
@@ -811,13 +1099,13 @@
     const common = ["meta", "public", "config", "roomSettings"];
     if (role === "host") {
       if (!hostAllowed) return common.concat([`roles/hosts/${uid}`]);
-      return common.concat([`roles/hosts/${uid}`, "players", "playerStats", "scores", "completedGameSummaries", "completedGameDetails", "operations", "archive"]);
+      return common.concat([`roles/hosts/${uid}`, "players", "playerStats", "scores", "completedGameSummaries", "historyPlayers", "operations", "archive"]);
     }
     if (role === "screen") {
       return common.concat(["players", "scores"]);
     }
     if (role === "history") {
-      return common.concat(["players", `playerStats/${uid}`, "scores", "completedGameSummaries", `completedGamePlayerDetails/${uid}`]);
+      return common.concat(["players", `playerStats/${uid}`, "scores", "completedGameSummaries", "historyPlayers", `completedGamePlayerDetails/${uid}`]);
     }
     return common.concat(["players", `players/${uid}`, `playerStats/${uid}`, `scores/${uid}`, "completedGameSummaries", `completedGamePlayerDetails/${uid}`]);
   }
@@ -840,6 +1128,17 @@
     return firebaseBaseSubscriptionPaths(role, uid, hostAllowed);
   }
 
+  function restMutationBaseReadPaths(role, uid, hostAllowed, includeCompletedGames) {
+    const common = ["meta", "public", "config", "roomSettings"];
+    if (role === "host") {
+      if (!hostAllowed) return common.concat([`roles/hosts/${uid}`]);
+      const paths = common.concat([`roles/hosts/${uid}`, "players", "playerStats", "scores", "historyPlayers", "operations", "archive"]);
+      if (includeCompletedGames) paths.push("completedGameSummaries", "completedGameDetails");
+      return paths;
+    }
+    return common.concat(["players", `playerStats/${uid}`, `scores/${uid}`]);
+  }
+
   function volatileStageIds(room) {
     const ids = new Set(Object.keys(room.tickets || {}));
     Object.keys(room.ticketPresence || {}).forEach((stageId) => ids.add(stageId));
@@ -858,6 +1157,70 @@
       .filter((uuid) => uuid && !nextUids.has(uuid));
   }
 
+  function hostAtomicUpdates(path, currentRoom, nextRoom, roomId, engine) {
+    const updates = {};
+    const nodes = roomToFirebaseNodes(nextRoom);
+    const roomPath = (childPath) => `rooms/${roomId}/${childPath}`;
+    updates[roomPath("public")] = nodes.public;
+    updates[roomPath("meta")] = nodes.meta;
+    updates[roomPath("operations")] = emptyObjectToNull(nodes.operations);
+
+    if (path === "/api/host/commit-result") {
+      const stage = engine.getCurrentStage(currentRoom);
+      const stageId = stage && stage.stageId;
+      if (stageId) updates[roomPath(`results/${stageId}`)] = nodes.results && nodes.results[stageId] || null;
+      updates[roomPath("scores")] = emptyObjectToNull(nodes.scores);
+      updates[roomPath("playerStats")] = emptyObjectToNull(nodes.playerStats);
+      updates[roomPath("historyPlayers")] = emptyObjectToNull(nodes.historyPlayers);
+    }
+
+    if (path === "/api/host/start-stage" || path === "/api/host/advance") {
+      updates[roomPath("players")] = emptyObjectToNull(nodes.players);
+      updates[roomPath("playerStats")] = emptyObjectToNull(nodes.playerStats);
+      updates[roomPath("historyPlayers")] = emptyObjectToNull(nodes.historyPlayers);
+    }
+
+    const completedGameAdded = (nextRoom.completedGames || []).length > (currentRoom.completedGames || []).length;
+    if (completedGameAdded) {
+      updates[roomPath("completedGameSummaries")] = emptyObjectToNull(nodes.completedGameSummaries);
+      updates[roomPath("completedGamePublicDetails")] = emptyObjectToNull(nodes.completedGamePublicDetails);
+      updates[roomPath("completedGameDetails")] = emptyObjectToNull(nodes.completedGameDetails);
+      updates[roomPath("completedGamePlayerDetails")] = emptyObjectToNull(nodes.completedGamePlayerDetails);
+      updates[roomPath("historyPlayers")] = emptyObjectToNull(nodes.historyPlayers);
+      updates[roomPath("archive")] = emptyObjectToNull(nodes.archive);
+    }
+
+    if (path === "/api/host/remove-player") {
+      removedPlayerUids(currentRoom, nextRoom).forEach((uid) => {
+        updates[roomPath(`players/${uid}`)] = null;
+        updates[roomPath(`playerStats/${uid}`)] = null;
+        updates[roomPath(`scores/${uid}`)] = null;
+        Object.keys(currentRoom.tickets || {}).forEach((stageId) => {
+          if (currentRoom.tickets[stageId] && currentRoom.tickets[stageId][uid]) updates[roomPath(`tickets/${stageId}/${uid}`)] = null;
+        });
+        Object.keys(currentRoom.ticketPresence || {}).forEach((stageId) => {
+          if (currentRoom.ticketPresence[stageId] && currentRoom.ticketPresence[stageId][uid]) updates[roomPath(`ticketPresence/${stageId}/${uid}`)] = null;
+        });
+        Object.keys(currentRoom.stageResults || {}).forEach((stageId) => {
+          const currentResult = currentRoom.stageResults[stageId];
+          if (!currentResult || !currentResult.players || !currentResult.players[uid]) return;
+          const nextResult = nextRoom.stageResults && nextRoom.stageResults[stageId] || {};
+          updates[roomPath(`results/${stageId}/players/${uid}`)] = null;
+          updates[roomPath(`results/${stageId}/rankings`)] = nextResult.rankings || [];
+          updates[roomPath(`results/${stageId}/timeline`)] = nextResult.timeline || [];
+          updates[roomPath(`results/${stageId}/stats`)] = nextResult.stats || {};
+        });
+      });
+    }
+
+    if (["/api/host/commit-result", "/api/host/start-stage", "/api/host/advance"].includes(path)) {
+      (nextRoom.players || []).filter((player) => player && player.uuid).forEach((player) => {
+        updates[`players/${player.uuid}`] = rootPlayerNode(player, roomId);
+      });
+    }
+    return updates;
+  }
+
   function normalizeStageResults(results) {
     return Object.keys(results || {}).reduce((acc, stageId) => {
       acc[stageId] = normalizeStageResult(results[stageId]);
@@ -866,13 +1229,15 @@
   }
 
   function normalizeCompletedGames(games) {
-    return Object.values(games || {}).map((game) => {
-      if (!game || typeof game !== "object") return game;
-      const next = Object.assign({}, game);
-      next.rankings = arrayFromFirebase(next.rankings);
-      next.stageResults = normalizeStageResults(next.stageResults || {});
-      return next;
-    });
+    return Object.values(games || {}).map(normalizeCompletedGame);
+  }
+
+  function normalizeCompletedGame(game) {
+    if (!game || typeof game !== "object") return game;
+    const next = Object.assign({}, game);
+    next.rankings = arrayFromFirebase(next.rankings);
+    next.stageResults = normalizeStageResults(next.stageResults || {});
+    return next;
   }
 
   function normalizeCompletedGameSummaries(summaries) {
@@ -897,7 +1262,7 @@
       finishedAt: game.finishedAt || "",
       interrupted: Boolean(game.interrupted),
       finalPhase: game.finalPhase || "",
-      rankings: game.rankings || [],
+      rankings: publicRankingRows(game.rankings || []),
       playerCount: Object.keys(game.scores || {}).length,
       stageCount: Object.keys(stageResults).length,
       stages: Object.keys(stageResults).map((stageId) => ({
@@ -909,6 +1274,167 @@
 
   function completedGameDetailNode(game) {
     return game || null;
+  }
+
+  function completedGamePublicDetailNode(game) {
+    if (!game) return null;
+    const stageResults = Object.keys(game.stageResults || {}).reduce((acc, stageId) => {
+      const stage = game.stageResults[stageId] || {};
+      const rankings = arrayFromFirebase(stage.rankings).length
+        ? arrayFromFirebase(stage.rankings)
+        : Object.values(stage.players || {})
+          .map((player) => ({
+            uuid: player.uuid,
+            name: player.name || player.uuid,
+            score: Number(player.score || 0),
+          }))
+          .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name, "ja"))
+          .map((player, index) => Object.assign({ rank: index + 1 }, player));
+      acc[stageId] = {
+        stageId: stage.stageId || stageId,
+        stageName: stage.stageName || stage.name || stageId,
+        calculatedAt: stage.calculatedAt || "",
+        participantCount: rankings.length,
+        rankings: publicRankingRows(rankings),
+      };
+      return acc;
+    }, {});
+    return {
+      gameId: game.gameId || "",
+      title: game.title || "game",
+      finishedAt: game.finishedAt || "",
+      interrupted: Boolean(game.interrupted),
+      finalPhase: game.finalPhase || "",
+      rankings: publicRankingRows(game.rankings || []),
+      stageResults,
+    };
+  }
+
+  function publicRankingRows(rankings) {
+    return arrayFromFirebase(rankings).map((row) => ({
+      profileId: publicProfileId(row && (row.uuid || row.uid || row.profileId) || ""),
+      name: String(row && row.name || "プレイヤー").slice(0, 24),
+      rank: Number(row && row.rank || 0),
+      score: Number(row && (row.score ?? row.totalScore) || 0),
+    }));
+  }
+
+  function publicProfileId(uid) {
+    const value = String(uid || "");
+    let first = 2166136261;
+    let second = 3339675911;
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      first = Math.imul(first ^ code, 16777619);
+      second = Math.imul(second ^ (code + index + 97), 2246822519);
+    }
+    return `p_${(first >>> 0).toString(36)}${(second >>> 0).toString(36)}`;
+  }
+
+  function queuedArchiveState(roomId, gameId, archiveId) {
+    return {
+      requestedAt: nowIso(),
+      status: "queued",
+      archiveId: archiveId || cleanKey(`archive-${roomId}-${gameId}`),
+      gameId: gameId || "",
+      error: "",
+    };
+  }
+
+  function buildArchivePayload(game, room, archiveId) {
+    const roomPlayers = room && room.players || [];
+    const rankingPlayers = (game.rankings || []).map((ranking) => ({
+      uuid: ranking.uuid,
+      name: ranking.name || ranking.uuid,
+      skill: Number(ranking.currentSkill ?? ranking.skill ?? 0),
+      stageSkillHistory: [],
+    }));
+    const players = (roomPlayers.length ? roomPlayers : rankingPlayers).map((player) => ({
+      uuid: player.uuid,
+      name: player.name || player.uuid,
+      currentSkill: Number(player.skill ?? player.currentSkill ?? 0),
+      stageSkillHistory: player.stageSkillHistory || [],
+    }));
+    const stageResults = game.stageResults || {};
+    const playerSaveData = players.map((player) => {
+      const stages = Object.values(stageResults)
+        .map((stage) => stage.players && stage.players[player.uuid])
+        .filter(Boolean);
+      const answered = stages.flatMap((stage) => stage.predictionBreakdown || []).filter((item) => !item.noAnswer);
+      return {
+        uuid: player.uuid,
+        nameSnapshot: player.name,
+        summary: {
+          currentSkill: player.currentSkill,
+          averageSkill: averageNumbers(player.stageSkillHistory || []),
+          totalSkill: (player.stageSkillHistory || []).reduce((sum, value) => sum + Number(value || 0), 0),
+          bestScore: stages.length ? Math.max(...stages.map((stage) => Number(stage.score || 0))) : 0,
+          gameCount: stages.length ? 1 : 0,
+          stageCount: stages.length,
+          forcedOffCount: stages.filter((stage) => stage.forcedOff).length,
+          predictionAccuracy: answered.length ? answered.filter((item) => item.matched).length / answered.length : null,
+          wins: (game.rankings || []).some((ranking) => ranking.uuid === player.uuid && ranking.rank === 1) ? 1 : 0,
+        },
+      };
+    });
+    return {
+      archiveId: archiveId || cleanKey(`archive-${game.gameId}`),
+      gameId: game.gameId || "",
+      requestedAt: nowIso(),
+      finishedAt: game.finishedAt || "",
+      interrupted: Boolean(game.interrupted),
+      finalPhase: game.finalPhase || "",
+      players,
+      playerSaveData,
+      stageResults,
+      stageSettings: game.config && game.config.stages || room && room.config && room.config.stages || [],
+      gameSummary: completedGameSummaryNode(game),
+      finalRankings: game.rankings || [],
+    };
+  }
+
+  function averageNumbers(values) {
+    const numbers = (values || []).map((value) => Number(value || 0)).filter(Number.isFinite);
+    return numbers.length ? numbers.reduce((sum, value) => sum + value, 0) / numbers.length : 0;
+  }
+
+  function historyPlayers(room) {
+    const players = {};
+    const existing = Array.isArray(room.historyPlayers) ? room.historyPlayers : Object.values(room.historyPlayers || {});
+    existing.forEach((player) => {
+      if (!player) return;
+      const profileId = player.profileId || (player.uuid ? publicProfileId(player.uuid) : "");
+      if (!profileId) return;
+      players[profileId] = {
+        profileId,
+        name: player.name || "プレイヤー",
+        currentSkill: Number(player.currentSkill ?? player.skill ?? 0),
+        updatedAt: player.updatedAt || "",
+      };
+    });
+    (room.completedGames || []).forEach((game) => {
+      (game.rankings || []).forEach((ranking) => {
+        if (!ranking || !ranking.uuid) return;
+        const profileId = publicProfileId(ranking.uuid);
+        players[profileId] = {
+          profileId,
+          name: ranking.name || players[profileId] && players[profileId].name || "プレイヤー",
+          currentSkill: Number(ranking.currentSkill ?? ranking.skill ?? (players[profileId] ? players[profileId].currentSkill : 0)),
+          updatedAt: game.finishedAt || players[profileId] && players[profileId].updatedAt || "",
+        };
+      });
+    });
+    (room.players || []).forEach((player) => {
+      if (!player || !player.uuid) return;
+      const profileId = publicProfileId(player.uuid);
+      players[profileId] = {
+        profileId,
+        name: player.name || player.uuid,
+        currentSkill: Number(player.skill || 0),
+        updatedAt: room.updatedAt || player.lastSeenAt || "",
+      };
+    });
+    return Object.values(players);
   }
 
   function completedGamePlayerDetails(games) {
@@ -933,7 +1459,7 @@
       acc[stageId] = {
         stageId: stageResult.stageId || stageId,
         params: stageResult.params || null,
-        rankings: stageResult.rankings || [],
+        rankings: publicRankingRows(stageResult.rankings || []),
         players: { [uuid]: playerResult },
       };
       return acc;
@@ -945,7 +1471,7 @@
       interrupted: Boolean(game.interrupted),
       finalPhase: game.finalPhase || "",
       scores: { [uuid]: Number((game.scores || {})[uuid] || 0) },
-      rankings: game.rankings || [],
+      rankings: publicRankingRows(game.rankings || []),
       stageResults,
     };
   }
@@ -997,6 +1523,19 @@
       .map((key) => value[key]);
   }
 
+  function storedArray(primary, legacyValue) {
+    const value = primary !== undefined && primary !== null ? primary : legacyValue;
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (error) {
+        return [];
+      }
+    }
+    return arrayFromFirebase(value);
+  }
+
   function setNestedNode(target, path, value) {
     const parts = String(path || "").split("/").filter(Boolean);
     let cursor = target;
@@ -1037,7 +1576,7 @@
     return room;
   }
 
-  function stampHostRoom(room, roomId, previousRoom) {
+  function stampHostRoom(room, roomId, previousRoom, updatedAt) {
     const next = room || {};
     next.roomId = roomId;
     if (previousRoom && next.gameId === previousRoom.gameId) {
@@ -1046,7 +1585,7 @@
     } else {
       next.roomVersion = Number(next.roomVersion || 0);
     }
-    next.updatedAt = nowIso();
+    next.updatedAt = updatedAt || nowIso();
     return next;
   }
 
@@ -1093,11 +1632,24 @@
     return {
       name: player.name || player.uuid,
       currentSkill: Number(player.skill || 0),
-      stageSkillHistory: player.stageSkillHistory || [],
+      stageSkillHistoryJson: JSON.stringify(player.stageSkillHistory || []),
+      appliedSkillStageIdsJson: JSON.stringify(player.appliedSkillStageIds || []),
       joinedAt: player.joinedAt || "",
       lastSeenAt: player.lastSeenAt || nowIso(),
       updatedAt: nowIso(),
       roomId: roomId || "",
+    };
+  }
+
+  function masterPlayerForHistory(uuid, player) {
+    return {
+      uuid,
+      name: player && player.name || uuid,
+      skill: Number(player && (player.currentSkill ?? player.skill) || 0),
+      currentSkill: Number(player && (player.currentSkill ?? player.skill) || 0),
+      stageSkillHistory: normalizeSkillHistory(player && (player.stageSkillHistoryJson ?? player.stageSkillHistory)),
+      appliedSkillStageIds: storedArray(player && player.appliedSkillStageIdsJson, player && player.appliedSkillStageIds).map(String),
+      updatedAt: player && player.updatedAt || "",
     };
   }
 
@@ -1117,7 +1669,8 @@
         connected: true,
         lastSeenAt: nowIso(),
         skill: Number(masterPlayer.currentSkill || masterPlayer.skill || 0),
-        stageSkillHistory: normalizeSkillHistory(masterPlayer.stageSkillHistory),
+        stageSkillHistory: normalizeSkillHistory(masterPlayer.stageSkillHistoryJson ?? masterPlayer.stageSkillHistory),
+        appliedSkillStageIds: storedArray(masterPlayer.appliedSkillStageIdsJson, masterPlayer.appliedSkillStageIds).map(String),
       };
       next.players.push(player);
       next.scores[uid] = next.scores[uid] || 0;
@@ -1127,7 +1680,8 @@
       player.connected = true;
       player.lastSeenAt = nowIso();
       player.skill = Number(masterPlayer.currentSkill || masterPlayer.skill || 0);
-      player.stageSkillHistory = normalizeSkillHistory(masterPlayer.stageSkillHistory);
+      player.stageSkillHistory = normalizeSkillHistory(masterPlayer.stageSkillHistoryJson ?? masterPlayer.stageSkillHistory);
+      player.appliedSkillStageIds = storedArray(masterPlayer.appliedSkillStageIdsJson, masterPlayer.appliedSkillStageIds).map(String);
     }
     next.updatedAt = nowIso();
     return { ok: true, room: next, player };
@@ -1139,13 +1693,14 @@
     const player = (next.players || []).find((item) => item.uuid === uid);
     if (!player) return result;
     player.skill = Number(masterPlayer.currentSkill || masterPlayer.skill || 0);
-    player.stageSkillHistory = normalizeSkillHistory(masterPlayer.stageSkillHistory);
+    player.stageSkillHistory = normalizeSkillHistory(masterPlayer.stageSkillHistoryJson ?? masterPlayer.stageSkillHistory);
+    player.appliedSkillStageIds = storedArray(masterPlayer.appliedSkillStageIdsJson, masterPlayer.appliedSkillStageIds).map(String);
     player.lastSeenAt = nowIso();
     return Object.assign({}, result, { room: next, player });
   }
 
   function normalizeSkillHistory(value) {
-    return arrayFromFirebase(value).map((item) => Number(item || 0)).filter((item) => Number.isFinite(item));
+    return storedArray(value).map((item) => Number(item || 0)).filter((item) => Number.isFinite(item));
   }
 
   function compactStatus(room) {
@@ -1182,7 +1737,8 @@
   function playerStatsNode(player) {
     return {
       currentSkill: Number(player.skill || 0),
-      stageSkillHistory: player.stageSkillHistory || [],
+      stageSkillHistoryJson: JSON.stringify(player.stageSkillHistory || []),
+      appliedSkillStageIdsJson: JSON.stringify(player.appliedSkillStageIds || []),
       updatedAt: player.lastSeenAt || nowIso(),
     };
   }
@@ -1260,6 +1816,7 @@
     room.scores = room.scores || {};
     room.completedGames = Array.isArray(room.completedGames) ? room.completedGames : Object.values(room.completedGames || {});
     room.completedGameSummaries = Array.isArray(room.completedGameSummaries) ? room.completedGameSummaries : Object.values(room.completedGameSummaries || {});
+    room.historyPlayers = Array.isArray(room.historyPlayers) ? room.historyPlayers : Object.values(room.historyPlayers || {});
     room.operations = Array.isArray(room.operations) ? room.operations : Object.values(room.operations || {});
     room.roomVersion = Number(room.roomVersion || 0);
     room.hostUid = room.hostUid || "";
@@ -1374,6 +1931,10 @@
     roomFromFirebaseNodes,
     firebaseBaseSubscriptionPaths,
     firebaseStageSubscriptionPaths,
+    restMutationBaseReadPaths,
+    hostAtomicUpdates,
+    completedGamePublicDetailNode,
+    publicProfileId,
     playerUpdates,
     rootPlayerNode,
     restorePlayerFromMaster,

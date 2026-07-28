@@ -382,3 +382,31 @@ run("tally stores current skill delta per player result", () => {
   assert.strictEqual(typeof alice.skillAfter, "number");
   assert.strictEqual(alice.skillDelta, Number((alice.skillAfter - alice.skillBefore).toFixed(2)));
 });
+
+run("missing reveal result can be recovered idempotently by stage id", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room = Engine.registerPlayer(room, "Bob", "bob").room;
+  const stage = Engine.getCurrentStage(room);
+  room.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {} },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 4, predictions: {} },
+  };
+  room.phase = Engine.PHASES.COUNTDOWN;
+  const first = Engine.tallyCurrentStage(room);
+  assert.strictEqual(first.ok, true);
+  const expectedScores = first.room.scores;
+  const expectedSkills = first.room.players.map((player) => player.stageSkillHistory[0]);
+
+  const stranded = Engine.deepClone(first.room);
+  delete stranded.stageResults[stage.stageId];
+  stranded.scores = { alice: 999, bob: 999 };
+  stranded.phase = Engine.PHASES.REVEAL;
+  const recovered = Engine.tallyCurrentStage(stranded);
+
+  assert.strictEqual(recovered.ok, true, recovered.error);
+  assert.strictEqual(recovered.result.recovered, true);
+  assert.deepStrictEqual(recovered.room.scores, expectedScores);
+  assert.deepStrictEqual(recovered.room.players.map((player) => player.stageSkillHistory), expectedSkills.map((skill) => [skill]));
+  assert.deepStrictEqual(recovered.room.players.map((player) => player.appliedSkillStageIds), [[stage.stageId], [stage.stageId]]);
+});

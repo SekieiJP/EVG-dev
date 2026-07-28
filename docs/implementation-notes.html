@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-07-29 / 対象: <code>docs/elevator-game-requirements.md</code> v1.19</p>
+      <p class="meta">更新日: 2026-07-29 / 対象: <code>docs/elevator-game-requirements.md</code> v1.23</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -348,6 +348,22 @@
           <li><strong>トレードオフ:</strong> 汎用の数式文字列や式パーサーではなく、<code>participantRatio</code>と<code>fullRideTotal</code>という用途別ルールを提案した。将来の自由度は狭いが、入力検証、Firebase Rules、画面説明、再計算の安全性を優先した。</li>
           <li><strong>トレードオフ:</strong> 自動調整だけに固定せず、目標総額による基本入力、自動バランス、シナリオプレビューを組み合わせる案にした。一定水準へ揃えやすくしつつ、高得点の最終ステージなど制作者が意図的に基準を崩せる余地を残す。</li>
           <li><strong>未解決の質問:</strong> 定員割合の丸め、最低定員、途中参加の扱い、得点小数の丸め、均等配分指標の定義、自動バランス基準をゲーム共通にするかステージ別にするかは、実装前に確定が必要。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>2026-07-29 P0 ドキュメント統合</h2>
+        <ul>
+          <li><strong>デザインの決定:</strong> 本番中の正系をFirebase RTDBに固定し、GASとSpreadsheetはfinalまたは中断後のアーカイブだけを担う、と要件・アーキテクチャ・テスト計画を統一した。旧GAS status API、HTTPポーリング、同一端末<code>BroadcastChannel</code>同期は本番経路から除外する。</li>
+          <li><strong>デザインの決定:</strong> Playerはランキング/最終結果で手動の「次へ」を押さず、Hostの単一commandによるRTDB <code>public</code>遷移を購読して自動追従する。localStorageには音量や小さい閲覧設定だけを残し、進行中roomを保存しない。</li>
+          <li><strong>デザインの決定:</strong> 結果確定は、phase transactionの後に<code>results</code>、<code>scores</code>、<code>playerStats</code>、本人履歴、操作ログを1回のmulti-location updateで書く。StageSkill履歴と、最高値を含む上位5件合計の現在Skillも同じcommitに含める。</li>
+          <li><strong>デザインの決定:</strong> 累積戦歴は9指標に統一した。公開履歴は表示名・得点・順位・公開用現在Skillだけとし、ticket、予想、内訳、uid/UUID、StageSkill履歴、個人統計は本人またはHost専用ノードに分ける。</li>
+          <li><strong>デザインの決定:</strong> 時刻同期はRTDBの<code>/.info/serverTimeOffset</code>を用いる。Hostがserver timestamp基準の締切・演出時刻を保存し、各端末は補正済み時刻で描画する。</li>
+          <li><strong>デザインの決定:</strong> 次ゲームテンプレートの正系はRTDB <code>nextGameConfigs</code>とする。同日（Asia/Tokyo）にticket提出を完了した直前ゲーム参加者だけを継続し、プロフィール/Skillを残してゲーム内データを初期化する。</li>
+          <li><strong>逸脱:</strong> 既存コード、古い実装メモ、GAS関連テストにはGAS進行・手動Player遷移・root room transactionなどが残っている可能性がある。本更新はP0の目標仕様を正とする文書統合であり、コードの互換層をこの作業で削除したものではない。</li>
+          <li><strong>トレードオフ:</strong> SparkではCloud Functionsを使わないため、厳密なサーバ時刻締切と複雑な集計正当性をRulesだけで完全には保証できない。初期運用はallowlist済みHostを信頼し、より強い検証が必要になった場合にBlaze + Cloud Functionsへ移行する。</li>
+          <li><strong>トレードオフ:</strong> GAS archiveを進行から切り離すことでゲームを止めずに済む一方、Spreadsheet保存が遅延・失敗し得る。RTDBに<code>archive.status</code>と再送導線を残し、<code>archiveId</code>/<code>gameId</code>で冪等upsertする。</li>
+          <li><strong>未解決の質問:</strong> Sparkで許容する締切改ざん耐性、Blaze + Functionsへの移行基準、公開履歴の保持期間/ランキング件数、archiveの保持期間と二次保管先は運用前に決定が必要。</li>
         </ul>
       </section>
 
