@@ -409,6 +409,7 @@
           <li><strong>競合対策:</strong> GAS呼出し前後のarchive状態遷移をRTDB transactionへ変更した。別Hostタブが送信中に後続gameIdを追加してもtransaction再試行で併合し、古い状態の<code>set</code>でキューを失わない。</li>
           <li><strong>検証:</strong> 未finalの手動保存がRTDB/GASの双方へ書き込まないこと、手動保存のversion CAS競合時にGASへ送らないこと、先行ゲームの<code>queued</code>/<code>failed</code>状態を保持しながら後続ゲームの完了詳細だけをRTDBへ確定すること、A成功後のB失敗でCを保持し、B retry後にCまで再開すること、同時追加された後続gameIdをtransactionが保持することを統合テストへ追加した。retry payloadの9指標が現在roomではなく完了時<code>playerSnapshots</code>由来であることも検証した。</li>
           <li><strong>実データ回帰:</strong> 2026-07-29に読み取り取得した本番RTDBスナップショットから、名前・uid・ticket・予想内容を除去した最小fixtureを作成した。旧node配置とStageSkill欠落表現を通して、有限29件、履歴長<code>[4,5,5,5,5,5]</code>、6人全員非ゼロSkill、現在ゲーム5ステージ完了詳細を固定テストで確認する。</li>
+          <li><strong>公開反映:</strong> コミット<code>a24e881</code>を<code>origin/master</code>へpushし、GitHub Pages workflow成功と公開HTMLのアセット版<code>260729-p0p1r4</code>を確認した。本番RTDB Rules、Skill backfill、GAS archive設定は未実施のため、静的コード公開だけでは本番完了ではない。</li>
           <li><strong>ドキュメント修正:</strong> GAS README/readinessと<code>getClientConfigSnippet()</code>をarchive専用・Firebase正系の現行構成へ更新した。旧GAS進行API、ポーリング、Spreadsheet次ゲーム設定を本番手順として案内しない。</li>
           <li><strong>権限境界:</strong> 本番Rules deployは共有本番セキュリティ境界の永続変更に当たるため、明示承認なしでは実行しない。旧Rulesは一時領域へ読取りバックアップ済み。承認・作業手順と反映後backfill確認は<code>docs/operator-action-required-p0-p1.html</code>へ更新した。</li>
           <li><strong>未解決の質問:</strong> 本番Rules deploy、allowlist済みHostによる1回のbackfill、GAS archive Webアプリと設定値の反映、実端末smokeが未実施。</li>
