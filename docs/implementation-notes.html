@@ -52,7 +52,7 @@
   <body>
     <main>
       <h1>実装メモ</h1>
-      <p class="meta">更新日: 2026-06-05 / 対象: <code>docs/elevator-game-requirements.md</code> v1.19</p>
+      <p class="meta">更新日: 2026-07-29 / 対象: <code>docs/elevator-game-requirements.md</code> v1.19</p>
 
       <section>
         <h2>今回実装した範囲</h2>
@@ -333,6 +333,21 @@
           <li>2026-06-12追記: 本番RTDB Rulesはdeploy前に<code>docs/rtdb-rules-backup-20260612.json</code>へバックアップし、2026-06-12T18:44+09:00 に <code>firebase deploy --only database --project elevator-game-live</code> で再deployした。deploy後のRulesは<code>docs/rtdb-rules-after-deploy-20260612.json</code>へ取得し、リポジトリの<code>firebase/database.rules.json</code>とJSONとして一致することを確認した。</li>
           <li>2026-06-12追記: BGM/SE分離により<code>roomSettings</code>へ<code>bgmVolume</code>、<code>seVolume</code>、<code>bgmMuted</code>、<code>seMuted</code>を書き込むようになったため、RTDB Rulesのvalidateにも同4フィールドを追加した。deploy前Rulesは<code>docs/rtdb-rules-backup-20260612-2.json</code>へバックアップし、2026-06-12T19:12+09:00 に <code>firebase deploy --only database --project elevator-game-live</code> で再deployした。deploy後Rulesは<code>docs/rtdb-rules-after-deploy-20260612-2.json</code>へ取得し、リポジトリの<code>firebase/database.rules.json</code>とJSONとして一致することを確認した。</li>
           <li>2026-06-12追記: Import/同じJSONで再開始時に<code>completedGamePlayerDetails</code>親ノードをmulti-location updateで書くため、RTDB Rulesの同ノードへHost用<code>.write</code>を追加した。親<code>.read</code>は追加せず、Player本人の詳細読み取りは引き続き<code>completedGamePlayerDetails/{uid}</code>単位に限定する。deploy前Rulesは<code>docs/rtdb-rules-backup-20260612-3.json</code>へバックアップし、2026-06-12T19:28+09:00 に <code>firebase deploy --only database --project elevator-game-live</code> で再deployした。deploy後Rulesは<code>docs/rtdb-rules-after-deploy-20260612-3.json</code>へ取得し、リポジトリの<code>firebase/database.rules.json</code>とJSONとして一致することを確認した。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>2026-07-29 ステージ変数体系v2の設計提案</h2>
+        <ul>
+          <li><strong>今回まとめた範囲:</strong> <code>docs/stage-parameter-system-v2-proposal.md</code>に、参加者数比例の定員、階数反比例の報酬・運賃、JSONスキーマv2案、制作支援ツールの3案をまとめた。このセッションでは設計文書だけを作成し、ゲーム本体と<code>tool/stage-creator.html</code>は変更していない。</li>
+          <li><strong>デザインの決定:</strong> 制作者が保存する「変数ルール」と、ステージ開始時にゲーム本体が確定する数値<code>N/X/P/Q</code>を分ける案にした。得点計算とPlayer/Host/Screen表示は確定数値だけを使い、設定JSONは再利用可能なルールとして残す。</li>
+          <li><strong>デザインの決定:</strong> v2では<code>X/P/Q</code>を固定数値またはルールオブジェクトで指定できる案にした。通常ステージは定員割合、完乗時報酬総額、全区間運賃総額を推奨し、特殊ステージでは固定値や手動上書きを残す。</li>
+          <li><strong>仕様解釈:</strong> 参加者数は<code>stage_intro</code>開始時の現在ゲーム登録者数で固定する初期案にした。ステージ説明時点で定員を確定表示し、投票中の参加・離脱で条件を変えないため。途中参加者は次ステージの定員算出から反映する。</li>
+          <li><strong>仕様解釈:</strong> 完乗報酬総額を<code>R</code>、全区間運賃総額を<code>F</code>、定員比率を<code>r</code>とすると、均等配分純得点は丸め誤差を除き<code>r × (R - F)</code>になる。この関係を、自動バランスと参加者数・階数を越えた点数感の基準にする。</li>
+          <li><strong>逸脱:</strong> 現行要件と実装では<code>X/P/Q</code>は固定数値であり、今回のルールオブジェクト、参加者数スナップショット、実効値保存はまだ存在しない。提案を誤って現行仕様として扱わないよう、文書状態を「提案・未実装」と明記した。</li>
+          <li><strong>トレードオフ:</strong> 汎用の数式文字列や式パーサーではなく、<code>participantRatio</code>と<code>fullRideTotal</code>という用途別ルールを提案した。将来の自由度は狭いが、入力検証、Firebase Rules、画面説明、再計算の安全性を優先した。</li>
+          <li><strong>トレードオフ:</strong> 自動調整だけに固定せず、目標総額による基本入力、自動バランス、シナリオプレビューを組み合わせる案にした。一定水準へ揃えやすくしつつ、高得点の最終ステージなど制作者が意図的に基準を崩せる余地を残す。</li>
+          <li><strong>未解決の質問:</strong> 定員割合の丸め、最低定員、途中参加の扱い、得点小数の丸め、均等配分指標の定義、自動バランス基準をゲーム共通にするかステージ別にするかは、実装前に確定が必要。</li>
         </ul>
       </section>
 
