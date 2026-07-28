@@ -113,6 +113,20 @@ run("firebase subscription errors are exposed in debug info and logs", () => {
   assert.strictEqual(logs.some((entry) => entry.kind === "firebase.subscribe.error" && entry.detail.path === "historyPlayers"), true);
 });
 
+run("firebase adapter derives command time from the RTDB server offset", () => {
+  global.BroadcastChannel = undefined;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.debug.serverTimeOffsetMs = 90_000;
+  const before = Date.now() + 90_000;
+  const actual = new Date(adapter.serverNowIso()).getTime();
+  const after = Date.now() + 90_000;
+  assert.strictEqual(actual >= before && actual <= after, true);
+});
+
 runAsync("firebase read errors include the rejected path", async () => {
   global.BroadcastChannel = undefined;
   const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
@@ -429,7 +443,7 @@ run("firebase subscriptions are scoped by screen role", () => {
   ]);
 });
 
-run("firebase mutation reads exclude completed history unless next game needs it", () => {
+run("firebase mutation reads exclude completed history unless finalization or next game needs it", () => {
   const regular = EVGFirebaseAdapter.restMutationBaseReadPaths("host", "host-uid", true, false);
   const nextGame = EVGFirebaseAdapter.restMutationBaseReadPaths("host", "host-uid", true, true);
   const player = EVGFirebaseAdapter.restMutationBaseReadPaths("player", "player-uid", true, false);

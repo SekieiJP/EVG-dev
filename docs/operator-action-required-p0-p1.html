@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>運用者作業依頼: Firebase RTDB / GAS archive 有効化</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif; line-height: 1.65; color: #172033; background: #f4f7fb; }
+    body { max-width: 960px; margin: 0 auto; padding: 28px 18px 56px; }
+    main { background: #fff; border: 1px solid #d9e1ee; border-radius: 14px; padding: 28px; box-shadow: 0 4px 20px #1720330b; }
+    h1, h2, h3 { line-height: 1.3; color: #102a56; }
+    h1 { margin-top: 0; font-size: 1.75rem; }
+    h2 { margin-top: 2rem; border-bottom: 1px solid #d9e1ee; padding-bottom: .35rem; }
+    h3 { margin-top: 1.25rem; }
+    code { background: #eef3fa; border-radius: 4px; padding: .08em .32em; overflow-wrap: anywhere; }
+    pre { background: #10213f; color: #f4f8ff; border-radius: 8px; padding: 14px; overflow-x: auto; }
+    pre code { background: transparent; padding: 0; color: inherit; }
+    .notice, .warning, .success { border-left: 5px solid; border-radius: 6px; padding: 12px 15px; margin: 1rem 0; }
+    .notice { background: #edf5ff; border-color: #2874c7; }
+    .warning { background: #fff7e8; border-color: #c87d00; }
+    .success { background: #edf9f0; border-color: #27864a; }
+    .checklist { list-style: none; padding-left: 0; }
+    .checklist li { margin: .45rem 0; }
+    .checklist li::before { content: "☐ "; color: #245da8; font-size: 1.1em; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+    th, td { border: 1px solid #d9e1ee; padding: .55rem .7rem; vertical-align: top; text-align: left; }
+    th { background: #edf3fc; }
+    a { color: #1759a6; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>運用者作業依頼: Firebase RTDB / GAS archive 有効化</h1>
+
+    <p>対象: P0・P1改修を本番で有効にするための、FirebaseおよびGoogle Apps Script（GAS）への運用者作業です。実装の正系は <strong>Firebase Realtime Database（RTDB）</strong> であり、GAS + Spreadsheetは<strong>終了・中断済みゲームのアーカイブ専用</strong>です。GASの停止・設定不備で進行中ゲームが止まることはありません。</p>
+
+    <div class="notice">
+      <strong>秘密値をこの文書やGitに貼り付けないでください。</strong>
+      Firebase/GASの認証情報、Spreadsheetの共有リンク、実際のAPI keyは、組織の承認済みの秘密管理または管理画面でのみ扱ってください。ここには値そのものを記載しません。
+    </div>
+
+    <h2>1. 目的と前提</h2>
+
+    <table>
+      <thead><tr><th>項目</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td>Firebaseプロジェクト</td><td><code>elevator-game-live</code></td></tr>
+        <tr><td>通常room</td><td><code>elevator-game-live</code></td></tr>
+        <tr><td>RTDBの役割</td><td>進行、投票、結果、Skill、次ゲーム候補、公開履歴の正系</td></tr>
+        <tr><td>GASの役割</td><td>確定済みpayloadをSpreadsheetへ冪等に書き出すarchive endpointのみ</td></tr>
+        <tr><td>Host認可</td><td>Firebase Anonymous Authのuidを <code>rooms/{roomId}/roles/hosts/{uid}: true</code> に登録</td></tr>
+      </tbody>
+    </table>
+
+    <p>必要な権限は、FirebaseプロジェクトのRTDB Rulesを更新できる権限、RTDBを閲覧・更新できる権限、対象Spreadsheetに紐づくApps Scriptを編集・デプロイできる権限です。Java、Xcode、ローカルJREの追加操作は不要です。</p>
+
+    <ul class="checklist">
+      <li>作業前に、対象リリースのコミットを取得し、通常の公開手順を実行できる状態にする。</li>
+      <li>本番開催中ではなく、Host画面を確認できる時間帯に実施する。</li>
+      <li>現在使用するHost端末・ブラウザプロファイルを決める。匿名Authのuidはブラウザプロファイルごとに異なる。</li>
+    </ul>
+
+    <h2>2. Firebase RTDB Rules: バックアップとデプロイ</h2>
+
+    <h3>2-1. 現行Rulesを退避する</h3>
+
+    <ol>
+      <li>Firebase Consoleでプロジェクト <code>elevator-game-live</code> を開き、Realtime Databaseの<strong>Rules</strong>タブを開く。</li>
+      <li>現在有効なRules全文を、日時・担当者が分かる承認済み保管先へ保存する。保存先は公開リポジトリやこのHTMLではなく、運用上の安全な場所にする。</li>
+      <li>保存したRulesを復旧用として識別できる名前にする（例: 日時を含むファイル名）。</li>
+    </ol>
+
+    <p>CLIを利用できる場合は、出力先が安全な保管先であることを確認してから次の要領で取得して構いません。</p>
+    <pre><code>firebase database:get /.settings/rules --project elevator-game-live</code></pre>
+
+    <h3>2-2. リポジトリのRulesをデプロイする</h3>
+
+    <ol>
+      <li><code>firebase/database.rules.json</code> が今回のリリース版であることを確認する。</li>
+      <li>リポジトリのルートで次を実行する。</li>
+    </ol>
+    <pre><code>firebase deploy --only database --project elevator-game-live</code></pre>
+    <ol start="3">
+      <li>CLIのrelease成功を確認する。失敗時は次節の戻し方に従い、原因を解消するまでゲームを開始しない。</li>
+      <li>ConsoleのRules表示で、新しいRulesに少なくとも <code>completedGamePublicDetails</code>、<code>historyPlayers</code>、<code>nextGameConfigs</code>、<code>archive</code> の定義があることを確認する。</li>
+      <li>デプロイ日時、担当者、リリースコミットを運用記録へ残す。</li>
+    </ol>
+
+    <div class="warning">
+      Rulesはコードと一組です。Rulesだけを古いものへ戻すと、Hostの原子的な結果保存・次ゲーム開始・履歴表示が拒否されることがあります。復旧時は必ず「戻す対象のアプリ版」と「Rules版」の組を記録してください。
+    </div>
+
+    <h2>3. Host allowlistの確認</h2>
+
+    <ol>
+      <li>実際にHostとして使う端末・ブラウザプロファイルでHost画面を開く。</li>
+      <li>画面のinternal-statusから <code>firebaseUid</code> を確認する。まだ表示されなければ、匿名Authの初期化完了を待って再読み込みする。</li>
+      <li>Firebase ConsoleのDataタブで、次のパスにそのuidが <code>true</code> として存在することを確認する。</li>
+    </ol>
+    <pre><code>rooms/elevator-game-live/roles/hosts/&lt;firebaseUid&gt;: true</code></pre>
+    <ol start="4">
+      <li>未登録なら、既存の <code>roles/hosts</code> を置換せず、当該uidの子だけを <code>true</code> で追加する。</li>
+      <li>Host画面を再読み込みし、internal-statusで認可エラーが出ず、設定の保存・開始操作が可能であることを確認する。</li>
+    </ol>
+
+    <p>シークレットウィンドウ、ブラウザデータ消去、別ブラウザ・別端末ではuidが変わる場合があります。開催に使うHost環境ごとに確認してください。Hostパスワードの画面入力は誤操作防止であり、RTDB/GASの認可根拠ではありません。</p>
+
+    <h2>4. GAS archive専用版のセットアップとWebアプリ配布</h2>
+
+    <h3>4-1. 対象Spreadsheetに紐づくApps Scriptを更新する</h3>
+
+    <ol>
+      <li>アーカイブ先として運用するSpreadsheetを開き、<strong>拡張機能 → Apps Script</strong> を開く。</li>
+      <li>リポジトリの <code>gas/src/Code.gs</code> を対象プロジェクトの <code>Code.gs</code> に反映する。</li>
+      <li>保存後、エディタから <code>setupElevatorGameSheets</code> を1回実行する。</li>
+      <li>Googleが求める権限を確認して承認する。Spreadsheetへの書込みと、Firebase ID token / Host allowlist検証のための外部HTTPアクセス（<code>UrlFetchApp</code>）が必要である。</li>
+      <li>Spreadsheetに <code>config</code>、<code>save_data</code>、<code>stage_results</code>、<code>stage_settings</code>、<code>game_history</code>、<code>archive_log</code> が作成または更新されたことを確認する。</li>
+    </ol>
+
+    <p><code>setupElevatorGameSheets</code> は必要なシートとヘッダを用意します。既存archiveデータを削除する操作ではありません。ただし本番Spreadsheetで初めて実行する前に、通常のSpreadsheetバックアップを作成してください。</p>
+
+    <h3>4-2. Webアプリの新バージョンをデプロイする</h3>
+
+    <ol>
+      <li>Apps Scriptで<strong>デプロイ → 新しいデプロイ</strong>を選ぶ。</li>
+      <li>種類として<strong>ウェブアプリ</strong>を選ぶ。</li>
+      <li><strong>次のユーザーとして実行</strong>は、Spreadsheetへ書込む運用者アカウント（通常は<strong>自分</strong>）にする。</li>
+      <li><strong>アクセスできるユーザー</strong>は、HostブラウザがGoogleログイン不要で呼べる範囲（通常は<strong>全員</strong>）にする。公開アクセスにしても、archive APIはFirebase ID tokenの検証とHost allowlistの確認を通らなければ書込みません。</li>
+      <li>デプロイし、<strong>/exec</strong> で終わるWebアプリURLを控える。テスト用の <code>/dev</code> URLは本番設定に使わない。</li>
+      <li>デプロイのバージョン、日時、実行者を運用記録へ残す。</li>
+    </ol>
+
+    <h3>4-3. クライアント設定を更新して公開する</h3>
+
+    <ol>
+      <li><code>game/assets/js/config.js</code> の次の2項目に、運用環境で管理している値を設定する。実値をIssue、レビューコメント、このHTML、コミットメッセージには書かない。</li>
+    </ol>
+    <pre><code>FIREBASE_ARCHIVE_GAS_URL: "&lt;GAS Webアプリの /exec URL&gt;",
+FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
+    <ol start="2">
+      <li>この設定は静的クライアントから送信されるため、API key単独を秘密の認可境界として扱わない。実際の書込み認可はFirebase ID tokenと <code>roles/hosts/{uid}</code> の照合で行われる。</li>
+      <li>アセットquery versionを更新して、通常のGitHub Pages公開手順でこの設定を配信する。Hostブラウザでは強制再読み込みまたは新しい公開版を開く。</li>
+      <li>設定を反映したコミット、公開日時、GASデプロイ版を対応付けて記録する。</li>
+    </ol>
+
+    <h2>5. 実ブラウザでのarchive確認</h2>
+
+    <p>本番イベントの本ゲームではなく、参加者に影響しない小規模な確認ゲームで実施してください。archiveは <code>archiveId</code> と <code>gameId</code> による冪等upsertなので、同じアーカイブの再送でSpreadsheetに二重行を作らない設計です。</p>
+
+    <ol>
+      <li>allowlist済みHostで、少なくとも1ステージを集計済みにした確認ゲームを用意する。</li>
+      <li>Host画面の<strong>戦績アーカイブ → 現在ゲームを保存</strong>を押す。</li>
+      <li>表示が<strong>保存済み</strong>になり、エラーが空であることを確認する。</li>
+      <li>Spreadsheetの <code>archive_log</code> に成功記録があり、<code>save_data</code>、<code>stage_results</code>、<code>stage_settings</code>、<code>game_history</code> に当該ゲームのデータがあることを確認する。</li>
+      <li><strong>保存済み戦績を再集計</strong>を押し、GASの再集計応答が成功することを確認する。</li>
+      <li>既に <strong>未完了</strong> のarchiveがある場合は、URL/API key/allowlistを直したうえで<strong>未完了を再送</strong>を押す。保存済みに変わり、同じ <code>archiveId</code> の行が重複しないことを確認する。</li>
+    </ol>
+
+    <p>再送の導線自体を事前検証する必要があり、未完了の実例がない場合は、<strong>本番イベントではない確認ゲーム</strong>だけで一時的に無効なarchive URLを配信して失敗状態を作り、正しいURLへ戻して再送する方法があります。この確認は公開切替を伴うため、通常の変更管理・承認手順で行ってください。</p>
+
+    <div class="success">
+      archive送信に失敗しても、RTDB上の進行・Skill・完了履歴は正系として残ります。失敗状態はHostの「未完了を再送」で回復できます。SpreadsheetからRTDBへ戻す復元操作は通常運用に含めません。
+    </div>
+
+    <h2>6. 失敗時の戻し方と切り分け</h2>
+
+    <table>
+      <thead><tr><th>症状</th><th>確認・復旧</th></tr></thead>
+      <tbody>
+        <tr><td>Rules deployが失敗する</td><td>ゲーム開始を止め、CLIのエラーを解消する。緊急復旧が必要なら、2-1で保存したRulesをConsoleに戻して公開する。旧Rulesへ戻した場合は、そのRulesと互換なアプリ版へ戻すまでHostの書込み操作を行わない。</td></tr>
+        <tr><td>Hostが「allowlistに登録されていません」</td><td>internal-statusの現在uidと <code>rooms/elevator-game-live/roles/hosts/{uid}</code> を照合する。uidの子を <code>true</code> で追加し、Host画面を再読み込みする。既存のhost uidを一括削除しない。</td></tr>
+        <tr><td>archiveが「GAS URL未設定」またはHTTPエラー</td><td><code>/exec</code> URL、Webアプリのアクセス範囲、公開済みクライアント設定を確認する。直せるまでURLを空に戻せばarchive呼出しは失敗状態になるだけで、ゲーム進行はRTDBで継続する。</td></tr>
+        <tr><td>archiveが「Firebase ID token」またはHost認可エラー</td><td>匿名Authが有効か、Host画面を再読み込みしてtokenが更新されるか、GAS側のFirebaseプロジェクト/room設定とallowlistが一致するかを確認する。</td></tr>
+        <tr><td>GASがsetup_requiredを返す</td><td>正しいSpreadsheetに紐づくスクリプトで <code>setupElevatorGameSheets</code> を実行し、必要シートが作成されているか確認する。</td></tr>
+        <tr><td>archiveを一時停止したい</td><td>通常の公開手順で <code>FIREBASE_ARCHIVE_GAS_URL</code> を空にした版を配信する。RTDBのRules、進行データ、確定履歴を削除しない。復旧後はURLを戻して「未完了を再送」を使う。</td></tr>
+      </tbody>
+    </table>
+
+    <h2>7. 完了チェックリスト</h2>
+
+    <ul class="checklist">
+      <li>本番RTDB Rulesを安全な場所にバックアップした。</li>
+      <li><code>firebase/database.rules.json</code> を <code>elevator-game-live</code> にdeployし、release成功を確認した。</li>
+      <li>使用するHost端末すべてのFirebase uidを <code>roles/hosts</code> に登録・確認した。</li>
+      <li>GASの <code>setupElevatorGameSheets</code> を正しいSpreadsheetで実行し、必要シートを確認した。</li>
+      <li>GASを「実行者: 運用者」「アクセス: Hostブラウザがログイン不要で到達可能」のWebアプリとして新バージョンdeployした。</li>
+      <li>GASの <code>/exec</code> URLと運用中のapiKeyをクライアント設定へ反映し、通常の公開手順で配信した。</li>
+      <li>Host画面からarchive exportとrecalculateが成功し、Spreadsheetの行と <code>archive_log</code> を確認した。</li>
+      <li>未完了archiveがある場合、retryで保存済みになり、同一archiveIdの重複行がないことを確認した。</li>
+      <li>Rules/GAS/クライアント設定のリリース日時・担当者・コミットを運用記録に残した。</li>
+    </ul>
+  </main>
+</body>
+</html>

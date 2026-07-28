@@ -410,3 +410,18 @@ run("missing reveal result can be recovered idempotently by stage id", () => {
   assert.deepStrictEqual(recovered.room.players.map((player) => player.stageSkillHistory), expectedSkills.map((skill) => [skill]));
   assert.deepStrictEqual(recovered.room.players.map((player) => player.appliedSkillStageIds), [[stage.stageId], [stage.stageId]]);
 });
+
+run("host deadlines and result timestamps use the injected server-corrected time", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room = Engine.advancePhase(room, "start-stage", "host", "2026-07-29T14:59:50.000Z").room;
+  room = Engine.advancePhase(room, "open-voting", "host", "2026-07-29T14:59:51.000Z").room;
+  room = Engine.submitTicket(room, "alice", { boardFloor: 1, exitFloor: 2, predictions: {} }, "2026-07-29T14:59:52.000Z").room;
+  room = Engine.advancePhase(room, "close-voting", "host", "2026-07-29T14:59:55.000Z").room;
+  assert.strictEqual(room.countdownEndsAt, "2026-07-29T15:00:10.000Z");
+  assert.strictEqual(room.tallyingEndsAt, "2026-07-29T15:00:13.000Z");
+  const tallied = Engine.tallyCurrentStage(room, "2026-07-29T15:00:13.000Z");
+  assert.strictEqual(tallied.room.stageResults["stage-001"].calculatedAt, "2026-07-29T15:00:13.000Z");
+  assert.strictEqual(tallied.room.animationStartedAt, "2026-07-29T15:00:13.000Z");
+  assert.strictEqual(tallied.room.updatedAt, "2026-07-29T15:00:13.000Z");
+});

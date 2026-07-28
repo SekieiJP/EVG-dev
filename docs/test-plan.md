@@ -23,15 +23,15 @@ npx playwright test
 
 - 未認証者は読み書きできない。
 - Playerは自分のプロフィール、ticket、ticketPresenceだけを書け、他人のデータ、`public`、`results`、`scores` は書けない。
-- Host allowlist uidだけが `public` transaction、設定、次ゲーム候補、結果commit、archive状態を変更できる。
+- Host allowlist uidだけが `public` を含む原子的commit、設定、次ゲーム候補、結果commit、archive状態を変更できる。
 - `lobby -> stage_intro -> voting -> countdown -> moving -> reveal -> ranking -> stage_intro/final` 以外の遷移を拒否する。
-- phase transactionは `expectedPhase` と `roomVersion` が一致しないと拒否する。
+- phase/version CASは、古いphaseまたは `roomVersion` からのmulti-location updateを全体として拒否する。
 - 同じ `results/{stageId}` の二重作成を拒否する。
 - 公開履歴に他人のticket、予想回答、内訳、StageSkill履歴、uid/UUIDが含まれず、個人詳細は本人だけ、Host詳細はHostだけが読める。
 
 ### RTDB integration tests
 
-- Host、Player A/B、Screenが小ノード購読だけで全フェーズを完走する。room rootの購読・transactionが発生しない。
+- Host、Player A/B、Screenが小ノード購読だけで全フェーズを完走する。room rootの購読・transactionが発生しない。分散した枝の原子的確定にはDBルートへの疎なmulti-location updateだけを使う。
 - Host操作後、Player/Screenは定期HTTP pollingや「次へ」操作を必要とせずフェーズへ自動追従する。
 - `/.info/serverTimeOffset` を使い、異なるクライアント時計でも同じ締切・演出開始時刻を描画する。
 - 結果commitが一つのmulti-location updateで `results`、`scores`、`playerStats`、本人履歴、`operations` を反映し、途中状態を公開しない。
@@ -42,7 +42,7 @@ npx playwright test
 
 ### Browser E2E
 
-Playwrightで独立したHost、Player A、Player B、Screen contextを使う。
+ローカルmockでは1つのBrowser Context内の独立pageを使い、`testSlot`ごとにHost、Player A、Player B、Screenの認証IDを分ける。実Firebaseの本番前smokeでは独立Browser Contextまたは物理端末を使う。
 
 1. Host allowlist uidでログインし、Player A/Bが匿名ログインして参加する。
 2. Hostがステージ説明、投票開始、締切、結果発表、ランキング、次ステージ/最終結果を進める。

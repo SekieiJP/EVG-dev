@@ -119,6 +119,12 @@ async function main() {
     });
     if (rejectedSideEffect.exists()) throw new Error("version-conflicted side effect was partially committed");
 
+    await assertFails(host.ref(`rooms/${roomId}/results/stage-001`).set({
+      stageId: "stage-001",
+      rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 999 }],
+      players: { alice: { uuid: "alice", name: "Alice", score: 999 } },
+    }));
+
     await assertSucceeds(host.ref(`rooms/${roomId}/historyPlayers/p_alice`).set({
       profileId: "p_alice",
       name: "Alice",

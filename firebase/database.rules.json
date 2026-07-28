@@ -100,7 +100,7 @@
         },
         "results": {
           ".read": false,
-          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+          ".write": false,
           "$stageId": {
             ".read": "auth != null",
             ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true && (!data.exists() || newData.val() === null)"

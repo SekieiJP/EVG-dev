@@ -356,14 +356,33 @@
         <ul>
           <li><strong>デザインの決定:</strong> 本番中の正系をFirebase RTDBに固定し、GASとSpreadsheetはfinalまたは中断後のアーカイブだけを担う、と要件・アーキテクチャ・テスト計画を統一した。旧GAS status API、HTTPポーリング、同一端末<code>BroadcastChannel</code>同期は本番経路から除外する。</li>
           <li><strong>デザインの決定:</strong> Playerはランキング/最終結果で手動の「次へ」を押さず、Hostの単一commandによるRTDB <code>public</code>遷移を購読して自動追従する。localStorageには音量や小さい閲覧設定だけを残し、進行中roomを保存しない。</li>
-          <li><strong>デザインの決定:</strong> 結果確定は、phase transactionの後に<code>results</code>、<code>scores</code>、<code>playerStats</code>、本人履歴、操作ログを1回のmulti-location updateで書く。StageSkill履歴と、最高値を含む上位5件合計の現在Skillも同じcommitに含める。</li>
+          <li><strong>デザインの決定:</strong> 結果確定は、<code>public</code>、<code>results</code>、<code>scores</code>、<code>playerStats</code>、root player、公開履歴、操作ログをDBルートに対する1回の疎なmulti-location updateで書く。StageSkill履歴と、最高値を含む上位5件合計の現在Skillも同じcommitに含める。</li>
           <li><strong>デザインの決定:</strong> 累積戦歴は9指標に統一した。公開履歴は表示名・得点・順位・公開用現在Skillだけとし、ticket、予想、内訳、uid/UUID、StageSkill履歴、個人統計は本人またはHost専用ノードに分ける。</li>
           <li><strong>デザインの決定:</strong> 時刻同期はRTDBの<code>/.info/serverTimeOffset</code>を用いる。Hostがserver timestamp基準の締切・演出時刻を保存し、各端末は補正済み時刻で描画する。</li>
           <li><strong>デザインの決定:</strong> 次ゲームテンプレートの正系はRTDB <code>nextGameConfigs</code>とする。同日（Asia/Tokyo）にticket提出を完了した直前ゲーム参加者だけを継続し、プロフィール/Skillを残してゲーム内データを初期化する。</li>
-          <li><strong>逸脱:</strong> 既存コード、古い実装メモ、GAS関連テストにはGAS進行・手動Player遷移・root room transactionなどが残っている可能性がある。本更新はP0の目標仕様を正とする文書統合であり、コードの互換層をこの作業で削除したものではない。</li>
+          <li><strong>逸脱:</strong> 既存command名などの互換層は残すが、本番ルートからGAS進行、手動Player遷移、root room transactionは外す。GAS内の旧進行helperは移行参照用としてファイル内に残るものの、<code>route_</code>から到達できず、archive export/recalculationだけを受け付ける。</li>
           <li><strong>トレードオフ:</strong> SparkではCloud Functionsを使わないため、厳密なサーバ時刻締切と複雑な集計正当性をRulesだけで完全には保証できない。初期運用はallowlist済みHostを信頼し、より強い検証が必要になった場合にBlaze + Cloud Functionsへ移行する。</li>
           <li><strong>トレードオフ:</strong> GAS archiveを進行から切り離すことでゲームを止めずに済む一方、Spreadsheet保存が遅延・失敗し得る。RTDBに<code>archive.status</code>と再送導線を残し、<code>archiveId</code>/<code>gameId</code>で冪等upsertする。</li>
-          <li><strong>未解決の質問:</strong> Sparkで許容する締切改ざん耐性、Blaze + Functionsへの移行基準、公開履歴の保持期間/ランキング件数、archiveの保持期間と二次保管先は運用前に決定が必要。</li>
+          <li><strong>未解決の質問:</strong> なし。Sparkではallowlist済みHostを信頼し、80接続超の想定またはサーバ側集計/締切検証が必要になった時点でBlaze + Functionsを再検討する。RTDB完了履歴とSpreadsheet archiveは自動削除せず、運用者のバックアップ・保持方針に従う。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>2026-07-29 P0/P1 実装完了時の判断</h2>
+        <ul>
+          <li><strong>デザインの決定:</strong> PlayerのStageSkill確定時に、ステージ得点、StageSkill、持ち点、現在Skill、StageSkill履歴を同じ決定結果から更新する。現在Skillは履歴全体を降順にして上位5件を合計し、最高値も含める。</li>
+          <li><strong>デザインの決定:</strong> 復旧・再試行で同じStageSkillを二重追記しないよう、プレイヤーごとに<code>appliedSkillStageIds</code>を持つ。StageSkillの値が前ステージと同値でも、stageIdが別なら正しく1件として追加する。</li>
+          <li><strong>デザインの決定:</strong> Firebase Rulesで本人プロフィール更新とSkill改ざん防止を同時に扱うため、永続ノードの履歴はcanonical JSON文字列<code>stageSkillHistoryJson</code>と<code>appliedSkillStageIdsJson</code>で保存する。読取り時は旧配列形式にも対応し、書戻しで新形式へ揃える。</li>
+          <li><strong>デザインの決定:</strong> 公開戦績のキーはraw uid/UUIDではなく決定的なopaque <code>profileId</code>とし、公開payloadを表示名、現在Skill、得点、順位、ステージ/ゲーム識別情報に限定する。他人のticket、予想、内訳、StageSkill履歴、個人9指標は公開しない。</li>
+          <li><strong>デザインの決定:</strong> final遷移と同じ原子的commitでFirebaseの完了サマリ、公開詳細、Host詳細、本人詳細、archive queued状態を永続化する。GAS送信はcommit後に行い、失敗してもfinalとSkillを巻き戻さず<code>archive.status=failed</code>として再送可能にする。</li>
+          <li><strong>デザインの決定:</strong> 現在ゲームにいない過去プレイヤーの公開戦績や完了ゲームをHost mutationで消さないよう、Host更新前の読取りに既存履歴を含め、serializerで併合する。旧公開履歴はHost認証時のbackfillで匿名化された形へ再生成する。</li>
+          <li><strong>デザインの決定:</strong> Playerは通常進行中に全員のSkill一覧を購読しない。参加受付中だけ<code>historyPlayers</code>を動的購読し、History画面は常時購読する。現在ゲームで本人に必要なSkillは<code>playerStats/{uid}</code>から読む。</li>
+          <li><strong>デザインの決定:</strong> 次ゲームはRTDB <code>nextGameConfigs</code>だけから選ぶ。Asia/Tokyoで次ゲーム作成日と同日にticket提出実績がある直前ゲーム参加者を継続し、前日以前の参加者は現在roomから外すがroot playerの通算Skillは残す。</li>
+          <li><strong>逸脱:</strong> 初期文書の「<code>public</code> transaction成功後に副作用をmulti-location updateする」二段階案は採用しなかった。phaseだけ確定して結果/Skill保存に失敗するクラッシュ窓を避けるため、Rulesの既存phase/version検証をCASとして使い、<code>public</code>と全副作用を1回のmulti-location updateで原子的に確定する。</li>
+          <li><strong>トレードオフ:</strong> 公開<code>profileId</code>は同じuidに対して安定した一覧表示を行うための決定的IDで、暗号学的な匿名化トークンではない。raw uidを配信しない境界は満たすが、外部公開範囲を拡大する場合はサーバ生成ランダムIDへの移行を検討する。</li>
+          <li><strong>トレードオフ:</strong> Spark構成では集計値の数学的正当性をRulesで再計算できないため、allowlist済みHostブラウザを信頼する。PlayerによるSkillフィールド改ざん、古いHost操作、二重結果commit、権限外の履歴読取りはRulesで拒否する。</li>
+          <li><strong>検証:</strong> Unit、Rules emulator、50人×20ステージ負荷モデル、PlaywrightのHost/Player A/Player B/Screen E2Eを実行した。RulesではPlayerのroot/playerStats/履歴Skill偽装拒否と、古いversionの副作用を含むupdate全拒否を確認した。画面E2Eではスコア、StageSkill、持ち点、現在Skillとfinal自動追従を確認した。</li>
+          <li><strong>未解決の質問:</strong> 本番Firebase Rulesのdeploy、Host uid allowlist、GAS Webアプリの再deploy、archive URL/API keyの公開設定、実Firebase複数端末smokeは運用権限が必要である。詳細手順は<code>docs/operator-action-required-p0-p1.html</code>へ分離した。</li>
         </ul>
       </section>
 
@@ -372,17 +391,17 @@
         <ul>
           <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>
           <li>制作ツールの出力項目名は現行<code>engine.js</code>とGAS実装に合わせた。今後JSONスキーマを変更する場合、追加JSONで暫定運用できるが、頻出項目は専用フォームへ昇格する必要がある。</li>
-          <li>GAS実デプロイURLでのHost/Screen/Player複数端末疎通は、API URL提供後に確認が必要。</li>
-          <li>100人規模のポーリング負荷、Spreadsheet書き込み時間、CacheServiceの実効TTLは現地または負荷試験で確認が必要。</li>
+          <li>GAS archive実デプロイURLでのexport/retry/recalculate疎通は、運用者によるWebアプリ再deployとURL設定後に確認が必要。</li>
+          <li>50人×20ステージのローカル負荷モデルは完了した。実RTDBの反映遅延、実端末の同時接続、Spreadsheet書込み時間は本番前smokeで確認が必要。</li>
           <li>結果発表終了時のBGM/SEフェードアウト秒数を確定したい。</li>
           <li>強制下車SEとして使う<code>se_forced_off.mp3</code>の素材を配置するか、既存素材のどれを割り当てるか確認したい。</li>
           <li>Firebase実接続では<code>elevator-game-live</code>、Realtime Database <code>asia-southeast1</code>、GitHub Pagesから使うWeb設定値を採用した。本番用に別プロジェクトや別roomIdを分けるかは確認が必要。</li>
           <li>Sparkの100同時接続上限に対して、50人本番で許容する予備端末・見学端末・複数タブの運用ルールを決める必要がある。</li>
-          <li>Host権限を匿名Auth uidだけで運用するか、運営用パスワード/招待コードを併用するかを決める必要がある。</li>
-          <li>Firebase版でCloud FunctionsなしのHostブラウザ集計をどこまで許容するか、Blaze移行の判断基準を本番前に確認したい。</li>
-          <li>Firebase実RTDBの50人相当の負荷試験はまだ未実施。現在のroom単位transactionで十分か、子ノードtransactionへ分ける必要があるかを確認する必要がある。</li>
+          <li>Host認可はFirebase Anonymous Auth uidのallowlistを正とし、画面パスワードは誤操作防止だけに使う。サーバ検証可能な招待コードが必要になった場合はBlaze + Functionsへ移行する。</li>
+          <li>Cloud FunctionsなしのHostブラウザ集計を初期運用として許容する。80接続超の想定、またはサーバ側の集計/締切検証が必要になった時点をBlaze再検討条件とする。</li>
+          <li>50人相当のローカル負荷モデルは完了し、50人×20ステージで推定1,808 writes、公開状態379 bytes、Player一覧7,342 bytes、現ステージ結果90,402 bytesだった。実RTDBの計測は運用者smokeで行う。</li>
           <li>本番運用で<code>roomId</code>をイベントごとにどう発行し、Host uid allowlistを誰がどの手順で登録するかを確定する必要がある。</li>
-          <li>GAS archive APIのpayload schemaとSpreadsheet upsertキーは、<code>archiveId</code>/<code>gameId</code>を正にする方針でよいか確認したい。</li>
+          <li>GAS archive APIの冪等キーは<code>archiveId</code>、ゲームの論理識別は<code>gameId</code>に確定した。実Spreadsheetで同一archiveId再送が重複しないことは運用者smokeで確認する。</li>
           <li>本番Host端末のFirebase uidをallowlistへ登録する運用手順を確定し、GitHub Pagesで使うroomIdごとに登録漏れがないか確認する必要がある。</li>
           <li>2026-06-02追記: 再認証後、allowlist版Firebase Rulesを<code>elevator-game-live-default-rtdb</code>へdeployした。deploy時にRules構文チェックとrelease成功を確認済み。</li>
         </ul>

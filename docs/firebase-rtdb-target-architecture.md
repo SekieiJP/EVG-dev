@@ -6,7 +6,7 @@
 
 エレベーターゲームの本番進行中状態を Firebase Realtime Database に一本化し、Host、Player、Screen が同じフェーズと同じステージ状態を即時に参照できる構成へリファクタリングする。
 
-この文書は、現行UIや `engine.js` の互換維持よりも望ましい目標構成を優先する。既存のGASモード、localStorage進行モード、GAS互換adapter、root room transaction は廃止対象とする。今後の抜本的リファクタリングでは、この文書を現行実装より優先する設計基準として扱う。
+この文書は、現行UIや `engine.js` の互換維持よりも望ましい目標構成を優先する。既存のGASモード、localStorage進行モード、root room transaction は廃止対象とする。GAS互換のcommand名を残すadapterも、実処理はFirebase小ノード読取りと単一multi-location updateへ限定する。今後の抜本的リファクタリングでは、この文書を現行実装より優先する設計基準として扱う。
 
 ## 採用構成
 
@@ -123,7 +123,8 @@ rooms/{roomId}
 
   playerStats/{uid}
     currentSkill
-    stageSkillHistory
+    stageSkillHistoryJson       # canonical JSON。Rulesで本人更新時の完全一致を検証
+    appliedSkillStageIdsJson    # 集計済みstageId。復旧時の二重追記を防ぐ
     updatedAt
 
   tickets/{stageId}/{uid}
@@ -294,51 +295,52 @@ Hostは `roles/hosts/{auth.uid} == true` の場合だけ、以下を書ける。
 
 - `public` のphase、roomVersion、時刻。
 - `config`
+- `nextGameConfigs`
+- `players`、`playerStats`
 - `results`
 - `scores`
+- `historyPlayers`
+- `completedGameSummaries`、公開/Host/本人用の完了詳細
 - `operations`
 - `archive`
 
-Host操作はroot transactionではなく、対象ノード単位に分解する。
+Host操作はroot room transactionではなく、対象ノード単位の疎なパスへ分解する。複数の枝を同時に確定する操作では、DBルートに対する1回のmulti-location `update()`を使い、Rulesで `public` の既存phase/versionをCAS条件として検証する。
 
 禁止:
 
-- `rooms/{roomId}` rootをtransaction/update/setする。
+- `rooms/{roomId}` 全体を単一オブジェクトとしてtransaction/update/setする。
+- フェーズだけを先に確定し、結果・Skill・操作ログを別リクエストで後書きする。
 - `roomFromFirebaseNodes(undefined)` から初期roomを作ってHost操作する。
 - root transactionのローカルキャッシュを信頼してフェーズ判定する。
 
 ### Phase transition
 
-フェーズ遷移は `public` ノードのtransactionで行う。
+フェーズ遷移は `public` を含む単一multi-location updateで行う。副作用のない操作でも同じCAS方式を用いる。
 
 ```text
-transaction rooms/{roomId}/public
-  require current phase == expectedPhase
-  require roomVersion == baseVersion
-  set next phase
-  set phaseStartedAt / countdownEndsAt / movingEndsAt
-  increment roomVersion
+update /
+  rooms/{roomId}/public = nextPublic
+  rooms/{roomId}/operations/{operationId} = operation
 
-after success
-  write operations/{operationId}
+Rules validation
+  require stored phase -> next phase is allowed
+  require next roomVersion == stored roomVersion + 1
+  require Host allowlist
 ```
 
-Rulesでは `data.child('phase')` と `newData.child('phase')` の組み合わせを検証し、不正な飛び越しを拒否する。
+Rulesでは `data.child('phase')` と `newData.child('phase')` の組み合わせを検証し、不正な飛び越しと古いversionからの更新を拒否する。検証に失敗するとmulti-location update全体が反映されないため、操作ログだけが残ることもない。
 
 ### Result commit
 
 結果発表開始時はHostブラウザがticketを読み、決定的な集計関数で結果を計算する。
 
-書き込みは二段階で行う。
+書き込みは、DBルートに対する**1回のmulti-location `update()`**で `public`、`results/{stageId}`、全 `scores/{uid}`、全 `playerStats/{uid}`、root `players/{uid}`、公開履歴、`operations` を同時に確定する。順次 `set()`、複数回の `update()`、phase先行確定は使わない。
 
-1. `public` transactionで `countdown` または `moving` から `reveal` へ進め、`roomVersion` を増やす。このtransaction内で対象stageIdと `results/{stageId}` が未作成であることを確認する。
-2. transaction成功後、**1回のmulti-location `update()`** で `results/{stageId}`、全 `scores/{uid}`、全 `playerStats/{uid}`、`players/{uid}/stageResults`、`operations/{operationId}` を同時に書く。順次 `set()` や複数回の `update()` は使わない。
-
-このcommitでは、StageSkill履歴の追記と現在Skill（全履歴の上位5件、最高値を含む）の更新も同じpayloadに含める。二重集計を防ぐため、Rulesとtransaction前チェックで `results/{stageId}` が既存なら拒否する。Sparkでは完全なサーバ再計算ができないため、Blaze移行時にCloud Functionsで再計算検証を追加する。
+このcommitでは、StageSkill履歴の追記と現在Skill（全履歴の上位5件、最高値を含む）の更新も同じpayloadに含める。二重集計を防ぐため、Rulesのphase/version CASと `results/{stageId}` の新規作成検証で、古いHost操作または既存結果への再commitをupdate全体として拒否する。Sparkでは完全なサーバ再計算ができないため、Blaze移行時にCloud Functionsで再計算検証を追加する。
 
 ### 時刻同期と締切
 
-全クライアントは `/.info/serverTimeOffset` を購読し、`Date.now() + offset` を補正済みサーバ時刻として用いる。Hostは `ServerValue.TIMESTAMP` 基準で `countdownEndsAt`、`movingEndsAt`、`animationStartedAt`、`revealEndsAt` を書き、Player/Screenは同じ補正済み時刻で描画する。
+全クライアントは `/.info/serverTimeOffset` を購読し、`Date.now() + offset` を補正済みサーバ時刻として用いる。Hostはこの補正済み時刻から `countdownEndsAt`、`tallyingEndsAt`、`animationStartedAt`、`revealEndsAt` を確定して書き、Player/Screenも同じ補正方法で描画する。
 
 Spark + Rulesだけでは、クライアントが書いた時刻とFirebaseサーバ時刻を完全に比較する締切検証はできない。したがってSparkは信頼済みHostが締切を確定する運用とし、厳密な受理時刻を要件化する場合はBlaze + Cloud Functionsへ移行する。
 
@@ -462,7 +464,7 @@ Host操作エラー時は必ず以下をログ化する。
 - expectedPhase
 - UI上のphase/version/stageId
 - command送信直前に読んだ `public`
-- transactionが見た `public`
+- commit失敗後に再取得した実DBの `public`
 - response error
 - forced refresh後のphase/version/stageId
 
@@ -518,7 +520,7 @@ Firebase Emulator SuiteでRulesを検証する。
 - Playerは他人ticket、phase、resultsを書けない。
 - Host allowlist uidだけがphaseを書ける。
 - 非Hostはphaseを書けない。
-- `lobby -> stage_intro -> voting -> countdown -> moving -> reveal -> ranking -> next` の順だけ通る。
+- `lobby -> stage_intro -> voting -> countdown/tallying -> reveal -> ranking -> stage_intro/final` の許可済み遷移だけを通す。
 - `stage_intro` のDBに対し、Hostの `open-voting` が成功する。
 - `lobby` のDBに対し、Hostの `open-voting` が拒否される。
 - `results/{stageId}` 二重作成が拒否される。
@@ -539,13 +541,13 @@ Emulatorまたはstaging RTDBに実Firebase SDKで接続し、Host/Player/Screen
 
 ### Browser E2E
 
-Playwrightで3つの独立Browser Contextを使う。
+ローカルmock E2Eでは、共有mock RTDBを使うため1つのBrowser Context内にHost、Player A/B、Screenの独立pageを作り、`testSlot`ごとに匿名認証IDを分離する。
 
-- Host context
-- Player A/B context
-- Screen context
+- Host page
+- Player A/B page
+- Screen page
 
-同一ブラウザタブ切替だけでは不十分。role切替のテストは別途行うが、本番相当のE2Eは独立contextで行う。
+同一pageのrole切替だけでは不十分である。実Firebase Emulatorまたは本番前staging smokeでは、さらに独立Browser Contextまたは物理端末を使い、Firebase AuthセッションとRTDB購読も分離して確認する。
 
 検証観点:
 
@@ -573,7 +575,7 @@ Spark運用では、同時接続80を超える想定になった時点でBlaze�
 1. 現行コードからGAS/local進行分岐を削除する。
 2. Firebase adapterをGAS互換APIではなく、RTDB node別command/query APIへ作り直す。
 3. root room materializationをUI境界から消し、ViewModelを画面別購読から生成する。
-4. Host phase commandを `public` transactionへ移す。
+4. Host phase commandをRules CAS付きmulti-location updateへ移す。
 5. Player ticket commandを本人ノードwriteへ移す。
 6. Result commitを小ノード出力へ分割する。
 7. Host role allowlistを導入する。
@@ -596,5 +598,5 @@ Spark運用では、同時接続80を超える想定になった時点でBlaze�
 - localStorageのroomデータを削除しても進行に影響しない。
 - Hostの `internal-status` だけで、フェーズ不一致の原因を調査できる。
 - Emulator testsでRulesの許可/拒否が検証されている。
-- Browser E2Eで3端末相当の20ステージ短縮シナリオが通る。
-- 50人相当の負荷試験で、反映遅延とRTDBダウンロード量が許容範囲に収まる。
+- Browser E2EでHost、Player A/B、Screenの3端末相当が代表1ステージを完走し、結果/Skill表示とfinal自動追従が通る。
+- 50人×20ステージ相当の負荷モデルで、書込み回数とpayloadサイズがSpark運用の想定範囲に収まる。実RTDBの反映遅延は本番前smokeで確認する。

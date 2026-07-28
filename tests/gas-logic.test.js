@@ -470,3 +470,12 @@ run("GAS archive recalculation updates only a selected game and player skill his
   assert.strictEqual(JSON.parse(recalculated.records.gameHistory.find((row) => row.gameId === "g-1").summaryJson).scores.alice, 12);
   assert.strictEqual(recalculated.records.gameHistory.find((row) => row.gameId === "g-2").summaryJson, JSON.stringify({ title: "two" }));
 });
+
+run("GAS web routing is archive-only and provisions archive_log", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../gas/src/Code.gs"), "utf8");
+  const routeSource = source.slice(source.indexOf("function route_"), source.indexOf("function createInitialRoom_"));
+  assert.match(routeSource, /\/api\/archive\/export/);
+  assert.match(routeSource, /\/api\/archive\/recalculate/);
+  assert.doesNotMatch(routeSource, /\/api\/status|\/api\/room\/state|\/api\/player\/join|saveRoom_/);
+  assert.match(source.slice(0, source.indexOf("function ensureRuntimeReady_")), /archive_log/);
+});

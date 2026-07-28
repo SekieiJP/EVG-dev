@@ -152,13 +152,13 @@ Host / Screen / Player browser
 ### 4.3 状態管理方針
 - **Single Source of Truth はRTDB** とする。クライアントは役割別の小ノード購読から表示モデルを作り、進行中room全体をlocalStorageへ保存しない。
 - Host、Player、Screenは `public`、現在ステージ設定、必要な本人/投影用データをRTDB購読で自動追従する。HTTPの定期ポーリング、GAS `/api/status`、同一端末 `BroadcastChannel` 同期は本番経路に使わない。
-- `public` のフェーズ遷移はHost allowlist uidが `expectedPhase` と `roomVersion` を検証するtransactionで確定する。Playerの「次へ」ボタンでフェーズを進めたり、ランキング画面に意図的に置き去りにしたりしない。
-- Hostがステージ集計を確定するときは、フェーズtransaction成功後、同一のRTDB multi-location `update()` で `results/{stageId}`、`scores/{uid}`、`playerStats/{uid}`、プレイヤー履歴、操作ログを一括反映する。個別順次書込みは禁止する。結果ノードが既存の場合はcommitを拒否し、二重集計を防ぐ。
+- `public` のフェーズ遷移はHost allowlist uidだけが実行できる。クライアントは読取り時の `expectedPhase` と `roomVersion` を添えて変更を作り、Rulesが既存値に対する正しい次フェーズと `roomVersion + 1` を検証する。競合時は書込み全体を拒否して最新 `public` を再取得する。Playerの「次へ」ボタンでフェーズを進めたり、ランキング画面に意図的に置き去りにしたりしない。
+- Hostがステージ集計を確定するときは、RTDBルートを基準にした1回のmulti-location `update()` で、フェーズ、`results/{stageId}`、`scores/{uid}`、`playerStats/{uid}`、プレイヤー履歴、操作ログを原子的に一括反映する。フェーズを先に確定して副作用を後書きする二段階方式と、個別順次書込みは禁止する。Rulesのversion/phase検証または既存結果により拒否された場合はupdate全体が反映されず、二重集計を防ぐ。
 
 ### 4.4 RTDB購読と同期
 - 全画面で `rooms/{roomId}` rootの購読は禁止する。Hostは `public`、設定、参加者、投票状況、結果等、Playerは本人ticket/結果/score、Screenは投影用集約結果だけを購読する。
 - フェーズ通知はRTDB listenerを主経路とし、表示再描画で入力中フォームを失わないよう局所的に更新する。
-- `roomVersion` はフェーズtransactionごとに増加する。Player自身のticketやプロフィール更新をversion比較で捨てない。
+- `roomVersion` はHostのフェーズcommitごとに増加する。Player自身のticketやプロフィール更新をversion比較で捨てない。
 
 ### 4.5 時刻同期
 - `/.info/serverTimeOffset` を購読し、`Date.now() + serverTimeOffset` を補正済みサーバ時刻として使用する。
@@ -178,7 +178,7 @@ Host / Screen / Player browser
 | 締切後の改変防止 | Rulesで投票フェーズと本人ticketパスだけを書込み可能にする。Sparkでの厳密時刻検証は4.5の制約に従う |
 | なりすまし防止 | Firebase Authの `auth.uid` と本人ノードを照合。UUIDは復旧・表示用IDとして扱う |
 | 投票改ざん防止 | クライアントとHost集計関数で入力範囲・禁止階等を検証し、Rulesで他人ノード書込みを拒否 |
-| ランキング集計の信頼性 | Sparkでは信頼済みHostの決定的集計を確定値とし、二重commitをRules/transactionで拒否 |
+| ランキング集計の信頼性 | Sparkでは信頼済みHostの決定的集計を確定値とし、二重commitをRulesのphase/version CASと既存結果検証で拒否 |
 | ホスト権限保護 | `roles/hosts/{uid}` allowlistをRulesで検証。パスワードUIは誤操作防止であり認可根拠ではない |
 | スクリーンURL | 常時固定URL。投影専用のため認証なし（操作機能を持たない） |
 
@@ -457,8 +457,8 @@ Host / Screen / Player browser
 | 時刻同期 | `/.info/serverTimeOffset` 購読 | 補正済みサーバ時刻を算出する |
 | 状態購読 | `public` と役割別小ノード購読 | HTTP polling・全room取得を使わずに表示を同期する |
 | Player command | `players/{uid}`、`tickets/{stageId}/{uid}`、`ticketPresence/{stageId}/{uid}` | 本人の参加、改名、投票、棄権のみ。Rulesで `auth.uid == uid` を必須にする |
-| Host phase command | `public` transaction | `expectedPhase` と `roomVersion` を検証して次フェーズと時刻を確定する |
-| Host result commit | `results`、`scores`、`playerStats`、履歴、`operations` のmulti-location update | 同一ステージの結果・得点・Skill・操作ログを原子的に反映する。既存結果は拒否する |
+| Host phase command | `public` を含むmulti-location update + Rules CAS | `expectedPhase` と `roomVersion` に相当する既存値検証をRulesで行い、次フェーズと時刻を確定する |
+| Host result commit | `public`、`results`、`scores`、`playerStats`、履歴、`operations` の単一multi-location update | フェーズを含む同一ステージの結果・得点・Skill・操作ログを原子的に反映する。競合・既存結果はupdate全体を拒否する |
 | 次ゲーム設定 | `nextGameConfigs/{configId}` | Host allowlistのみが候補を登録・更新・選択できる |
 | 戦歴参照 | `completedGameSummaries`、本人詳細ノード | 公開サマリと本人だけの詳細を分離する |
 | GAS archive | archive専用HTTP endpoint | final/中断後の確定payloadを冪等にSpreadsheetへ出力する。進行操作には使わない |

@@ -17,7 +17,8 @@
       this.onServerTimeOffset = options.onServerTimeOffset || (() => {});
       this.channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(CHANNEL_NAME) : null;
       this.roomId = cleanKey(this.config.FIREBASE_ROOM_ID || "elevator-game-live");
-      this.auth = loadJson(AUTH_KEY, null);
+      this.authStorageKey = mockAuthStorageKey();
+      this.auth = loadJson(this.authStorageKey, null);
       this.mock = Boolean(this.config.FIREBASE_USE_LOCAL_MOCK);
       this.readyPromise = null;
       this.unsubscribe = null;
@@ -48,7 +49,7 @@
           idToken: "mock-token",
           mock: true,
         };
-        localStorage.setItem(AUTH_KEY, JSON.stringify(this.auth));
+        localStorage.setItem(this.authStorageKey, JSON.stringify(this.auth));
       }
       const room = this.readMockRoom();
       if (!room) this.writeMockRoom(this.engine.createInitialRoom(this.engine.DEFAULT_CONFIG));
@@ -67,7 +68,7 @@
       this.firebaseAuth = sdk.getAuth(this.firebaseApp);
       const user = await currentOrAnonymousUser(sdk, this.firebaseAuth);
       this.auth = { uid: user.uid, idToken: await user.getIdToken(), mock: false };
-      localStorage.setItem(AUTH_KEY, JSON.stringify(this.auth));
+      localStorage.setItem(this.authStorageKey, JSON.stringify(this.auth));
       this.firebaseDb = sdk.getDatabase(this.firebaseApp);
       this.serverTimeOffsetUnsubscribe = sdk.onValue(
         sdk.ref(this.firebaseDb, "/.info/serverTimeOffset"),
@@ -386,7 +387,10 @@
         }
         payload = Object.assign({}, payload, { config: snapshot.val().config });
       }
-      const room = await this.readRestRoom({ purpose: "mutation", includeCompletedGames: ["/api/host/import-config", "/api/host/start-game-config"].includes(path) });
+      const room = await this.readRestRoom({
+        purpose: "mutation",
+        includeCompletedGames: ["/api/host/import-config", "/api/host/start-game-config", "/api/host/advance"].includes(path),
+      });
       if (!room && path !== "/api/host/import-config" && path !== "/api/host/update-config") {
         return { ok: false, code: "not_initialized", error: "ゲームルームがまだ初期化されていません。Host認証をやり直してください。" };
       }
@@ -853,32 +857,6 @@
       const allowed = snapshot.exists() && snapshot.val() === true;
       this.debug.isHostAllowed = allowed;
       return allowed;
-    }
-
-    async commitPublicTransition(currentRoom, nextRoom) {
-      const expected = compactStatus(currentRoom);
-      const nextPublic = compactStatus(nextRoom);
-      let transactionPublic = null;
-      try {
-        const transaction = await this.sdk.runTransaction(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/public`), (currentPublic) => {
-          transactionPublic = currentPublic;
-          this.debug.lastTransactionPublic = currentPublic || null;
-          if (!publicMatches(currentPublic, expected)) return;
-          return nextPublic;
-        }, { applyLocally: false });
-        if (!transaction.committed) {
-          return {
-            ok: false,
-            code: "version_conflict",
-            error: "DB上のフェーズまたはバージョンが更新されています。再読み込みしてください。",
-            debug: { expectedPublic: expected, transactionPublic },
-          };
-        }
-        return { ok: true };
-      } catch (error) {
-        this.debug.lastRulesError = error.message || String(error);
-        return { ok: false, code: "rules", error: error.message || "Firebase Rulesにより更新が拒否されました。" };
-      }
     }
 
     async commitHostAtomicUpdate(path, currentRoom, nextRoom) {
@@ -1886,6 +1864,13 @@
     } catch (error) {
       return fallback;
     }
+  }
+
+  function mockAuthStorageKey() {
+    if (typeof location === "undefined" || !location.search) return AUTH_KEY;
+    const slot = new URLSearchParams(location.search).get("testSlot");
+    const cleanSlot = String(slot || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
+    return cleanSlot ? `${AUTH_KEY}.${cleanSlot}` : AUTH_KEY;
   }
 
   function nowIso() {
