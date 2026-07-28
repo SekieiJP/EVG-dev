@@ -541,6 +541,8 @@ StageSkill = (上昇成功階数 / (ステージ階数 × 定員 / 参加人数)
 
 ### 10.5.5 集計タイミング
 - 各ステージの集計直後に、StageSkillを計算・記録し、その値を含めて現在Skill（全StageSkillの上位5件合計）を更新する。更新後の現在SkillとStageSkill履歴は同一の結果commit multi-location updateでRTDBへ保存する。
+- Skill履歴の二重適用判定はstageId単独ではなく、`JSON.stringify([gameId, stageId])` で表すゲーム単位のステージキーを使う。同じステージ設定を別ゲームで再利用した場合も、各ゲームのStageSkillを別実績として1件ずつ記録する。
+- 旧データのSkill履歴がroot `players/{uid}` に存在する場合はrootをcanonicalとして保持し、room mirrorだけを同期する。root履歴が空で確定済み `results` にStageSkillが残る場合は、Hostによる移行時に現ゲームの全resultsと完了ゲーム詳細から有限値（0を含む）を時系列で復元し、root、`playerStats`、公開Skill index、完了履歴を1回のversion CAS付きmulti-location updateで揃える。roomにだけ由来不明の非空履歴がある場合や、同じゲーム・ステージの保存値が競合する場合は、数値一致で推測せず移行を停止する。
 - ゲーム終了時には、更新済みの9指標をRTDB履歴へ確定し、GAS archive payloadにも含める。
 - 個別ステージの結果はRTDBの `results` とプレイヤー本人の履歴ノードに保存し、Skill値の再計算に備える。戦歴閲覧時は保存済み値を読み出すのみ。
 - 指標定義が変わった場合は、HostがRTDB履歴を対象に手動再集計を実行する。Spreadsheet関数は進行中・正系の再計算に使わない。
@@ -684,3 +686,4 @@ SpreadsheetはGAS archiveの出力先であり、進行中room・次ゲーム候
 | v1.20 | 2026-06-01 | Firebaseの画面別購読と、Host画面の単一「次へ」ボタン化、Host結果発表Skip廃止を反映。 |
 | v1.21 | 2026-06-05 | 30F以上の結果発表アニメーションで、乗降・乗車不可・ボーナス確定のない階を70%短縮する仕様を反映。 |
 | v1.23 | 2026-07-29 | Firebase RTDBを進行中ゲームの正系、GAS/Spreadsheetをarchive専用へ統一。RTDB購読、自動Player追従、原子的結果commit、9指標、上位5件Skill、同日継続、公開履歴境界を反映。 |
+| v1.24 | 2026-07-29 | Skill適用済みキーをgameId＋stageIdへ変更し、root履歴優先・全確定results復元・version CASによる一回限りのFirebase Skill移行を反映。 |

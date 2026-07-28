@@ -371,7 +371,7 @@
         <h2>2026-07-29 P0/P1 実装完了時の判断</h2>
         <ul>
           <li><strong>デザインの決定:</strong> PlayerのStageSkill確定時に、ステージ得点、StageSkill、持ち点、現在Skill、StageSkill履歴を同じ決定結果から更新する。現在Skillは履歴全体を降順にして上位5件を合計し、最高値も含める。</li>
-          <li><strong>デザインの決定:</strong> 復旧・再試行で同じStageSkillを二重追記しないよう、プレイヤーごとに<code>appliedSkillStageIds</code>を持つ。StageSkillの値が前ステージと同値でも、stageIdが別なら正しく1件として追加する。</li>
+          <li><strong>デザインの決定:</strong> 復旧・再試行で同じStageSkillを二重追記しないよう、プレイヤーごとに<code>appliedSkillStageIds</code>を持つ。値はstageId単独ではなく<code>JSON.stringify([gameId, stageId])</code>とし、同じstageIdを別ゲームで再利用した場合も別実績として正しく追加する。</li>
           <li><strong>デザインの決定:</strong> Firebase Rulesで本人プロフィール更新とSkill改ざん防止を同時に扱うため、永続ノードの履歴はcanonical JSON文字列<code>stageSkillHistoryJson</code>と<code>appliedSkillStageIdsJson</code>で保存する。読取り時は旧配列形式にも対応し、書戻しで新形式へ揃える。</li>
           <li><strong>デザインの決定:</strong> 公開戦績のキーはraw uid/UUIDではなく決定的なopaque <code>profileId</code>とし、公開payloadを表示名、現在Skill、得点、順位、ステージ/ゲーム識別情報に限定する。他人のticket、予想、内訳、StageSkill履歴、個人9指標は公開しない。</li>
           <li><strong>デザインの決定:</strong> final遷移と同じ原子的commitでFirebaseの完了サマリ、公開詳細、Host詳細、本人詳細、archive queued状態を永続化する。GAS送信はcommit後に行い、失敗してもfinalとSkillを巻き戻さず<code>archive.status=failed</code>として再送可能にする。</li>
@@ -383,6 +383,24 @@
           <li><strong>トレードオフ:</strong> Spark構成では集計値の数学的正当性をRulesで再計算できないため、allowlist済みHostブラウザを信頼する。PlayerによるSkillフィールド改ざん、古いHost操作、二重結果commit、権限外の履歴読取りはRulesで拒否する。</li>
           <li><strong>検証:</strong> Unit、Rules emulator、50人×20ステージ負荷モデル、PlaywrightのHost/Player A/Player B/Screen E2Eを実行した。RulesではPlayerのroot/playerStats/履歴Skill偽装拒否と、古いversionの副作用を含むupdate全拒否を確認した。画面E2Eではスコア、StageSkill、持ち点、現在Skillとfinal自動追従を確認した。</li>
           <li><strong>未解決の質問:</strong> 本番Firebase Rulesのdeploy、Host uid allowlist、GAS Webアプリの再deploy、archive URL/API keyの公開設定、実Firebase複数端末smokeは運用権限が必要である。詳細手順は<code>docs/operator-action-required-p0-p1.html</code>へ分離した。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>2026-07-29 本番監査とSkill移行 r2</h2>
+        <ul>
+          <li><strong>監査結果:</strong> GitHub Pagesはコミット<code>d4a0b0b</code>のアセット版<code>260729-p0p1</code>を公開済みだった。一方、本番RTDB Rulesは旧版で、<code>historyPlayers</code>と<code>nextGameConfigs</code>がなく、History実画面で<code>historyPlayers permission_denied</code>と全員Skill 0表示を確認した。</li>
+          <li><strong>監査結果:</strong> 本番roomは2026-06-12に終了した<code>final</code>で、現ゲームに5 stage results、30 player results、有限StageSkill 29件が残っていた。room/rootのSkill履歴は空、現在Skillは全員0だった。Host allowlistは3 uid、GAS archive URL/API keyは未設定だった。</li>
+          <li><strong>デザインの決定:</strong> stageId単独の適用済みmarkerでは、別ゲームの同名ステージが誤って抑止されるため、ゲームIDとstageIdのJSON pairへ変更した。旧plain markerは由来を証明できないため保持するが、新ゲームの判定には使わず、推測で直前gameIdへ割り当てない。</li>
+          <li><strong>デザインの決定:</strong> Host認証時backfillは現在ステージ1件だけでなく<code>results</code>全件を読む。root playerの非空履歴はcanonicalとして変更せず、rootが空の場合だけ確定結果から復元する。公開indexだけでなくroot player、room playerStats、完了サマリ、公開/Host/本人詳細を同じversion CAS付きmulti-location updateで同期する。</li>
+          <li><strong>権限境界:</strong> 通常購読は現在ステージ結果だけのまま維持し、移行で必要な<code>results</code>親の一括読取りはallowlist済みHostだけに許可する。Player/Screenによる親読取りは拒否する。</li>
+          <li><strong>デザインの決定:</strong> 非空root履歴をcanonicalとして採用したプレイヤーは、Skill以外の名前・参加時刻・roomIdも含めroot nodeを一切書き直さず、room mirrorと公開indexだけを同期する。</li>
+          <li><strong>デザインの決定:</strong> 移行成功時だけ<code>meta.schemaVersion</code>を<code>firebase-rtdb-v3-skill-history</code>へ更新し、それ以後のHost認証ではbackfillを省略する。原子的updateが失敗した場合はversionも旧値のままなので、次回認証で再試行する。</li>
+          <li><strong>トレードオフ:</strong> rootに非空履歴があり結果との由来対応を証明できない場合、値一致による推測マージはしない。既存canonicalを壊さないことを優先し、room mirrorのみrootへ合わせる。</li>
+          <li><strong>安全側の停止:</strong> root履歴が空でもroomに由来不明の非空履歴と旧plain markerがある場合、同じ数値のStageSkillを同一実績とは見なさず<code>SKILL_HISTORY_AMBIGUOUS</code>で移行を止める。本番対象roomはroot/room履歴とも空のため、この停止条件には該当しない。</li>
+          <li><strong>実データdry-run:</strong> 本番スナップショットをローカルで新移行関数へ通し、29件を履歴長<code>[4,5,5,5,5,5]</code>として復元、6人すべて非ゼロ現在Skill、ゲーム単位marker、現ゲーム5ステージ完了詳細を生成できた。RTDBへの書込みは行っていない。</li>
+          <li><strong>権限境界:</strong> 本番Rules deployは共有本番セキュリティ境界の永続変更に当たるため、明示承認なしでは実行しない。旧Rulesは一時領域へ読取りバックアップ済み。承認・作業手順と反映後backfill確認は<code>docs/operator-action-required-p0-p1.html</code>へ更新した。</li>
+          <li><strong>未解決の質問:</strong> 本番Rules deploy、allowlist済みHostによる1回のbackfill、GAS archive Webアプリと設定値の反映、実端末smokeが未実施。</li>
         </ul>
       </section>
 

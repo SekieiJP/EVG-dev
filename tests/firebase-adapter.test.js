@@ -42,6 +42,7 @@ run("firebase nodes round-trip room state without snapshot", () => {
   assert.strictEqual(nodes.snapshot, undefined);
   assert.strictEqual(nodes.completedGames, undefined);
   assert.strictEqual(nodes.meta.hostUid, undefined);
+  assert.strictEqual(nodes.meta.schemaVersion, "firebase-rtdb-v3-skill-history");
   assert.strictEqual(nodes.players.alice.name, "Alice");
   assert.strictEqual(nodes.scores.alice.total, 12);
   assert.strictEqual(nodes.ticketPresence["stage-001"].alice.status, "submitted");
@@ -49,6 +50,7 @@ run("firebase nodes round-trip room state without snapshot", () => {
   nodes.roles = { hosts: { "host-uid": true } };
   const restored = EVGFirebaseAdapter.roomFromFirebaseNodes(nodes, Engine);
   assert.strictEqual(restored.hostUid, "host-uid");
+  assert.strictEqual(restored.firebaseSchemaVersion, "firebase-rtdb-v3-skill-history");
   assert.strictEqual(restored.phase, Engine.PHASES.VOTING);
   assert.strictEqual(restored.roomVersion, 7);
   assert.strictEqual(restored.revealEndsAt, "2026-06-01T00:02:00.000Z");
@@ -482,6 +484,370 @@ run("firebase public history nodes expose skill summaries and stage rankings onl
   assert.strictEqual(JSON.stringify(nodes.historyPlayers).includes('"uuid"'), false);
   assert.strictEqual(JSON.stringify(nodes.completedGameSummaries).includes('"uuid"'), false);
   assert.strictEqual(JSON.stringify(nodes.completedGamePublicDetails).includes('"uuid"'), false);
+});
+
+run("firebase career backfill rebuilds all finite current-game StageSkills and repairs a partial final archive", () => {
+  const config = Engine.deepClone(Engine.DEFAULT_CONFIG);
+  config.stages = Array.from({ length: 5 }, (_, index) => {
+    return Object.assign({}, Engine.deepClone(config.stages[index % config.stages.length]), {
+      stageId: `stage-${String(index + 1).padStart(3, "0")}`,
+      name: `Stage ${index + 1}`,
+    });
+  });
+  let room = Engine.createInitialRoom(config);
+  room.gameId = "production-like-game";
+  for (let index = 0; index < 6; index += 1) {
+    room = Engine.registerPlayer(room, `Player ${index + 1}`, `p${index + 1}`).room;
+  }
+  room.phase = Engine.PHASES.FINAL;
+  config.stages.forEach((stage, stageIndex) => {
+    const players = {};
+    room.players.forEach((player, playerIndex) => {
+      players[player.uuid] = {
+        uuid: player.uuid,
+        name: player.name,
+        score: 10 + stageIndex + playerIndex,
+        stageSkill: stageIndex === 4 && playerIndex === 5
+          ? null
+          : stageIndex === 0 && playerIndex === 0
+            ? 0
+            : 20 + stageIndex * 10 + playerIndex,
+        ticket: { uuid: player.uuid, boardFloor: 1, exitFloor: 2, predictions: {} },
+      };
+    });
+    room.stageResults[stage.stageId] = {
+      stageId: stage.stageId,
+      calculatedAt: `2026-07-29T00:0${stageIndex}:00.000Z`,
+      players,
+      rankings: [],
+      timeline: [],
+    };
+  });
+  room.completedGames = [{
+    gameId: room.gameId,
+    title: "partial",
+    finishedAt: "2026-07-29T00:05:00.000Z",
+    stageResults: {
+      [config.stages[4].stageId]: {
+        stageId: config.stages[4].stageId,
+        calculatedAt: "2026-07-29T00:04:00.000Z",
+        players: {},
+      },
+    },
+  }];
+
+  const recovered = EVGFirebaseAdapter.recoverCareerSkillState(room, {}, Engine);
+  assert.strictEqual(recovered.players.reduce((sum, player) => sum + player.stageSkillHistory.length, 0), 29);
+  assert.strictEqual(recovered.players[0].stageSkillHistory.length, 5);
+  assert.strictEqual(recovered.players[0].stageSkillHistory.includes(0), true);
+  assert.strictEqual(recovered.players[0].skill, Engine.calculateCurrentSkill(recovered.players[0].stageSkillHistory));
+  assert.deepStrictEqual(
+    recovered.players.map((player) => player.stageSkillHistory.length).sort((a, b) => a - b),
+    [4, 5, 5, 5, 5, 5]
+  );
+  assert.strictEqual(recovered.players.every((player) => player.skill !== 0), true);
+  assert.deepStrictEqual(recovered.players[0].appliedSkillStageIds, config.stages.map((stage) => {
+    return Engine.skillStageApplicationId(room.gameId, stage.stageId);
+  }));
+  assert.strictEqual(recovered.players.every((player) => {
+    return player.appliedSkillStageIds.every((id) => {
+      const parsed = JSON.parse(id);
+      return Array.isArray(parsed) && parsed.length === 2;
+    });
+  }), true);
+  assert.strictEqual(Object.keys(recovered.completedGames[0].stageResults).length, 5);
+
+  const repeated = EVGFirebaseAdapter.recoverCareerSkillState(recovered, {}, Engine);
+  assert.deepStrictEqual(
+    repeated.players.map((player) => player.stageSkillHistory),
+    recovered.players.map((player) => player.stageSkillHistory)
+  );
+  assert.deepStrictEqual(
+    repeated.players.map((player) => player.appliedSkillStageIds),
+    recovered.players.map((player) => player.appliedSkillStageIds)
+  );
+});
+
+run("firebase career backfill treats repeated stage ids in different games as separate results", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "game-new";
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  const result = (stageSkill, calculatedAt) => ({
+    stageId: "stage-001",
+    calculatedAt,
+    players: {
+      alice: {
+        uuid: "alice",
+        name: "Alice",
+        score: stageSkill,
+        stageSkill,
+        ticket: { uuid: "alice", boardFloor: 1, exitFloor: 2, predictions: {} },
+      },
+    },
+    rankings: [],
+    timeline: [],
+  });
+  room.completedGames = [{
+    gameId: "game-old",
+    title: "old",
+    finishedAt: "2026-07-28T00:01:00.000Z",
+    stageResults: { "stage-001": result(30, "2026-07-28T00:00:00.000Z") },
+  }];
+  room.stageResults = { "stage-001": result(40, "2026-07-29T00:00:00.000Z") };
+
+  const recovered = EVGFirebaseAdapter.recoverCareerSkillState(room, {}, Engine);
+  assert.deepStrictEqual(recovered.players[0].stageSkillHistory, [30, 40]);
+  assert.deepStrictEqual(recovered.players[0].appliedSkillStageIds, [
+    Engine.skillStageApplicationId("game-old", "stage-001"),
+    Engine.skillStageApplicationId("game-new", "stage-001"),
+  ]);
+});
+
+run("firebase career backfill preserves a nonempty canonical root Skill history", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "game-current";
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room.stageResults = {
+    "stage-001": {
+      stageId: "stage-001",
+      calculatedAt: "2026-07-29T00:00:00.000Z",
+      players: {
+        alice: { uuid: "alice", name: "Alice", stageSkill: 40 },
+      },
+    },
+  };
+  const recovered = EVGFirebaseAdapter.recoverCareerSkillState(room, {
+    alice: {
+      currentSkill: 777,
+      stageSkillHistoryJson: "[88]",
+      appliedSkillStageIdsJson: "[\"legacy-stage\"]",
+    },
+  }, Engine);
+  assert.deepStrictEqual(recovered.players[0].stageSkillHistory, [88]);
+  assert.deepStrictEqual(recovered.players[0].appliedSkillStageIds, ["legacy-stage"]);
+  assert.strictEqual(recovered.players[0].skill, 777);
+});
+
+run("firebase career backfill rejects conflicting duplicate game-stage results", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "game-conflict";
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  const result = (stageSkill) => ({
+    stageId: "stage-001",
+    calculatedAt: "2026-07-29T00:00:00.000Z",
+    players: { alice: { uuid: "alice", name: "Alice", stageSkill } },
+  });
+  room.completedGames = [{
+    gameId: room.gameId,
+    finishedAt: "2026-07-29T00:01:00.000Z",
+    stageResults: { "stage-001": result(30) },
+  }];
+  room.stageResults = { "stage-001": result(40) };
+
+  assert.throws(
+    () => EVGFirebaseAdapter.recoverCareerSkillState(room, {}, Engine),
+    /SKILL_HISTORY_CONFLICT/
+  );
+});
+
+run("firebase career backfill rejects unscoped nonempty room history instead of guessing by value", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "game-ambiguous";
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room.players[0].stageSkillHistory = [40];
+  room.players[0].appliedSkillStageIds = ["stage-001"];
+  room.stageResults = {
+    "stage-001": {
+      stageId: "stage-001",
+      calculatedAt: "2026-07-29T00:00:00.000Z",
+      players: { alice: { uuid: "alice", name: "Alice", stageSkill: 40 } },
+    },
+  };
+
+  assert.throws(
+    () => EVGFirebaseAdapter.recoverCareerSkillState(room, {}, Engine),
+    /SKILL_HISTORY_AMBIGUOUS/
+  );
+});
+
+runAsync("firebase Host backfill reads every current result and atomically writes recovered mirrors", async () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "backfill-game";
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room.phase = Engine.PHASES.FINAL;
+  room.roomVersion = 9;
+  const result = (stageId, stageSkill, calculatedAt) => ({
+    stageId,
+    calculatedAt,
+    players: {
+      alice: { uuid: "alice", name: "Alice", stageSkill, score: stageSkill },
+    },
+    rankings: [],
+    timeline: [],
+  });
+  const allResults = {
+    "stage-001": result("stage-001", 30, "2026-07-29T00:00:00.000Z"),
+    "stage-002": result("stage-002", 40, "2026-07-29T00:01:00.000Z"),
+  };
+  room.stageResults = { "stage-002": allResults["stage-002"] };
+
+  const reads = [];
+  let rootUpdate = null;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.readRestRoom = async () => Engine.deepClone(room);
+  adapter.serverNowIso = () => "2026-07-29T00:02:00.000Z";
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async (path) => {
+      reads.push(path);
+      const value = path === "/rooms/unit-room/results"
+        ? allResults
+        : path === "/players/alice"
+          ? { currentSkill: 0 }
+          : null;
+      return {
+        exists: () => value !== null,
+        val: () => value,
+      };
+    },
+    update: async (path, updates) => {
+      assert.strictEqual(path, "/");
+      rootUpdate = updates;
+    },
+  };
+  adapter.firebaseDb = {};
+
+  await adapter.backfillHistoryIndexes();
+  assert.strictEqual(reads.includes("/rooms/unit-room/results"), true);
+  assert.strictEqual(rootUpdate["rooms/unit-room/public"].roomVersion, 10);
+  assert.strictEqual(
+    JSON.parse(rootUpdate["rooms/unit-room/playerStats/alice"].stageSkillHistoryJson).length,
+    2
+  );
+  assert.strictEqual(JSON.parse(rootUpdate["players/alice"].stageSkillHistoryJson).length, 2);
+  assert.strictEqual(
+    rootUpdate["rooms/unit-room/historyPlayers"][EVGFirebaseAdapter.publicProfileId("alice")].currentSkill,
+    70
+  );
+  assert.strictEqual(
+    rootUpdate["rooms/unit-room/meta"].schemaVersion,
+    "firebase-rtdb-v3-skill-history"
+  );
+
+  const migrated = Engine.deepClone(room);
+  migrated.firebaseSchemaVersion = "firebase-rtdb-v3-skill-history";
+  adapter.readRestRoom = async () => migrated;
+  reads.length = 0;
+  rootUpdate = null;
+  await adapter.backfillHistoryIndexes();
+  assert.deepStrictEqual(reads, []);
+  assert.strictEqual(rootUpdate, null);
+});
+
+runAsync("firebase Host backfill mirrors a nonempty canonical root without overwriting it", async () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.gameId = "canonical-game";
+  room = Engine.registerPlayer(room, "Room Alice", "alice").room;
+  room.roomVersion = 3;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  let rootUpdate = null;
+  adapter.readRestRoom = async () => Engine.deepClone(room);
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async (path) => {
+      const value = path.endsWith("/results")
+        ? {}
+        : path === "/players/alice"
+          ? {
+              name: "Canonical Alice",
+              currentSkill: 88,
+              stageSkillHistoryJson: "[88]",
+              appliedSkillStageIdsJson: "[\"legacy-stage\"]",
+              joinedAt: "2026-07-01T00:00:00.000Z",
+              lastSeenAt: "2026-07-28T00:00:00.000Z",
+              updatedAt: "2026-07-28T00:00:00.000Z",
+              roomId: "another-room",
+            }
+          : null;
+      return { exists: () => value !== null, val: () => value };
+    },
+    update: async (_path, updates) => {
+      rootUpdate = updates;
+    },
+  };
+  adapter.firebaseDb = {};
+
+  await adapter.backfillHistoryIndexes();
+  assert.strictEqual(rootUpdate["players/alice"], undefined);
+  assert.deepStrictEqual(
+    JSON.parse(rootUpdate["rooms/unit-room/playerStats/alice"].stageSkillHistoryJson),
+    [88]
+  );
+  assert.strictEqual(rootUpdate["rooms/unit-room/playerStats/alice"].currentSkill, 88);
+});
+
+runAsync("firebase Host backfill rereads and recalculates after a version conflict", async () => {
+  let baseRoom = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  baseRoom.gameId = "retry-game";
+  baseRoom = Engine.registerPlayer(baseRoom, "Alice", "alice").room;
+  baseRoom.roomVersion = 9;
+  const result = (stageId, stageSkill) => ({
+    stageId,
+    calculatedAt: `2026-07-29T00:0${stageId.endsWith("2") ? 1 : 0}:00.000Z`,
+    players: { alice: { uuid: "alice", name: "Alice", stageSkill } },
+  });
+  const firstResults = { "stage-001": result("stage-001", 30) };
+  const secondResults = Object.assign({}, firstResults, {
+    "stage-002": result("stage-002", 40),
+  });
+  let readCount = 0;
+  let updateCount = 0;
+  let committedUpdates = null;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.readRestRoom = async () => {
+    readCount += 1;
+    const room = Engine.deepClone(baseRoom);
+    room.roomVersion = readCount === 1 ? 9 : 10;
+    return room;
+  };
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async (path) => {
+      const value = path.endsWith("/results")
+        ? (readCount === 1 ? firstResults : secondResults)
+        : path === "/players/alice"
+          ? { currentSkill: 0 }
+          : null;
+      return { exists: () => value !== null, val: () => value };
+    },
+    update: async (_path, updates) => {
+      updateCount += 1;
+      if (updateCount === 1) throw new Error("PERMISSION_DENIED: version conflict");
+      committedUpdates = updates;
+    },
+  };
+  adapter.firebaseDb = {};
+
+  await adapter.backfillHistoryIndexes();
+  assert.strictEqual(readCount, 2);
+  assert.strictEqual(updateCount, 2);
+  assert.strictEqual(committedUpdates["rooms/unit-room/public"].roomVersion, 11);
+  assert.deepStrictEqual(
+    JSON.parse(committedUpdates["rooms/unit-room/playerStats/alice"].stageSkillHistoryJson),
+    [30, 40]
+  );
 });
 
 run("firebase committed tally preserves updated Skill in every authoritative node", () => {

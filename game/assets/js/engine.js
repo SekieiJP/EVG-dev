@@ -308,6 +308,7 @@
       lastSeenAt: nowIso(),
       skill: 0,
       stageSkillHistory: [],
+      appliedSkillStageIds: [],
     };
     next.players.push(player);
     next.scores[player.uuid] = next.scores[player.uuid] || 0;
@@ -421,6 +422,7 @@
     const stageTickets = room.tickets[stage.stageId] || {};
     const resultAt = validIsoTimestamp(calculatedAt) ? calculatedAt : nowIso();
     const result = calculateStage(stage, room.players, stageTickets, resultAt);
+    result.gameId = room.gameId;
     const next = deepClone(room);
     next.stageResults[stage.stageId] = result;
     next.phase = PHASES.REVEAL;
@@ -780,10 +782,11 @@
           ? player.appliedSkillStageIds
           : Object.values(player.appliedSkillStageIds || {});
         item.skillBefore = calculateCurrentSkill(player.stageSkillHistory);
-        const alreadyApplied = player.appliedSkillStageIds.includes(result.stageId);
+        const applicationId = skillStageApplicationId(room.gameId, result.stageId);
+        const alreadyApplied = player.appliedSkillStageIds.includes(applicationId);
         if (!alreadyApplied) {
           player.stageSkillHistory.push(stageSkill);
-          player.appliedSkillStageIds.push(result.stageId);
+          player.appliedSkillStageIds.push(applicationId);
         }
         player.skill = calculateCurrentSkill(player.stageSkillHistory);
         item.skillAfter = player.skill;
@@ -810,6 +813,10 @@
     const sorted = (history || []).slice().sort((a, b) => b - a);
     while (sorted.length < 5) sorted.push(0);
     return roundScore(sorted.slice(0, 5).reduce((sum, value) => sum + value, 0));
+  }
+
+  function skillStageApplicationId(gameId, stageId) {
+    return JSON.stringify([String(gameId || "legacy-game"), String(stageId || "")]);
   }
 
   function calculateRiseFromIntervals(intervals) {
@@ -1058,6 +1065,7 @@
     tallyCurrentStage,
     applyStageSkills,
     calculateCurrentSkill,
+    skillStageApplicationId,
     cumulativeRankings,
     advancePhase,
     createUuid,

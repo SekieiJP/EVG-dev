@@ -2,6 +2,7 @@
   const MOCK_DB_KEY = "evg.firebase.mock.db.v1";
   const AUTH_KEY = "evg.firebase.auth.v1";
   const CHANNEL_NAME = "evg.firebase.mock.channel.v1";
+  const FIREBASE_SCHEMA_VERSION = "firebase-rtdb-v3-skill-history";
 
   function createFirebaseAdapter(options) {
     return new FirebaseAdapter(options || {});
@@ -507,7 +508,6 @@
         if (!publicSnapshot.exists()) {
           await this.writeRestRoomChildren(initializedRoom(this.engine, this.roomId));
         } else {
-          await this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/meta/updatedAt`), nowIso());
           await this.backfillHistoryIndexes();
         }
         return;
@@ -840,15 +840,60 @@
     }
 
     async backfillHistoryIndexes() {
-      const room = await this.readRestRoom({ purpose: "mutation", includeCompletedGames: true });
-      if (!room) return;
-      const nodes = roomToFirebaseNodes(room);
-      await this.sdk.update(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}`), {
-        historyPlayers: emptyObjectToNull(nodes.historyPlayers),
-        completedGameSummaries: emptyObjectToNull(nodes.completedGameSummaries),
-        completedGamePublicDetails: emptyObjectToNull(nodes.completedGamePublicDetails),
-        completedGamePlayerDetails: emptyObjectToNull(nodes.completedGamePlayerDetails),
-      });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const room = await this.readRestRoom({ purpose: "mutation", includeCompletedGames: true });
+        if (!room) return;
+        if (room.firebaseSchemaVersion === FIREBASE_SCHEMA_VERSION) return room;
+        const resultsSnapshot = await this.sdk.get(
+          this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/results`)
+        );
+        room.stageResults = normalizeStageResults(resultsSnapshot.exists() ? resultsSnapshot.val() || {} : {});
+        const rootPlayers = {};
+        await Promise.all((room.players || []).map(async (player) => {
+          const master = await this.readRootPlayer(player.uuid);
+          if (master) rootPlayers[player.uuid] = master;
+        }));
+        const nextRoom = recoverCareerSkillState(room, rootPlayers, this.engine);
+        nextRoom.firebaseSchemaVersion = FIREBASE_SCHEMA_VERSION;
+        nextRoom.roomVersion = Number(room.roomVersion || 0) + 1;
+        nextRoom.updatedAt = this.serverNowIso();
+        nextRoom.operations = nextRoom.operations || [];
+        nextRoom.operations.unshift({
+          at: nextRoom.updatedAt,
+          actor: "host",
+          action: "firebase-backfill-skill-history",
+        });
+        nextRoom.operations = nextRoom.operations.slice(0, 100);
+        const nodes = roomToFirebaseNodes(nextRoom);
+        const updates = {
+          [`rooms/${this.roomId}/public`]: nodes.public,
+          [`rooms/${this.roomId}/meta`]: nodes.meta,
+          [`rooms/${this.roomId}/operations`]: emptyObjectToNull(nodes.operations),
+          [`rooms/${this.roomId}/historyPlayers`]: emptyObjectToNull(nodes.historyPlayers),
+          [`rooms/${this.roomId}/completedGameSummaries`]: emptyObjectToNull(nodes.completedGameSummaries),
+          [`rooms/${this.roomId}/completedGamePublicDetails`]: emptyObjectToNull(nodes.completedGamePublicDetails),
+          [`rooms/${this.roomId}/completedGameDetails`]: emptyObjectToNull(nodes.completedGameDetails),
+          [`rooms/${this.roomId}/completedGamePlayerDetails`]: emptyObjectToNull(nodes.completedGamePlayerDetails),
+        };
+        (nextRoom.players || []).forEach((player) => {
+          updates[`rooms/${this.roomId}/playerStats/${player.uuid}`] = nodes.playerStats[player.uuid];
+          const master = rootPlayers[player.uuid];
+          const masterHistory = normalizeSkillHistory(
+            master && (master.stageSkillHistoryJson ?? master.stageSkillHistory)
+          );
+          if (!masterHistory.length) {
+            updates[`players/${player.uuid}`] = rootPlayerNode(player, this.roomId);
+          }
+        });
+        try {
+          await this.sdk.update(this.sdk.ref(this.firebaseDb, "/"), updates);
+          return nextRoom;
+        } catch (error) {
+          this.debug.lastRulesError = error && error.message ? error.message : String(error);
+          if (attempt === 2) throw error;
+        }
+      }
+      return null;
     }
 
     async isHostAllowed() {
@@ -942,7 +987,7 @@
       meta: {
         roomId: room.roomId || "",
         title: room.config && room.config.gameMeta ? room.config.gameMeta.title : "エレベーターゲーム",
-        schemaVersion: "firebase-rtdb-v2",
+        schemaVersion: room.firebaseSchemaVersion || FIREBASE_SCHEMA_VERSION,
         activeGameId: room.gameId || "",
         status: room.phase === "final" ? "finished" : "active",
         createdAt: room.createdAt || nowIso(),
@@ -1027,6 +1072,7 @@
     });
     return normalizeRoomShape({
       roomId: nodes.meta && nodes.meta.roomId || fallback.roomId,
+      firebaseSchemaVersion: nodes.meta && nodes.meta.schemaVersion || "",
       hostUid: firstHostUid(nodes.roles) || (nodes.meta && nodes.meta.hostUid) || "",
       gameId: status.gameId || (nodes.meta && nodes.meta.activeGameId) || fallback.gameId,
       config: nodes.config || fallback.config,
@@ -1197,6 +1243,195 @@
       });
     }
     return updates;
+  }
+
+  function recoverCareerSkillState(room, rootPlayers, engine) {
+    const next = engine.deepClone(room);
+    const occurrences = collectCareerSkillOccurrences(next, engine);
+    const occurrencesByPlayer = occurrences.reduce((acc, occurrence) => {
+      Object.keys(occurrence.result.players || {}).forEach((uid) => {
+        const playerResult = occurrence.result.players[uid];
+        if (!playerResult || playerResult.stageSkill === null || playerResult.stageSkill === undefined) return;
+        const stageSkill = Number(playerResult.stageSkill);
+        if (!Number.isFinite(stageSkill)) return;
+        acc[uid] = acc[uid] || [];
+        acc[uid].push({
+          applicationId: occurrence.applicationId,
+          stageSkill: engine.roundScore(stageSkill),
+        });
+      });
+      return acc;
+    }, {});
+
+    (next.players || []).forEach((player) => {
+      const master = rootPlayers && rootPlayers[player.uuid] || null;
+      const masterHistory = normalizeSkillHistory(master && (master.stageSkillHistoryJson ?? master.stageSkillHistory));
+      const masterIds = storedArray(
+        master && master.appliedSkillStageIdsJson,
+        master && master.appliedSkillStageIds
+      ).map(String);
+      if (masterHistory.length) {
+        player.stageSkillHistory = masterHistory;
+        player.appliedSkillStageIds = [...new Set(masterIds)];
+        const masterSkill = Number(master && (master.currentSkill ?? master.skill));
+        player.skill = Number.isFinite(masterSkill)
+          ? masterSkill
+          : engine.calculateCurrentSkill(masterHistory);
+        return;
+      }
+
+      const roomHistory = normalizeSkillHistory(player.stageSkillHistory);
+      const roomIds = storedArray(player.appliedSkillStageIds).map(String);
+      const recovered = mergeCareerSkillOccurrences(
+        roomHistory,
+        masterIds.length ? masterIds : roomIds,
+        occurrencesByPlayer[player.uuid] || [],
+        engine
+      );
+      player.stageSkillHistory = recovered.history;
+      player.appliedSkillStageIds = recovered.applicationIds;
+      player.skill = engine.calculateCurrentSkill(recovered.history);
+    });
+
+    repairCurrentFinalGame(next, engine);
+    return next;
+  }
+
+  function collectCareerSkillOccurrences(room, engine) {
+    const byApplicationId = new Map();
+    let order = 0;
+    const addStageResults = (gameId, stageResults, fallbackAt, sourcePriority) => {
+      Object.keys(stageResults || {}).forEach((stageId) => {
+        const result = normalizeStageResult(stageResults[stageId]);
+        if (!result) return;
+        const applicationId = engine.skillStageApplicationId(gameId, stageId);
+        const candidate = {
+          applicationId,
+          gameId,
+          stageId,
+          at: result.calculatedAt || fallbackAt || "",
+          order: order += 1,
+          sourcePriority,
+          result,
+        };
+        const existing = byApplicationId.get(applicationId);
+        if (!existing) {
+          byApplicationId.set(applicationId, candidate);
+          return;
+        }
+        assertCompatibleStageSkills(existing, candidate, engine);
+        const existingCount = finiteStageSkillCount(existing.result);
+        const candidateCount = finiteStageSkillCount(candidate.result);
+        if (
+          candidateCount > existingCount ||
+          (candidateCount === existingCount && candidate.sourcePriority > existing.sourcePriority)
+        ) {
+          byApplicationId.set(applicationId, candidate);
+        }
+      });
+    };
+
+    (room.completedGames || []).forEach((game) => {
+      if (!game || !game.gameId) return;
+      addStageResults(game.gameId, game.stageResults, game.finishedAt, 1);
+    });
+    addStageResults(room.gameId || "legacy-game", room.stageResults, room.updatedAt, 2);
+    return [...byApplicationId.values()].sort((a, b) => {
+      const timeA = Number.isFinite(new Date(a.at).getTime()) ? new Date(a.at).getTime() : Number.MAX_SAFE_INTEGER;
+      const timeB = Number.isFinite(new Date(b.at).getTime()) ? new Date(b.at).getTime() : Number.MAX_SAFE_INTEGER;
+      return timeA - timeB || a.order - b.order || a.applicationId.localeCompare(b.applicationId);
+    });
+  }
+
+  function assertCompatibleStageSkills(existing, candidate, engine) {
+    const existingPlayers = existing.result.players || {};
+    const candidatePlayers = candidate.result.players || {};
+    Object.keys(existingPlayers).forEach((uid) => {
+      if (!candidatePlayers[uid]) return;
+      const left = existingPlayers[uid].stageSkill;
+      const right = candidatePlayers[uid].stageSkill;
+      if (left === null || left === undefined || right === null || right === undefined) return;
+      if (!Number.isFinite(Number(left)) || !Number.isFinite(Number(right))) return;
+      if (engine.roundScore(left) !== engine.roundScore(right)) {
+        throw new Error(`SKILL_HISTORY_CONFLICT:${existing.applicationId}`);
+      }
+    });
+  }
+
+  function finiteStageSkillCount(result) {
+    return Object.values(result && result.players || {}).filter((playerResult) => {
+      return playerResult &&
+        playerResult.stageSkill !== null &&
+        playerResult.stageSkill !== undefined &&
+        Number.isFinite(Number(playerResult.stageSkill));
+    }).length;
+  }
+
+  function mergeCareerSkillOccurrences(history, applicationIds, occurrences, engine) {
+    const recoveredHistory = (history || [])
+      .map((value) => Number(value))
+      .filter(Number.isFinite)
+      .map(engine.roundScore);
+    const recoveredIds = [...new Set((applicationIds || []).filter(Boolean).map(String))];
+    const idSet = new Set(recoveredIds);
+    const scopedIdCount = recoveredIds.filter(isScopedSkillApplicationId).length;
+    if (
+      recoveredHistory.length &&
+      (occurrences || []).length &&
+      scopedIdCount !== recoveredHistory.length
+    ) {
+      throw new Error("SKILL_HISTORY_AMBIGUOUS");
+    }
+
+    (occurrences || []).forEach((occurrence) => {
+      const alreadyMarked = idSet.has(occurrence.applicationId);
+      if (alreadyMarked) return;
+      recoveredHistory.push(engine.roundScore(occurrence.stageSkill));
+      recoveredIds.push(occurrence.applicationId);
+      idSet.add(occurrence.applicationId);
+    });
+    return {
+      history: recoveredHistory,
+      applicationIds: recoveredIds,
+    };
+  }
+
+  function isScopedSkillApplicationId(value) {
+    try {
+      const parsed = JSON.parse(String(value || ""));
+      return Array.isArray(parsed) &&
+        parsed.length === 2 &&
+        parsed.every((item) => typeof item === "string");
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function repairCurrentFinalGame(room, engine) {
+    if (
+      room.phase !== engine.PHASES.FINAL ||
+      !room.gameId ||
+      !Object.keys(room.stageResults || {}).length
+    ) {
+      return;
+    }
+    const games = room.completedGames || [];
+    const existingIndex = games.findIndex((game) => game && game.gameId === room.gameId);
+    const existing = existingIndex >= 0 ? games[existingIndex] : null;
+    const resultTimes = Object.values(room.stageResults || {})
+      .map((result) => result && result.calculatedAt)
+      .filter((value) => value && Number.isFinite(new Date(value).getTime()))
+      .sort();
+    const archivedAt = existing && existing.finishedAt ||
+      resultTimes[resultTimes.length - 1] ||
+      room.updatedAt;
+    const source = engine.deepClone(room);
+    source.completedGames = games.filter((game) => !game || game.gameId !== room.gameId);
+    const repaired = engine.archiveCurrentGame(source, archivedAt);
+    if (!repaired) return;
+    const merged = Object.assign({}, existing || {}, repaired);
+    if (existingIndex >= 0) room.completedGames[existingIndex] = merged;
+    else room.completedGames.push(merged);
   }
 
   function normalizeStageResults(results) {
@@ -1918,6 +2153,7 @@
     firebaseStageSubscriptionPaths,
     restMutationBaseReadPaths,
     hostAtomicUpdates,
+    recoverCareerSkillState,
     completedGamePublicDetailNode,
     publicProfileId,
     playerUpdates,

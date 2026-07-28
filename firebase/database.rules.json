@@ -99,7 +99,7 @@
           }
         },
         "results": {
-          ".read": false,
+          ".read": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
           ".write": false,
           "$stageId": {
             ".read": "auth != null",

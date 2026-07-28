@@ -39,6 +39,7 @@ run("public writes require version increment and allowed phases", () => {
 });
 
 run("stage results allow create or delete but never overwrite", () => {
+  assert.match(roomRules.results[".read"], /roles'\)\.child\('hosts/);
   assert.strictEqual(roomRules.results[".write"], false);
   assert.match(roomRules.results.$stageId[".write"], /!data\.exists\(\) \|\| newData\.val\(\) === null/);
 });

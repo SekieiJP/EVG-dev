@@ -124,7 +124,7 @@ rooms/{roomId}
   playerStats/{uid}
     currentSkill
     stageSkillHistoryJson       # canonical JSON。Rulesで本人更新時の完全一致を検証
-    appliedSkillStageIdsJson    # 集計済みstageId。復旧時の二重追記を防ぐ
+    appliedSkillStageIdsJson    # JSON.stringify([gameId, stageId])の配列。ゲームを跨ぐ二重追記/誤抑止を防ぐ
     updatedAt
 
   tickets/{stageId}/{uid}
@@ -337,6 +337,14 @@ Rulesでは `data.child('phase')` と `newData.child('phase')` の組み合わ�
 書き込みは、DBルートに対する**1回のmulti-location `update()`**で `public`、`results/{stageId}`、全 `scores/{uid}`、全 `playerStats/{uid}`、root `players/{uid}`、公開履歴、`operations` を同時に確定する。順次 `set()`、複数回の `update()`、phase先行確定は使わない。
 
 このcommitでは、StageSkill履歴の追記と現在Skill（全履歴の上位5件、最高値を含む）の更新も同じpayloadに含める。二重集計を防ぐため、Rulesのphase/version CASと `results/{stageId}` の新規作成検証で、古いHost操作または既存結果への再commitをupdate全体として拒否する。Sparkでは完全なサーバ再計算ができないため、Blaze移行時にCloud Functionsで再計算検証を追加する。
+
+StageSkillの適用済みキーはstageId単独ではなく `JSON.stringify([gameId, stageId])` とする。同じconfig/stageIdを別ゲームで再利用しても、新ゲームのSkillを誤って既適用扱いしない。旧plain stageId markerは由来ゲームを一意に証明できないため値を保持するが、新規判定には使わず、推測で特定ゲームへスコープしない。
+
+既存データ移行ではroot `players/{uid}` の非空履歴をcanonicalとして保持する。root履歴が空の場合だけ、`results` 全件と `completedGameDetails` を読み、有限なStageSkill（0を含む）をゲーム単位ステージキーで重複排除して復元する。rootが空でもroom側に由来不明の非空履歴と旧plain markerがある場合、StageSkillの数値一致から由来を推測せず、監査エラーとして移行を中止する。復元は `public.roomVersion + 1` を含む単一multi-location updateで、root player、room `playerStats`、公開Skill index、完了履歴を同時に揃える。現ゲームと完了詳細で同じキー・同じuidのStageSkillが食い違う場合も移行を中止し、上書きしない。
+
+移行成功時は `meta.schemaVersion` を `firebase-rtdb-v3-skill-history` へ更新する。以後のHost認証ではこのversionを確認してbackfillを省略し、認証のたびにroomVersionや履歴を書き直さない。multi-location updateが拒否された場合はschemaVersionも更新されないため、次回認証で安全に再試行できる。
+
+通常運用の購読は引き続き `results/{currentStageId}` に限定する。移行時だけはallowlist済みHostに `results` 親の一回読取りを許可し、Player/Screenが親を一括取得することはRulesで拒否する。rootに非空canonical履歴があるプレイヤーはroot profile自体を書き直さず、room `playerStats` と公開indexだけを同期する。
 
 ### 時刻同期と締切
 

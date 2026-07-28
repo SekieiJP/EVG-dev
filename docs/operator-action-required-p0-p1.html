@@ -34,6 +34,29 @@
 
     <p>対象: P0・P1改修を本番で有効にするための、FirebaseおよびGoogle Apps Script（GAS）への運用者作業です。実装の正系は <strong>Firebase Realtime Database（RTDB）</strong> であり、GAS + Spreadsheetは<strong>終了・中断済みゲームのアーカイブ専用</strong>です。GASの停止・設定不備で進行中ゲームが止まることはありません。</p>
 
+    <div class="warning">
+      <strong>2026-07-29 現在、本番反映は未完了です。</strong>
+      GitHub PagesはP0/P1版を公開済みですが、本番RTDB Rulesは旧版です。実ブラウザのHistoryで
+      <code>historyPlayers: permission_denied</code> と全員Skill 0表示を確認しています。
+      また、GAS archive URL/API keyは未設定です。Rulesの変更は共有本番セキュリティ境界への永続変更なので、
+      Codexへ実行を依頼する場合は「本番Firebase Rulesのデプロイを承認します」と明示してください。
+    </div>
+
+    <h2>0. 現在確認できている本番状態</h2>
+
+    <table>
+      <thead><tr><th>確認項目</th><th>結果</th></tr></thead>
+      <tbody>
+        <tr><td>GitHub Pages</td><td>最新P0/P1コードを公開済み。r2反映後はアセットversion <code>260729-p0p1r2</code>を確認する。</td></tr>
+        <tr><td>現在room</td><td><code>final</code>。最終更新は2026-06-12で、進行中ゲームではない。</td></tr>
+        <tr><td>現行Rules</td><td>リポジトリ版と不一致。<code>historyPlayers</code>/<code>nextGameConfigs</code>なし、結果親の上書き許可が残る。</td></tr>
+        <tr><td>Skill復旧元</td><td>5ステージ、30 player results、有限StageSkill 29件。root/room履歴は空。</td></tr>
+        <tr><td>dry-run結果</td><td>履歴長 <code>[4,5,5,5,5,5]</code>、6人全員非ゼロSkill、現ゲーム5ステージ完了詳細を復元可能。</td></tr>
+        <tr><td>Host allowlist</td><td>有効uidが3件存在。実際に使用するHostブラウザの現在uidとの照合は必要。</td></tr>
+        <tr><td>GAS archive</td><td>公開設定のURL/API keyはいずれも空。</td></tr>
+      </tbody>
+    </table>
+
     <div class="notice">
       <strong>秘密値をこの文書やGitに貼り付けないでください。</strong>
       Firebase/GASの認証情報、Spreadsheetの共有リンク、実際のAPI keyは、組織の承認済みの秘密管理または管理画面でのみ扱ってください。ここには値そのものを記載しません。
@@ -85,6 +108,24 @@
       <li>ConsoleのRules表示で、新しいRulesに少なくとも <code>completedGamePublicDetails</code>、<code>historyPlayers</code>、<code>nextGameConfigs</code>、<code>archive</code> の定義があることを確認する。</li>
       <li>デプロイ日時、担当者、リリースコミットを運用記録へ残す。</li>
     </ol>
+
+    <h3>2-3. allowlist済みHostでSkill backfillを1回実行する</h3>
+
+    <ol>
+      <li>Rulesのrelease成功後、次ゲームを開始する前に、allowlist済みHostブラウザで最新公開版を強制再読み込みする。</li>
+      <li>Host画面で通常のHost認証を1回行う。認証時に全<code>results</code>とroot playerを読み、空だったSkill履歴、room mirror、公開履歴、完了詳細をversion CAS付きの1回のmulti-location updateで揃え、<code>meta.schemaVersion</code>を<code>firebase-rtdb-v3-skill-history</code>へ更新する。成功後の認証では移行を再実行しない。</li>
+      <li>Hostの通信ログに<code>firebase-backfill-skill-history</code>があり、Rules errorがないことを確認する。</li>
+      <li>History画面を別ブラウザで開き、<code>historyPlayers permission_denied</code>が消え、6人の現在Skillが0以外で表示されることを確認する。</li>
+      <li>Firebase Dataタブで、現ゲームの完了詳細が5ステージ、6人の履歴長が5件×5人・4件×1人になっていることを確認する。個人名とSkill値は公開の作業記録へ転記しない。</li>
+    </ol>
+
+    <div class="notice">
+      <code>SKILL_HISTORY_AMBIGUOUS</code> または <code>SKILL_HISTORY_CONFLICT</code> が表示された場合は、数値一致による自動推測をせず移行を停止しています。次ゲームを開始せず、Rulesを戻したり手動で履歴を書き換えたりせず、Firebase exportとHost通信ログを保全して開発担当へ渡してください。
+    </div>
+
+    <div class="warning">
+      backfill前に次ゲームを開始しないでください。旧room/rootのSkill履歴が空のまま新しい結果を確定すると、過去29件を含まない履歴がcanonicalとして保存される可能性があります。
+    </div>
 
     <div class="warning">
       Rulesはコードと一組です。Rulesだけを古いものへ戻すと、Hostの原子的な結果保存・次ゲーム開始・履歴表示が拒否されることがあります。復旧時は必ず「戻す対象のアプリ版」と「Rules版」の組を記録してください。
@@ -181,6 +222,7 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
     <ul class="checklist">
       <li>本番RTDB Rulesを安全な場所にバックアップした。</li>
       <li><code>firebase/database.rules.json</code> を <code>elevator-game-live</code> にdeployし、release成功を確認した。</li>
+      <li>allowlist済みHostで1回backfillし、29件のStageSkill、6人の現在Skill、5ステージ完了詳細を確認した。</li>
       <li>使用するHost端末すべてのFirebase uidを <code>roles/hosts</code> に登録・確認した。</li>
       <li>GASの <code>setupElevatorGameSheets</code> を正しいSpreadsheetで実行し、必要シートを確認した。</li>
       <li>GASを「実行者: 運用者」「アクセス: Hostブラウザがログイン不要で到達可能」のWebアプリとして新バージョンdeployした。</li>

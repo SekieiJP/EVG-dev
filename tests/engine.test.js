@@ -378,12 +378,13 @@ run("tally stores current skill delta per player result", () => {
   };
   const tallied = Engine.tallyCurrentStage(Object.assign({}, room, { phase: Engine.PHASES.COUNTDOWN }));
   const alice = tallied.room.stageResults[currentStage.stageId].players.alice;
+  assert.strictEqual(tallied.room.stageResults[currentStage.stageId].gameId, room.gameId);
   assert.strictEqual(typeof alice.skillBefore, "number");
   assert.strictEqual(typeof alice.skillAfter, "number");
   assert.strictEqual(alice.skillDelta, Number((alice.skillAfter - alice.skillBefore).toFixed(2)));
 });
 
-run("missing reveal result can be recovered idempotently by stage id", () => {
+run("missing reveal result can be recovered idempotently by game-scoped stage id", () => {
   let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   room = Engine.registerPlayer(room, "Alice", "alice").room;
   room = Engine.registerPlayer(room, "Bob", "bob").room;
@@ -408,7 +409,45 @@ run("missing reveal result can be recovered idempotently by stage id", () => {
   assert.strictEqual(recovered.result.recovered, true);
   assert.deepStrictEqual(recovered.room.scores, expectedScores);
   assert.deepStrictEqual(recovered.room.players.map((player) => player.stageSkillHistory), expectedSkills.map((skill) => [skill]));
-  assert.deepStrictEqual(recovered.room.players.map((player) => player.appliedSkillStageIds), [[stage.stageId], [stage.stageId]]);
+  const applicationId = Engine.skillStageApplicationId(room.gameId, stage.stageId);
+  assert.deepStrictEqual(recovered.room.players.map((player) => player.appliedSkillStageIds), [[applicationId], [applicationId]]);
+});
+
+run("same stage id in a later game adds another Skill while legacy markers remain inert", () => {
+  const config = Engine.deepClone(Engine.DEFAULT_CONFIG);
+  config.stages = [config.stages[0]];
+  let firstRoom = Engine.createInitialRoom(config);
+  firstRoom.gameId = "game-one";
+  firstRoom = Engine.registerPlayer(firstRoom, "Alice", "alice").room;
+  firstRoom = Engine.registerPlayer(firstRoom, "Bob", "bob").room;
+  const stage = Engine.getCurrentStage(firstRoom);
+  firstRoom.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {}, submittedAt: "2026-07-29T00:00:00.000Z" },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 4, predictions: {}, submittedAt: "2026-07-29T00:00:00.000Z" },
+  };
+  firstRoom.phase = Engine.PHASES.COUNTDOWN;
+  const first = Engine.tallyCurrentStage(firstRoom, "2026-07-29T00:00:01.000Z").room;
+  first.players.forEach((player) => {
+    player.appliedSkillStageIds = [stage.stageId];
+  });
+
+  const secondRoom = Engine.createNextGameRoom(first, config, "2026-07-29T00:05:00.000Z");
+  const secondGameId = secondRoom.gameId;
+  secondRoom.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 2, predictions: {}, submittedAt: "2026-07-29T00:05:01.000Z" },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 5, predictions: {}, submittedAt: "2026-07-29T00:05:01.000Z" },
+  };
+  secondRoom.phase = Engine.PHASES.COUNTDOWN;
+  const second = Engine.tallyCurrentStage(secondRoom, "2026-07-29T00:05:02.000Z");
+
+  assert.strictEqual(second.ok, true, second.error);
+  second.room.players.forEach((player) => {
+    assert.strictEqual(player.stageSkillHistory.length, 2);
+    assert.deepStrictEqual(player.appliedSkillStageIds, [
+      stage.stageId,
+      Engine.skillStageApplicationId(secondGameId, stage.stageId),
+    ]);
+  });
 });
 
 run("host deadlines and result timestamps use the injected server-corrected time", () => {

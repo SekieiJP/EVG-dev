@@ -65,6 +65,8 @@ async function main() {
       updatedAt: "2026-07-29T00:00:00.000Z",
       roomId,
     }));
+    await assertSucceeds(host.ref(`rooms/${roomId}/results`).once("value"));
+    await assertFails(stranger.ref(`rooms/${roomId}/results`).once("value"));
     await assertSucceeds(host.ref().update({
       [`rooms/${roomId}/public`]: publicNode({
         phase: "reveal",
@@ -109,6 +111,15 @@ async function main() {
         phase: "ranking",
         roomVersion: 5,
       }),
+      [`rooms/${roomId}/meta`]: {
+        roomId,
+        title: "Rules test",
+        schemaVersion: "firebase-rtdb-v3-skill-history",
+        activeGameId: "game-1",
+        status: "active",
+        createdAt: "2026-07-29T00:00:00.000Z",
+        updatedAt: "2026-07-29T00:00:03.000Z",
+      },
       [`rooms/${roomId}/results/should-not-commit`]: {
         stageId: "should-not-commit",
       },
@@ -118,11 +129,66 @@ async function main() {
       rejectedSideEffect = await context.database().ref(`rooms/${roomId}/results/should-not-commit`).once("value");
     });
     if (rejectedSideEffect.exists()) throw new Error("version-conflicted side effect was partially committed");
+    let rejectedSchemaVersion = null;
+    await env.withSecurityRulesDisabled(async (context) => {
+      rejectedSchemaVersion = await context.database().ref(`rooms/${roomId}/meta/schemaVersion`).once("value");
+    });
+    if (rejectedSchemaVersion.val() !== "firebase-rtdb-v2") {
+      throw new Error("version-conflicted migration marker was partially committed");
+    }
 
     await assertFails(host.ref(`rooms/${roomId}/results/stage-001`).set({
       stageId: "stage-001",
       rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 999 }],
       players: { alice: { uuid: "alice", name: "Alice", score: 999 } },
+    }));
+
+    await assertSucceeds(host.ref().update({
+      [`rooms/${roomId}/public`]: publicNode({
+        phase: "reveal",
+        roomVersion: 6,
+        animationStartedAt: "2026-07-29T00:00:04.000Z",
+      }),
+      [`rooms/${roomId}/meta`]: {
+        roomId,
+        title: "Rules test",
+        schemaVersion: "firebase-rtdb-v3-skill-history",
+        activeGameId: "game-1",
+        status: "active",
+        createdAt: "2026-07-29T00:00:00.000Z",
+        updatedAt: "2026-07-29T00:00:05.000Z",
+      },
+      [`rooms/${roomId}/playerStats/alice`]: {
+        currentSkill: 90,
+        stageSkillHistoryJson: "[40,50]",
+        appliedSkillStageIdsJson: "[\"[\\\"game-1\\\",\\\"stage-001\\\"]\",\"[\\\"game-0\\\",\\\"stage-001\\\"]\"]",
+        updatedAt: "2026-07-29T00:00:05.000Z",
+      },
+      [`rooms/${roomId}/historyPlayers/p_alice`]: {
+        profileId: "p_alice",
+        name: "Alice",
+        currentSkill: 90,
+        updatedAt: "2026-07-29T00:00:05.000Z",
+      },
+      [`rooms/${roomId}/completedGameSummaries/game-1`]: {
+        gameId: "game-1",
+        title: "Rules test",
+        finishedAt: "2026-07-29T00:00:05.000Z",
+      },
+      [`rooms/${roomId}/completedGameDetails/game-1`]: {
+        gameId: "game-1",
+        title: "Rules test",
+      },
+      "players/alice": {
+        name: "Alice",
+        currentSkill: 90,
+        stageSkillHistoryJson: "[40,50]",
+        appliedSkillStageIdsJson: "[\"[\\\"game-1\\\",\\\"stage-001\\\"]\",\"[\\\"game-0\\\",\\\"stage-001\\\"]\"]",
+        joinedAt: "2026-07-29T00:00:00.000Z",
+        lastSeenAt: "2026-07-29T00:00:05.000Z",
+        updatedAt: "2026-07-29T00:00:05.000Z",
+        roomId,
+      },
     }));
 
     await assertSucceeds(host.ref(`rooms/${roomId}/historyPlayers/p_alice`).set({
