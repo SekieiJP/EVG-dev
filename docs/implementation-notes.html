@@ -410,9 +410,12 @@
           <li><strong>検証:</strong> 未finalの手動保存がRTDB/GASの双方へ書き込まないこと、手動保存のversion CAS競合時にGASへ送らないこと、先行ゲームの<code>queued</code>/<code>failed</code>状態を保持しながら後続ゲームの完了詳細だけをRTDBへ確定すること、A成功後のB失敗でCを保持し、B retry後にCまで再開すること、同時追加された後続gameIdをtransactionが保持することを統合テストへ追加した。retry payloadの9指標が現在roomではなく完了時<code>playerSnapshots</code>由来であることも検証した。</li>
           <li><strong>実データ回帰:</strong> 2026-07-29に読み取り取得した本番RTDBスナップショットから、名前・uid・ticket・予想内容を除去した最小fixtureを作成した。旧node配置とStageSkill欠落表現を通して、有限29件、履歴長<code>[4,5,5,5,5,5]</code>、6人全員非ゼロSkill、現在ゲーム5ステージ完了詳細を固定テストで確認する。</li>
           <li><strong>公開反映:</strong> コミット<code>a24e881</code>を<code>origin/master</code>へpushし、GitHub Pages workflow成功と公開HTMLのアセット版<code>260729-p0p1r4</code>を確認した。本番RTDB Rules、Skill backfill、GAS archive設定は未実施のため、静的コード公開だけでは本番完了ではない。</li>
+          <li><strong>2026-07-30 本番Rules反映:</strong> 明示承認後、デプロイ前の本番Rules本文が復旧用バックアップとSHA-256 <code>e91d41b7200e2a1322bff60f8ea224d4e04ea4c877d934dde0cee9f90b6ee7c6</code>で一致することを確認した。Rules emulatorと全Unitを再実行後、<code>firebase deploy --only database --project elevator-game-live</code>で<code>elevator-game-live-default-rtdb</code>へreleaseした。</li>
+          <li><strong>本番Rules検証:</strong> release後に本番Rulesを再取得し、リポジトリ版とSHA-256 <code>b2a9e11785dd7947ee6de55892b62019d942c8bb4da60e0660ef0281d96b28cf</code>で完全一致した。<code>historyPlayers</code>、<code>nextGameConfigs</code>、Host限定results親読取りを確認した。</li>
+          <li><strong>デプロイ後残作業:</strong> <code>meta.schemaVersion</code>はまだ<code>firebase-rtdb-v2</code>、<code>historyPlayers</code>は空である。allowlist済みHost認証による1回のSkill backfill、GAS/Spreadsheet設定、現在ゲームarchive、実端末smokeは運用者作業として未実施。</li>
           <li><strong>ドキュメント修正:</strong> GAS README/readinessと<code>getClientConfigSnippet()</code>をarchive専用・Firebase正系の現行構成へ更新した。旧GAS進行API、ポーリング、Spreadsheet次ゲーム設定を本番手順として案内しない。</li>
-          <li><strong>権限境界:</strong> 本番Rules deployは共有本番セキュリティ境界の永続変更に当たるため、明示承認なしでは実行しない。旧Rulesは一時領域へ読取りバックアップ済み。承認・作業手順と反映後backfill確認は<code>docs/operator-action-required-p0-p1.html</code>へ更新した。</li>
-          <li><strong>未解決の質問:</strong> 本番Rules deploy、allowlist済みHostによる1回のbackfill、GAS archive Webアプリと設定値の反映、実端末smokeが未実施。</li>
+          <li><strong>権限境界:</strong> 本番Rules deployは共有本番セキュリティ境界の永続変更に当たるため、明示承認まで実行を保留した。2026-07-30の承認後に、旧Rulesのバックアップ一致を確認してからreleaseし、反映後Rulesの完全一致も検証した。</li>
+          <li><strong>未解決の質問:</strong> allowlist済みHostによる1回のbackfill、GAS archive Webアプリと設定値の反映、現在ゲームarchive、実端末smokeが未実施。</li>
         </ul>
       </section>
 
@@ -433,7 +436,7 @@
           <li>本番運用で<code>roomId</code>をイベントごとにどう発行し、Host uid allowlistを誰がどの手順で登録するかを確定する必要がある。</li>
           <li>GAS archive APIの冪等キーは<code>archiveId</code>、ゲームの論理識別は<code>gameId</code>に確定した。実Spreadsheetで同一archiveId再送が重複しないことは運用者smokeで確認する。</li>
           <li>本番Host端末のFirebase uidをallowlistへ登録する運用手順を確定し、GitHub Pagesで使うroomIdごとに登録漏れがないか確認する必要がある。</li>
-          <li>2026-06-02にallowlist版Firebase Rulesをdeployした記録はあるが、2026-07-29監査では今回のP0/P1用Rules（<code>historyPlayers</code>、<code>nextGameConfigs</code>、完了履歴境界）は未反映だった。今回のRules deployとrelease確認は別作業として未完了。</li>
+          <li>2026-06-02にallowlist版Firebase Rulesをdeployした記録はあるが、2026-07-29監査では今回のP0/P1用Rules（<code>historyPlayers</code>、<code>nextGameConfigs</code>、完了履歴境界）は未反映だった。2026-07-30にP0/P1用Rulesを改めてreleaseし、リポジトリ版との完全一致を確認した。</li>
         </ul>
       </section>
     </main>

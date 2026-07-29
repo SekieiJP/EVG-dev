@@ -34,12 +34,19 @@
 
     <p>対象: P0・P1改修を本番で有効にするための、FirebaseおよびGoogle Apps Script（GAS）への運用者作業です。実装の正系は <strong>Firebase Realtime Database（RTDB）</strong> であり、GAS + Spreadsheetは<strong>終了・中断済みゲームのアーカイブ専用</strong>です。GASの停止・設定不備で進行中ゲームが止まることはありません。</p>
 
+    <div class="success">
+      <strong>2026-07-30、本番Firebase RTDB Rulesのデプロイは完了しました。</strong>
+      <code>elevator-game-live-default-rtdb</code>へのrelease成功後、本番Rulesと
+      <code>firebase/database.rules.json</code>がSHA-256
+      <code>b2a9e11785dd7947ee6de55892b62019d942c8bb4da60e0660ef0281d96b28cf</code>
+      で一致することを確認しました。
+    </div>
+
     <div class="warning">
-      <strong>2026-07-29 現在、本番反映は未完了です。</strong>
-      GitHub Pagesはコミット<code>a24e881</code>のP0/P1 r4版を公開済みですが、本番RTDB Rulesは旧版です。実ブラウザのHistoryで
-      <code>historyPlayers: permission_denied</code> と全員Skill 0表示を確認しています。
-      また、GAS archive URL/API keyは未設定です。Rulesの変更は共有本番セキュリティ境界への永続変更なので、
-      Codexへ実行を依頼する場合は「本番Firebase Rulesのデプロイを承認します」と明示してください。
+      <strong>P1の本番作業はまだ完了していません。</strong>
+      Skill backfillは未実施で、<code>meta.schemaVersion</code>は
+      <code>firebase-rtdb-v2</code>、<code>historyPlayers</code>は空です。
+      GAS archive URL/API keyも未設定です。次ゲームを開始せず、下記「0-1」の順で作業してください。
     </div>
 
     <h2>0. 現在確認できている本番状態</h2>
@@ -49,13 +56,29 @@
       <tbody>
         <tr><td>GitHub Pages</td><td>コミット<code>a24e881</code>を公開済み。アセットversion <code>260729-p0p1r4</code>の配信を確認済み。</td></tr>
         <tr><td>現在room</td><td><code>final</code>。最終更新は2026-06-12で、進行中ゲームではない。</td></tr>
-        <tr><td>現行Rules</td><td>リポジトリ版と不一致。<code>historyPlayers</code>/<code>nextGameConfigs</code>なし、結果親の上書き許可が残る。</td></tr>
+        <tr><td>現行Rules</td><td>2026-07-30にデプロイ済み。リポジトリ版とSHA-256一致。<code>historyPlayers</code>/<code>nextGameConfigs</code>とHost限定results親読取りを確認済み。</td></tr>
         <tr><td>Skill復旧元</td><td>5ステージ、30 player results、有限StageSkill 29件。root/room履歴は空。</td></tr>
         <tr><td>dry-run結果</td><td>履歴長 <code>[4,5,5,5,5,5]</code>、6人全員非ゼロSkill、現ゲーム5ステージ完了詳細を復元可能。</td></tr>
+        <tr><td>Skill backfill</td><td>未実施。<code>meta.schemaVersion=firebase-rtdb-v2</code>、<code>historyPlayers=null</code>をデプロイ後に確認。</td></tr>
         <tr><td>Host allowlist</td><td>有効uidが3件存在。実際に使用するHostブラウザの現在uidとの照合は必要。</td></tr>
         <tr><td>GAS archive</td><td>公開設定のURL/API keyはいずれも空。</td></tr>
       </tbody>
     </table>
+
+    <h2>0-1. 今からP1完了までに行う順序</h2>
+
+    <ol>
+      <li><strong>旧Rulesの一時バックアップを保全する:</strong> <code>/private/tmp/evg-production-rules-20260729.json</code>を、担当者と日時が分かる組織の承認済み保管先へコピーする。<code>/private/tmp</code>は長期保管先として扱わない。</li>
+      <li><strong>Host uidを確認する:</strong> 実際に使用するブラウザでHost画面を開き、internal-statusの<code>firebaseUid</code>が<code>roles/hosts</code>に登録済みか確認する。未登録なら既存の3件を消さず、そのuidの子だけを追加する。</li>
+      <li><strong>Skill backfillを1回実行する:</strong> 最新版を強制再読み込みし、通常のHost認証を1回行う。次ゲーム作成やステージ操作は行わない。</li>
+      <li><strong>戦績を確認する:</strong> <code>meta.schemaVersion=firebase-rtdb-v3-skill-history</code>、有限StageSkill 29件、履歴長<code>[4,5,5,5,5,5]</code>、6人全員の非ゼロSkill、現ゲーム5ステージ完了詳細、History画面の権限エラー解消を確認する。</li>
+      <li><strong>GAS archiveを準備する:</strong> Spreadsheetのバックアップ、<code>Code.gs</code>反映、<code>setupElevatorGameSheets</code>実行、Webアプリ新バージョンのデプロイを行う。</li>
+      <li><strong>公開設定を反映する:</strong> GASの<code>/exec</code> URLとapiKeyをクライアント設定へ入れ、アセットversionを更新してGitHub Pagesへ公開する。</li>
+      <li><strong>現在の終了済みゲームをarchiveする:</strong> Hostの「現在ゲームを保存」を実行し、5ステージがSpreadsheetへ保存され、再送しても重複せず、再集計が成功することを確認する。</li>
+      <li><strong>実環境smokeを行う:</strong> 非イベント時間の小規模確認ゲームで、ステージ結果の得点・StageSkill・持ち点・現在Skill、同日次ゲームへの参加継続、archive export/retryを確認する。</li>
+    </ol>
+
+    <p>上記1〜4はGAS設定前に実施できます。5〜8にはSpreadsheetとApps Scriptの運用権限、および実際のWebアプリURL/apiKeyが必要です。</p>
 
     <div class="notice">
       <strong>秘密値をこの文書やGitに貼り付けないでください。</strong>
@@ -93,8 +116,12 @@
       <li>保存したRulesを復旧用として識別できる名前にする（例: 日時を含むファイル名）。</li>
     </ol>
 
-    <p>CLIを利用できる場合は、出力先が安全な保管先であることを確認してから次の要領で取得して構いません。</p>
-    <pre><code>firebase database:get /.settings/rules --project elevator-game-live</code></pre>
+    <p>この作業では、デプロイ直前に本番Rules本文を認証付きで取得し、復旧用の一時バックアップ
+      <code>/private/tmp/evg-production-rules-20260729.json</code>とSHA-256
+      <code>e91d41b7200e2a1322bff60f8ea224d4e04ea4c877d934dde0cee9f90b6ee7c6</code>
+      で一致することを確認しました。Firebase CLIの<code>database:get</code>は
+      <code>/.settings/rules</code>を通常データパスとして取得できないため、復旧時はこのバックアップまたはFirebase Consoleで退避した全文を使用してください。</p>
+    <p><code>/private/tmp</code>は一時領域です。P1完了前に、運用者がこのファイルを組織の承認済み保管先へ移してください。</p>
 
     <h3>2-2. リポジトリのRulesをデプロイする</h3>
 
@@ -104,9 +131,9 @@
     </ol>
     <pre><code>firebase deploy --only database --project elevator-game-live</code></pre>
     <ol start="3">
-      <li>CLIのrelease成功を確認する。失敗時は次節の戻し方に従い、原因を解消するまでゲームを開始しない。</li>
-      <li>ConsoleのRules表示で、新しいRulesに少なくとも <code>completedGamePublicDetails</code>、<code>historyPlayers</code>、<code>nextGameConfigs</code>、<code>archive</code> の定義があることを確認する。</li>
-      <li>デプロイ日時、担当者、リリースコミットを運用記録へ残す。</li>
+      <li><strong>完了:</strong> CLIの構文チェックとrelease成功を確認した。</li>
+      <li><strong>完了:</strong> 本番Rulesを再取得し、<code>completedGamePublicDetails</code>、<code>historyPlayers</code>、<code>nextGameConfigs</code>、<code>archive</code>を含むリポジトリ版と完全一致することを確認した。</li>
+      <li><strong>残作業:</strong> デプロイ日時、担当者、リリースコミット<code>50f663d</code>を組織の運用記録へ残す。</li>
     </ol>
 
     <h3>2-3. allowlist済みHostでSkill backfillを1回実行する</h3>
@@ -227,8 +254,9 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
     <h2>7. 完了チェックリスト</h2>
 
     <ul class="checklist">
-      <li>本番RTDB Rulesを安全な場所にバックアップした。</li>
-      <li><code>firebase/database.rules.json</code> を <code>elevator-game-live</code> にdeployし、release成功を確認した。</li>
+      <li>✅ 本番RTDB Rulesの一時バックアップを取得し、デプロイ前のSHA-256一致を確認した。</li>
+      <li>一時バックアップを組織の承認済み長期保管先へコピーした。</li>
+      <li>✅ <code>firebase/database.rules.json</code> を <code>elevator-game-live</code> にdeployし、release成功と本番Rulesの完全一致を確認した。</li>
       <li>allowlist済みHostで1回backfillし、29件のStageSkill、6人の現在Skill、5ステージ完了詳細を確認した。</li>
       <li>使用するHost端末すべてのFirebase uidを <code>roles/hosts</code> に登録・確認した。</li>
       <li>GASの <code>setupElevatorGameSheets</code> を正しいSpreadsheetで実行し、必要シートを確認した。</li>
