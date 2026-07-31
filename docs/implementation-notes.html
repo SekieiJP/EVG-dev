@@ -481,10 +481,11 @@
           <li><strong>トレードオフ:</strong> 最終advanceと次ゲーム切替時にHostが<code>results</code>親を1回追加読取りする。最大50人×20ステージ相当の境界読取りコストより、完了詳細・GAS archiveの欠落防止を優先し、通常の進行中購読は軽量なまま維持する。</li>
           <li><strong>検証:</strong> 4ステージの最終advanceでRTDB完了詳細とGAS payloadが全4ステージになること、Import/次ゲーム開始でも4ステージを退避して同日参加者とSkillを保持すること、中間advanceは現ステージ子だけを読むこと、親読取り拒否時はRTDB/GASの副作用がないことをadapter統合テストへ追加した。</li>
           <li><strong>E2E mockの安定化:</strong> mockの別タブ同期が<code>BroadcastChannel</code>の一時通知だけに依存し、購読開始との競合で通知を取りこぼす場合があった。mock経路だけに<code>storage</code>イベントのフォールバックを追加し、対象シナリオ15回連続と全E2Eを通した。本番RTDB購読経路は変更していない。</li>
+          <li><strong>公開・CI:</strong> 修正コミット<code>21ad203</code>を<code>origin/master</code>へpushし、Pages workflow成功、公開HTMLのアセット版<code>260731-p0p1r11</code>、公開adapter SHA-256 <code>61eb22acfa1a69ea31c307dc315d0364208fecbbb8ad1edde22e1873f5f38dc2</code>とローカル本文の完全一致を確認した。新設したVerify workflowではNode 22・Java 21を使い、Unit/static、50人×20ステージ負荷モデル、Realtime Database Rules emulator、Playwright E2Eがすべて成功した。Rules本文はr10から変更していないため再deployしていない。</li>
           <li><strong>GAS endpointの読取り専用確認:</strong> 公開<code>/exec</code>へ秘密値を記録しないsanitized probeを行い、runtime setup完了、必要な7シートの存在、設定済みapiKeyの一致、Firebase ID token検証の有効化まで確認した。Spreadsheetの実ヘッダ、保存行、同一archiveIdの冪等upsert、recalculate、retry、長期バックアップ、実環境smokeは所有者確認が残る。</li>
           <li><strong>緊急運用:</strong> r11公開と現在ゲーム修復の確認が終わるまで、次ゲーム作成・次ゲーム候補開始・JSON Importを行わない。公開後、allowlist済みHostプロファイルで強制再読み込みし、「現在ゲームを保存」を1回実行する。RTDB完了詳細が4ステージ、Spreadsheetが同じgameId/archiveIdの4ステージを重複なしでupsertしたことを確認し、「保存済み戦績を再集計」を成功させてから次ゲーム運用を再開する。</li>
           <li><strong>権限境界:</strong> 今回の確認に使用できるChromeプロファイルは本番roomのHost allowlistに登録されていない。既にallowlist済みのHostプロファイルを使うか、意図したuidの子だけを追加する明示承認を得る。診断のためにallowlistを自動変更せず、uidの実値も文書へ記録しない。</li>
-          <li><strong>未解決の質問:</strong> r11の本番公開後、運用者による現在ゲーム修復、Spreadsheet実データ確認、recalculate、retry、バックアップ、同日次ゲーム継続を含む実環境smokeが必要である。旧履歴消失の復旧はこの確認と混ぜず、別の復旧手順・承認で実施する。</li>
+          <li><strong>未解決の質問:</strong> r11の本番公開は完了した。残る運用者作業は現在ゲーム修復、Spreadsheet実データ確認、recalculate、retry、バックアップ、同日次ゲーム継続を含む実環境smokeである。旧履歴消失の復旧はこの確認と混ぜず、別の復旧手順・承認で実施する。</li>
         </ul>
       </section>
 
@@ -506,7 +507,7 @@
           <li>GAS archive APIの冪等キーは<code>archiveId</code>、ゲームの論理識別は<code>gameId</code>に確定した。実Spreadsheetで同一archiveId再送が重複しないことは運用者smokeで確認する。</li>
           <li>本番Host端末のFirebase uidをallowlistへ登録する運用手順を確定し、GitHub Pagesで使うroomIdごとに登録漏れがないか確認する必要がある。</li>
           <li>2026-06-02にallowlist版Firebase Rulesをdeployした記録はあるが、2026-07-29監査では今回のP0/P1用Rules（<code>historyPlayers</code>、<code>nextGameConfigs</code>、完了履歴境界）は未反映だった。2026-07-30にP0/P1用Rulesを改めてreleaseし、リポジトリ版との完全一致を確認した。</li>
-          <li>2026-07-31に欠損root player対応版と履歴消失防止r10 Rulesをreleaseし、Host backfill、戦績表示、GAS archiveクライアント設定、次ゲーム履歴保護の本番公開まで完了した。その後、現在ゲームの4ステージresultsに対して自動完了詳細/GAS payloadが最終1ステージだけになる別障害を確認した。r11公開と現在ゲーム修復が終わるまで次ゲームを開始せず、修復後もSpreadsheet確認、recalculate、retry、長期バックアップ、実環境smokeがP1残作業である。</li>
+          <li>2026-07-31に欠損root player対応版と履歴消失防止r10 Rulesをreleaseし、Host backfill、戦績表示、GAS archiveクライアント設定、次ゲーム履歴保護の本番公開まで完了した。その後、現在ゲームの4ステージresultsに対して自動完了詳細/GAS payloadが最終1ステージだけになる別障害を確認し、全resultsを確定境界で読むr11を公開・CI検証した。現在ゲーム修復が終わるまで次ゲームを開始せず、修復後もSpreadsheet確認、recalculate、retry、長期バックアップ、実環境smokeがP1残作業である。</li>
         </ul>
       </section>
     </main>

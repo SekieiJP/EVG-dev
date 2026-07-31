@@ -40,6 +40,16 @@
 - 複数ステージのfinal、Import、次ゲーム候補、同日継続、読取り失敗時の副作用0をUnit testへ固定する。
 - Javaが利用できるGitHub ActionsでRules emulator testを実行し、ローカルMacのJRE不足を補う。
 
+## 実装・公開状況
+
+- 修正コミット: `21ad203`
+- 公開アセットversion: `260731-p0p1r11`
+- Pages workflow: 成功
+- 公開adapter SHA-256: `61eb22acfa1a69ea31c307dc315d0364208fecbbb8ad1edde22e1873f5f38dc2`。ローカル本文と一致
+- Verify workflow: Unit/static、50人×20ステージ負荷モデル、Realtime Database Rules emulator、Playwright E2Eの全ステップ成功
+- Firebase Rules: r10から本文変更なし。今回のreleaseでは再deployしていない
+- 残作業: allowlist済みHostによる現在ゲーム再保存、RTDB 4ステージ確認、Spreadsheetの同一gameId/archiveId 4ステージ・重複なし確認、recalculate。その完了までは次ゲーム操作を停止する
+
 ## 本番修復手順
 
 詳細な画面操作は `docs/operator-action-required-p0-p1.html` を正とする。
