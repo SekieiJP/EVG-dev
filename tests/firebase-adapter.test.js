@@ -422,6 +422,9 @@ run("firebase can reconstruct player-owned completed game details from summaries
 
 runAsync("firebase room rewrite uses atomic update and avoids rules-closed volatile parent nodes", async () => {
   const previousRoom = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  previousRoom.completedGames = [{ gameId: "old-game", title: "Old", stageResults: {} }];
+  previousRoom.completedGameSummaries = [{ gameId: "old-game", title: "Old" }];
+  previousRoom.historyPlayers = [{ profileId: "p_alice", name: "Alice", currentSkill: 40, updatedAt: "2026-06-01T00:00:00.000Z" }];
   previousRoom.tickets = {
     "stage-001": {
       alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {}, submittedAt: "2026-06-01T00:00:00.000Z" },
@@ -465,10 +468,270 @@ runAsync("firebase room rewrite uses atomic update and avoids rules-closed volat
   assert.strictEqual(paths.includes("tickets"), false);
   assert.strictEqual(paths.includes("ticketPresence"), false);
   assert.strictEqual(paths.includes("results"), false);
+  [
+    "completedGameSummaries",
+    "completedGamePublicDetails",
+    "completedGameDetails",
+    "completedGamePlayerDetails",
+    "historyPlayers",
+  ].forEach((historyParent) => {
+    assert.strictEqual(paths.includes(historyParent), false);
+    assert.strictEqual(paths.some((path) => path.startsWith(`${historyParent}/`)), false);
+  });
   assert.strictEqual(updateCalls[0][1]["tickets/stage-001"], null);
   assert.strictEqual(updateCalls[0][1]["ticketPresence/stage-001"], null);
   assert.strictEqual(updateCalls[0][1]["results/stage-001"], null);
   assert.strictEqual(Boolean(updateCalls[0][1].public), true);
+});
+
+runAsync("firebase empty existing lobby import preserves game and Skill history", async () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.roomId = "unit-room";
+  room.roomVersion = 14;
+  room.players = [];
+  room.stageResults = {};
+  room.completedGames = [{
+    gameId: "history-game",
+    title: "History Game",
+    finishedAt: "2026-07-30T00:00:00.000Z",
+    scores: { alice: 12 },
+    rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 12, currentSkill: 48 }],
+    stageResults: {},
+  }];
+  room.completedGameSummaries = [{
+    gameId: "history-game",
+    title: "History Game",
+    finishedAt: "2026-07-30T00:00:00.000Z",
+  }];
+  room.historyPlayers = [{
+    profileId: "p_alice",
+    name: "Alice",
+    currentSkill: 48,
+    updatedAt: "2026-07-30T00:00:00.000Z",
+  }];
+  let committed = null;
+  let commitOptions = null;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  adapter.readRestRoom = async () => Engine.deepClone(room);
+  adapter.commitRestRoomChildren = async (nextRoom, _currentRoom, options) => {
+    committed = Engine.deepClone(nextRoom);
+    commitOptions = options;
+    return { ok: true };
+  };
+  adapter.exportArchiveGame = async () => {
+    throw new Error("empty lobby must not invoke archive export");
+  };
+
+  const response = await adapter.postRestHost("/api/host/import-config", {
+    hostToken: "firebase-host:host:test",
+    config: Engine.DEFAULT_CONFIG,
+    baseVersion: 14,
+  });
+
+  assert.strictEqual(response.ok, true, response.error);
+  assert.notStrictEqual(committed.gameId, room.gameId);
+  assert.strictEqual(committed.roomVersion, 15);
+  assert.deepStrictEqual(committed.completedGames, room.completedGames);
+  assert.deepStrictEqual(committed.completedGameSummaries, room.completedGameSummaries);
+  assert.deepStrictEqual(committed.historyPlayers, room.historyPlayers);
+  assert.deepStrictEqual(commitOptions.historyGameIds, []);
+  assert.strictEqual(commitOptions.upsertHistoryPlayers, true);
+
+  const candidate = adapter.applyMutation(
+    "/api/host/start-game-config",
+    { config: Engine.DEFAULT_CONFIG, baseVersion: 14 },
+    Engine.deepClone(room)
+  );
+  assert.strictEqual(candidate.ok, true, candidate.error);
+  assert.deepStrictEqual(candidate.room.completedGames, room.completedGames);
+  assert.deepStrictEqual(candidate.room.completedGameSummaries, room.completedGameSummaries);
+  assert.deepStrictEqual(candidate.room.historyPlayers, room.historyPlayers);
+
+  const updatedConfig = await adapter.postRestHost("/api/host/update-config", {
+    hostToken: "firebase-host:host:test",
+    config: Engine.DEFAULT_CONFIG,
+  });
+  assert.strictEqual(updatedConfig.ok, true, updatedConfig.error);
+  assert.deepStrictEqual(commitOptions.historyGameIds, []);
+  assert.strictEqual(commitOptions.upsertHistoryPlayers, false);
+});
+
+runAsync("firebase next game writes only the newly archived game and profile children", async () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.roomId = "unit-room";
+  room.gameId = "current-game";
+  room.completedGames = [{ gameId: "old-game", title: "Old", stageResults: {} }];
+  room.completedGameSummaries = [{ gameId: "old-game", title: "Old" }];
+  room.historyPlayers = [{ profileId: "p_old", name: "Old", currentSkill: 33, updatedAt: "2026-07-29T00:00:00.000Z" }];
+  room.players = [{
+    uuid: "alice",
+    name: "Alice",
+    skill: 52,
+    stageSkillHistory: [52],
+    appliedSkillStageIds: ['["current-game","stage-001"]'],
+    connected: true,
+  }];
+  room.scores = { alice: 20 };
+  room.stageResults = {
+    "stage-001": {
+      stageId: "stage-001",
+      calculatedAt: "2026-07-31T00:00:00.000Z",
+      players: { alice: { uuid: "alice", name: "Alice", score: 20, stageSkill: 52 } },
+      rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 20, currentSkill: 52 }],
+    },
+  };
+  const nextRoom = Engine.createNextGameRoom(room, Engine.DEFAULT_CONFIG, "2026-07-31T01:00:00.000Z");
+  const archived = nextRoom.completedGames.find((game) => game.gameId === room.gameId);
+  assert.ok(archived);
+  let updates = null;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.firebaseDb = {};
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    update: async (_path, nextUpdates) => {
+      updates = nextUpdates;
+    },
+  };
+
+  await adapter.writeRestRoomChildren(nextRoom, {
+    previousRoom: room,
+    clearVolatile: true,
+    historyGameIds: [archived.gameId],
+    upsertHistoryPlayers: true,
+  });
+
+  const paths = Object.keys(updates);
+  [
+    "completedGameSummaries",
+    "completedGamePublicDetails",
+    "completedGameDetails",
+    "completedGamePlayerDetails",
+    "historyPlayers",
+  ].forEach((parent) => assert.strictEqual(paths.includes(parent), false));
+  assert.ok(updates[`completedGameSummaries/${archived.gameId}`]);
+  assert.ok(updates[`completedGamePublicDetails/${archived.gameId}`]);
+  assert.ok(updates[`completedGameDetails/${archived.gameId}`]);
+  assert.ok(updates[`completedGamePlayerDetails/alice/${archived.gameId}`]);
+  assert.strictEqual(paths.some((path) => path.includes("old-game")), false);
+  assert.strictEqual(
+    paths.filter((path) => /^(completedGame|historyPlayers\/)/.test(path)).some((path) => updates[path] === null),
+    false
+  );
+});
+
+runAsync("firebase history guard stops RTDB and GAS side effects when an existing id disappears", async () => {
+  const current = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  current.roomVersion = 5;
+  current.completedGames = [{ gameId: "must-stay", title: "Stored", stageResults: {} }];
+  current.completedGameSummaries = [{ gameId: "must-stay", title: "Stored" }];
+  current.historyPlayers = [{ profileId: "p_must_stay", name: "Stored", currentSkill: 60, updatedAt: "2026-07-30T00:00:00.000Z" }];
+  const next = Engine.createNextGameRoom(current, Engine.DEFAULT_CONFIG, "2026-07-31T00:00:00.000Z");
+  next.completedGames = [];
+  next.completedGameSummaries = [];
+  next.historyPlayers = [];
+  const failure = EVGFirebaseAdapter.historyPreservationFailure(current, next);
+  assert.strictEqual(failure.code, "history_preservation_failed");
+  assert.deepStrictEqual(failure.missingGameIds, ["must-stay"]);
+  assert.deepStrictEqual(failure.missingProfileIds, ["p_must_stay"]);
+
+  let writes = 0;
+  let exports = 0;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  adapter.readRestRoom = async () => Engine.deepClone(current);
+  adapter.applyMutation = () => ({ ok: true, room: Engine.deepClone(next) });
+  adapter.commitRestRoomChildren = async () => {
+    writes += 1;
+    return { ok: true };
+  };
+  adapter.exportArchiveGame = async () => {
+    exports += 1;
+    return { ok: true };
+  };
+
+  const response = await adapter.postRestHost("/api/host/import-config", {
+    hostToken: "firebase-host:host:test",
+    config: Engine.DEFAULT_CONFIG,
+    baseVersion: 5,
+  });
+  assert.strictEqual(response.code, "history_preservation_failed");
+  assert.strictEqual(writes, 0);
+  assert.strictEqual(exports, 0);
+});
+
+run("firebase existing state without public is never treated as a new room", () => {
+  assert.strictEqual(EVGFirebaseAdapter.persistedGameStateExists({ roles: { hosts: { host: true } } }), false);
+  assert.strictEqual(EVGFirebaseAdapter.persistedGameStateExists({ roomSettings: { countdownSeconds: 10 } }), false);
+  assert.strictEqual(EVGFirebaseAdapter.persistedGameStateExists({ meta: { roomId: "unit-room" } }), true);
+  assert.strictEqual(EVGFirebaseAdapter.persistedGameStateExists({ completedGameSummaries: { old: { gameId: "old" } } }), true);
+  assert.strictEqual(EVGFirebaseAdapter.persistedGameStateExists({ historyPlayers: { p_old: { profileId: "p_old" } } }), true);
+});
+
+runAsync("firebase import and Host claim reject a missing public node when history still exists", async () => {
+  let writes = 0;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.isHostAllowed = async () => true;
+  adapter.readRestRoom = async () => {
+    adapter.lastRestRoomReadState = { gameStateExists: true, publicExists: false };
+    return null;
+  };
+  adapter.commitRestRoomChildren = async () => {
+    writes += 1;
+    return { ok: true };
+  };
+  const response = await adapter.postRestHost("/api/host/import-config", {
+    hostToken: "firebase-host:host:test",
+    config: Engine.DEFAULT_CONFIG,
+  });
+  assert.strictEqual(response.code, "room_state_incomplete");
+  assert.strictEqual(writes, 0);
+
+  adapter.readRestNodes = async () => ({
+    completedGameSummaries: { old: { gameId: "old" } },
+    historyPlayers: { p_old: { profileId: "p_old" } },
+  });
+  adapter.writeRestRoomChildren = async () => {
+    writes += 1;
+  };
+  await assert.rejects(() => adapter.claimHost(), /ROOM_STATE_INCOMPLETE/);
+  assert.strictEqual(writes, 0);
+});
+
+run("firebase stale next-game request is rejected before a new game is generated", () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.roomVersion = 9;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  const response = adapter.applyMutation(
+    "/api/host/import-config",
+    { config: Engine.DEFAULT_CONFIG, baseVersion: 8 },
+    room
+  );
+  assert.strictEqual(response.code, "version_conflict");
+  assert.strictEqual(response.room, undefined);
 });
 
 run("firebase legacy helper remains isolated from serializer output", () => {
@@ -862,9 +1125,10 @@ runAsync("firebase Host backfill reads every current result and atomically write
   );
   assert.strictEqual(JSON.parse(rootUpdate["players/alice"].stageSkillHistoryJson).length, 2);
   assert.strictEqual(
-    rootUpdate["rooms/unit-room/historyPlayers"][EVGFirebaseAdapter.publicProfileId("alice")].currentSkill,
+    rootUpdate[`rooms/unit-room/historyPlayers/${EVGFirebaseAdapter.publicProfileId("alice")}`].currentSkill,
     70
   );
+  assert.strictEqual(rootUpdate["rooms/unit-room/historyPlayers"], undefined);
   assert.strictEqual(
     rootUpdate["rooms/unit-room/meta"].schemaVersion,
     "firebase-rtdb-v3-skill-history"
@@ -1033,8 +1297,9 @@ run("firebase host transition update is atomic across public results skill and p
   assert.ok(updates["rooms/unit-room/results/stage-001"]);
   assert.ok(updates["rooms/unit-room/scores"]);
   assert.ok(updates["rooms/unit-room/playerStats"]);
-  assert.ok(updates["rooms/unit-room/historyPlayers"]);
-  assert.strictEqual(updates["rooms/unit-room/historyPlayers"].p_historical.currentSkill, 88);
+  assert.strictEqual(updates["rooms/unit-room/historyPlayers"], undefined);
+  assert.strictEqual(updates["rooms/unit-room/historyPlayers/p_historical"].currentSkill, 88);
+  assert.ok(updates[`rooms/unit-room/historyPlayers/${EVGFirebaseAdapter.publicProfileId("alice")}`]);
   assert.strictEqual(updates["players/alice"].roomId, "unit-room");
 });
 
@@ -1074,11 +1339,128 @@ run("firebase final transition atomically persists completed history and queued 
     error: "",
   };
   const updates = EVGFirebaseAdapter.hostAtomicUpdates("/api/host/advance", ranked, finalRoom, "unit-room", Engine);
-  assert.ok(updates["rooms/unit-room/completedGameSummaries"]);
-  assert.ok(updates["rooms/unit-room/completedGamePublicDetails"]);
-  assert.ok(updates["rooms/unit-room/completedGameDetails"]);
-  assert.ok(updates["rooms/unit-room/completedGamePlayerDetails"]);
+  assert.ok(updates[`rooms/unit-room/completedGameSummaries/${archived.gameId}`]);
+  assert.ok(updates[`rooms/unit-room/completedGamePublicDetails/${archived.gameId}`]);
+  assert.ok(updates[`rooms/unit-room/completedGameDetails/${archived.gameId}`]);
+  assert.ok(updates[`rooms/unit-room/completedGamePlayerDetails/alice/${archived.gameId}`]);
+  assert.strictEqual(updates["rooms/unit-room/completedGameSummaries"], undefined);
+  assert.strictEqual(updates["rooms/unit-room/completedGamePublicDetails"], undefined);
+  assert.strictEqual(updates["rooms/unit-room/completedGameDetails"], undefined);
+  assert.strictEqual(updates["rooms/unit-room/completedGamePlayerDetails"], undefined);
   assert.strictEqual(updates["rooms/unit-room/archive"].status, "queued");
+});
+
+runAsync("firebase final archive callback then next game remains visible to a fresh History model", async () => {
+  let persisted = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  persisted.roomId = "unit-room";
+  persisted.gameId = "integration-final-game";
+  persisted.config.stages = [persisted.config.stages[0]];
+  persisted = Engine.registerPlayer(persisted, "Alice", "alice").room;
+  persisted.players[0].skill = 64;
+  persisted.players[0].stageSkillHistory = [64];
+  persisted.players[0].appliedSkillStageIds = ['["integration-final-game","stage-001"]'];
+  persisted.scores = { alice: 25 };
+  persisted.stageResults = {
+    "stage-001": {
+      stageId: "stage-001",
+      stageName: "Integrated stage",
+      calculatedAt: "2026-07-31T01:00:00.000Z",
+      players: {
+        alice: {
+          uuid: "alice",
+          name: "Alice",
+          score: 25,
+          stageSkill: 64,
+          ticket: { uuid: "alice", abstained: false },
+        },
+      },
+      rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 25, currentSkill: 64 }],
+    },
+  };
+  persisted.phase = Engine.PHASES.RANKING;
+  persisted.roomVersion = 30;
+
+  const updateCalls = [];
+  const gasGameIds = [];
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.firebaseDb = {};
+  adapter.serverNowIso = () => "2026-07-31T02:00:00.000Z";
+  adapter.isHostAllowed = async () => true;
+  adapter.readRestRoom = async () => Engine.deepClone(persisted);
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    update: async (path, updates) => updateCalls.push({ path, updates }),
+  };
+  const commitAtomic = adapter.commitHostAtomicUpdate.bind(adapter);
+  adapter.commitHostAtomicUpdate = async (path, currentRoom, nextRoom) => {
+    const result = await commitAtomic(path, currentRoom, nextRoom);
+    if (result.ok) persisted = Engine.deepClone(nextRoom);
+    return result;
+  };
+  const commitRoom = adapter.commitRestRoomChildren.bind(adapter);
+  adapter.commitRestRoomChildren = async (nextRoom, currentRoom, options) => {
+    const result = await commitRoom(nextRoom, currentRoom, options);
+    if (result.ok) persisted = Engine.deepClone(nextRoom);
+    return result;
+  };
+  adapter.exportArchiveGame = async (game) => {
+    gasGameIds.push(game.gameId);
+    persisted.archive = {
+      status: "exported",
+      gameId: game.gameId,
+      archiveId: `archive-${game.gameId}`,
+      completedAt: "2026-07-31T02:00:01.000Z",
+    };
+    return { ok: true, archive: Engine.deepClone(persisted.archive) };
+  };
+
+  const finalized = await adapter.postRestHost("/api/host/advance", {
+    hostToken: "firebase-host:host:test",
+    hostName: "host",
+  });
+  assert.strictEqual(finalized.ok, true, finalized.error);
+  assert.deepStrictEqual(gasGameIds, ["integration-final-game"]);
+  assert.strictEqual(persisted.phase, Engine.PHASES.FINAL);
+  assert.strictEqual(persisted.completedGames.length, 1);
+  const finalWrites = updateCalls[0].updates;
+  assert.ok(finalWrites["rooms/unit-room/completedGameDetails/integration-final-game"]);
+  assert.strictEqual(finalWrites["rooms/unit-room/completedGameDetails"], undefined);
+
+  const next = await adapter.postRestHost("/api/host/import-config", {
+    hostToken: "firebase-host:host:test",
+    config: Engine.DEFAULT_CONFIG,
+    baseVersion: persisted.roomVersion,
+  });
+  assert.strictEqual(next.ok, true, next.error);
+  assert.deepStrictEqual(gasGameIds, ["integration-final-game"]);
+  assert.strictEqual(persisted.players[0].skill, 64);
+  assert.strictEqual(persisted.scores.alice, 0);
+  const nextWrites = updateCalls[1].updates;
+  [
+    "rooms/unit-room/completedGameSummaries",
+    "rooms/unit-room/completedGamePublicDetails",
+    "rooms/unit-room/completedGameDetails",
+    "rooms/unit-room/completedGamePlayerDetails",
+    "rooms/unit-room/historyPlayers",
+  ].forEach((parent) => assert.strictEqual(nextWrites[parent], undefined));
+
+  const freshRoom = EVGFirebaseAdapter.roomFromFirebaseNodes(
+    EVGFirebaseAdapter.roomToFirebaseNodes(persisted),
+    Engine
+  );
+  const history = adapter.historyGames(freshRoom, { role: "host" });
+  assert.strictEqual(history.ok, true);
+  assert.strictEqual(history.summaries.some((game) => game.gameId === "integration-final-game"), true);
+  assert.strictEqual(freshRoom.completedGames.some((game) => game.gameId === "integration-final-game"), true);
+  assert.strictEqual(
+    freshRoom.completedGames[0].stageResults["stage-001"].players.alice.stageSkill,
+    64
+  );
 });
 
 run("firebase manual archive can resend a current game already persisted as completed", () => {
@@ -1123,7 +1505,7 @@ run("firebase manual archive can resend a current game already persisted as comp
     Engine
   );
   assert.strictEqual(
-    Object.keys(repairUpdates["rooms/unit-room/completedGameDetails"][repaired.gameId].stageResults).length,
+    Object.keys(repairUpdates[`rooms/unit-room/completedGameDetails/${repaired.gameId}`].stageResults).length,
     2
   );
   assert.strictEqual(repairUpdates["rooms/unit-room/archive"].archiveId, "archive-repaired");

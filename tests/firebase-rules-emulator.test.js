@@ -8,6 +8,7 @@ const {
 const projectId = "evg-rules-test";
 const roomId = "unit-room";
 const productionRoomId = "elevator-game-live";
+const versionRoomId = "version-room";
 
 function publicNode(overrides = {}) {
   return Object.assign({
@@ -72,6 +73,9 @@ async function main() {
               },
             },
           },
+          [versionRoomId]: {
+            roles: { hosts: { host: true } },
+          },
         },
       });
     });
@@ -80,6 +84,31 @@ async function main() {
     const productionHost = env.authenticatedContext("production-host").database();
     const alice = env.authenticatedContext("alice").database();
     const stranger = env.authenticatedContext("stranger").database();
+
+    await assertSucceeds(host.ref(`rooms/${versionRoomId}/public`).set(publicNode({
+      gameId: "version-game-1",
+      phase: "lobby",
+      roomVersion: 0,
+      currentStageId: "",
+      countdownEndsAt: null,
+      tallyingEndsAt: null,
+    })));
+    await assertFails(host.ref(`rooms/${versionRoomId}/public`).set(publicNode({
+      gameId: "version-game-2",
+      phase: "lobby",
+      roomVersion: 0,
+      currentStageId: "",
+      countdownEndsAt: null,
+      tallyingEndsAt: null,
+    })));
+    await assertSucceeds(host.ref(`rooms/${versionRoomId}/public`).set(publicNode({
+      gameId: "version-game-2",
+      phase: "lobby",
+      roomVersion: 1,
+      currentStageId: "",
+      countdownEndsAt: null,
+      tallyingEndsAt: null,
+    })));
 
     const missingRoot = await assertSucceeds(
       productionHost.ref("players/missing-root").once("value")
@@ -341,6 +370,153 @@ async function main() {
       gameId: "game-1",
       archiveId: "archive-game-1",
     }));
+
+    const gameTwo = {
+      summary: {
+        gameId: "game-2",
+        title: "Rules second game",
+        finishedAt: "2026-07-29T00:00:07.000Z",
+      },
+      publicDetail: {
+        gameId: "game-2",
+        title: "Rules second game",
+        stageResults: {
+          "stage-001": { stageId: "stage-001", rankings: [] },
+        },
+      },
+      detail: {
+        gameId: "game-2",
+        title: "Rules second game",
+        stageResults: {
+          "stage-001": { stageId: "stage-001" },
+        },
+      },
+      playerDetail: {
+        gameId: "game-2",
+        title: "Rules second game",
+        stageResults: {
+          "stage-001": { stageId: "stage-001" },
+        },
+      },
+      profile: {
+        profileId: "p_bob",
+        name: "Bob",
+        currentSkill: 20,
+        updatedAt: "2026-07-29T00:00:07.000Z",
+      },
+    };
+    await assertSucceeds(host.ref().update({
+      [`rooms/${roomId}/completedGameSummaries/game-2`]: gameTwo.summary,
+      [`rooms/${roomId}/completedGamePublicDetails/game-2`]: gameTwo.publicDetail,
+      [`rooms/${roomId}/completedGameDetails/game-2`]: gameTwo.detail,
+      [`rooms/${roomId}/completedGamePlayerDetails/alice/game-2`]: gameTwo.playerDetail,
+      [`rooms/${roomId}/historyPlayers/p_bob`]: gameTwo.profile,
+    }));
+
+    const repairedGameTwo = {
+      summary: Object.assign({}, gameTwo.summary, { title: "Rules second game repaired" }),
+      publicDetail: Object.assign({}, gameTwo.publicDetail, { title: "Rules second game repaired" }),
+      detail: Object.assign({}, gameTwo.detail, { title: "Rules second game repaired" }),
+      playerDetail: Object.assign({}, gameTwo.playerDetail, { title: "Rules second game repaired" }),
+      profile: Object.assign({}, gameTwo.profile, {
+        currentSkill: 30,
+        updatedAt: "2026-07-29T00:00:08.000Z",
+      }),
+    };
+    await assertSucceeds(host.ref().update({
+      [`rooms/${roomId}/completedGameSummaries/game-2`]: repairedGameTwo.summary,
+      [`rooms/${roomId}/completedGamePublicDetails/game-2`]: repairedGameTwo.publicDetail,
+      [`rooms/${roomId}/completedGameDetails/game-2`]: repairedGameTwo.detail,
+      [`rooms/${roomId}/completedGamePlayerDetails/alice/game-2`]: repairedGameTwo.playerDetail,
+      [`rooms/${roomId}/historyPlayers/p_bob`]: repairedGameTwo.profile,
+    }));
+
+    for (const parentPath of [
+      "completedGameSummaries",
+      "completedGamePublicDetails",
+      "completedGameDetails",
+      "completedGamePlayerDetails",
+      "historyPlayers",
+    ]) {
+      await assertFails(host.ref(`rooms/${roomId}/${parentPath}`).set(null));
+    }
+    await assertFails(host.ref(`rooms/${roomId}/completedGamePlayerDetails/alice`).set(null));
+
+    const shrinkWrites = [
+      ["completedGameSummaries", { "game-1": { gameId: "game-1", title: "Only one" } }],
+      ["completedGamePublicDetails", { "game-1": { gameId: "game-1", title: "Only one" } }],
+      ["completedGameDetails", { "game-1": { gameId: "game-1", title: "Only one" } }],
+      ["completedGamePlayerDetails", {
+        alice: { "game-1": { gameId: "game-1", title: "Only one" } },
+      }],
+      ["historyPlayers", {
+        p_alice: {
+          profileId: "p_alice",
+          name: "Alice",
+          currentSkill: 40,
+          updatedAt: "2026-07-29T00:00:05.000Z",
+        },
+      }],
+    ];
+    for (const [parentPath, value] of shrinkWrites) {
+      await assertFails(host.ref(`rooms/${roomId}/${parentPath}`).set(value));
+    }
+
+    for (const childPath of [
+      "completedGameSummaries/game-2",
+      "completedGamePublicDetails/game-2",
+      "completedGameDetails/game-2",
+      "completedGamePlayerDetails/alice/game-2",
+      "historyPlayers/p_bob",
+    ]) {
+      await assertFails(host.ref(`rooms/${roomId}/${childPath}`).set(null));
+    }
+
+    for (const childPath of [
+      "completedGameSummaries/game-2",
+      "completedGamePublicDetails/game-2",
+      "completedGameDetails/game-2",
+      "completedGamePlayerDetails/alice/game-2",
+    ]) {
+      await assertFails(host.ref(`rooms/${roomId}/${childPath}`).set({
+        gameId: "wrong-game-id",
+        title: "Wrong identity",
+      }));
+    }
+    await assertFails(host.ref(`rooms/${roomId}/historyPlayers/p_bob`).set({
+      profileId: "p_wrong",
+      name: "Bob",
+      currentSkill: 30,
+      updatedAt: "2026-07-29T00:00:08.000Z",
+    }));
+    await assertFails(alice.ref(`rooms/${roomId}/completedGameSummaries/game-3`).set({
+      gameId: "game-3",
+      title: "Player forged history",
+    }));
+
+    await assertFails(host.ref().update({
+      [`rooms/${roomId}/completedGameSummaries/game-2`]: Object.assign({}, repairedGameTwo.summary, {
+        title: "Atomic write must not commit",
+      }),
+      [`rooms/${roomId}/historyPlayers`]: null,
+      [`rooms/${roomId}/operations/rejected-history-shrink`]: {
+        at: "2026-07-29T00:00:09.000Z",
+        actor: "host",
+        action: "rejected-history-shrink",
+      },
+    }));
+    const preservedSummary = await assertSucceeds(
+      host.ref(`rooms/${roomId}/completedGameSummaries/game-2`).once("value")
+    );
+    if (preservedSummary.child("title").val() !== "Rules second game repaired") {
+      throw new Error("mixed rejected history update changed a repaired summary");
+    }
+    const rejectedOperation = await assertSucceeds(
+      host.ref(`rooms/${roomId}/operations/rejected-history-shrink`).once("value")
+    );
+    if (rejectedOperation.exists()) {
+      throw new Error("mixed rejected history update committed a side effect");
+    }
 
     await assertSucceeds(host.ref(`rooms/${roomId}/historyPlayers/p_alice`).set({
       profileId: "p_alice",

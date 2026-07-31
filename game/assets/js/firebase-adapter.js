@@ -295,7 +295,7 @@
       return Object.assign({}, result, { room: this.publicRoom(result.room, payload || {}) });
     }
 
-    applyMutation(path, payload, room) {
+    applyMutation(path, payload, room, options = {}) {
       let result = null;
       if (path === "/api/player/join") {
         result = this.engine.registerPlayer(room, payload.name, payload.uuid || this.auth.uid);
@@ -314,9 +314,12 @@
       } else if (path === "/api/host/update-room-settings") {
         result = this.engine.updateRoomSettings(room, payload, payload.hostName || "host", this.serverNowIso());
       } else if (path === "/api/host/import-config") {
-        const nextRoom = room.players.length || Object.keys(room.stageResults || {}).length
-          ? this.engine.createNextGameRoom(room, payload.config, this.serverNowIso())
-          : this.engine.createInitialRoom(payload.config);
+        if (payload.baseVersion !== undefined && String(payload.baseVersion) !== String(room.roomVersion || 0)) {
+          return { ok: false, code: "version_conflict", error: "ルーム状態が更新されています。再読み込みしてください。" };
+        }
+        const nextRoom = options.initializeRoom
+          ? this.engine.createInitialRoom(payload.config)
+          : this.engine.createNextGameRoom(room, payload.config, this.serverNowIso());
         nextRoom.countdownSeconds = room.countdownSeconds;
         result = { ok: true, room: nextRoom };
       } else if (path === "/api/host/update-config") {
@@ -327,9 +330,12 @@
         result = { ok: true, room: next };
       } else if (path === "/api/host/start-game-config") {
         if (payload.config) {
-          const nextRoom = room.players.length || Object.keys(room.stageResults || {}).length
-            ? this.engine.createNextGameRoom(room, payload.config, this.serverNowIso())
-            : this.engine.createInitialRoom(payload.config);
+          if (payload.baseVersion !== undefined && String(payload.baseVersion) !== String(room.roomVersion || 0)) {
+            return { ok: false, code: "version_conflict", error: "ルーム状態が更新されています。再読み込みしてください。" };
+          }
+          const nextRoom = options.initializeRoom
+            ? this.engine.createInitialRoom(payload.config)
+            : this.engine.createNextGameRoom(room, payload.config, this.serverNowIso());
           nextRoom.countdownSeconds = room.countdownSeconds;
           result = { ok: true, room: nextRoom };
         } else {
@@ -406,6 +412,7 @@
         });
         if (completedIndex >= 0) nextRoom.completedGames[completedIndex] = game;
         else nextRoom.completedGames = (nextRoom.completedGames || []).concat(game);
+        upsertCompletedGameSummary(nextRoom, game);
         nextRoom.roomVersion = Number(archiveRoom.roomVersion || 0) + 1;
         nextRoom.updatedAt = this.serverNowIso();
         queueArchiveForGame(nextRoom, archiveState, game, this.roomId);
@@ -417,6 +424,8 @@
           gameId: game.gameId,
         });
         nextRoom.operations = nextRoom.operations.slice(0, 100);
+        const historyError = historyPreservationFailure(archiveRoom, nextRoom);
+        if (historyError) return historyError;
         const transition = await this.commitHostAtomicUpdate(
           "/api/host/archive-current",
           archiveRoom,
@@ -461,31 +470,49 @@
         }
         payload = Object.assign({}, payload, { config: snapshot.val().config });
       }
+      this.lastRestRoomReadState = null;
       const room = await this.readRestRoom({
         purpose: "mutation",
         includeCompletedGames: ["/api/host/import-config", "/api/host/start-game-config", "/api/host/advance"].includes(path),
       });
+      const storedGameStateExists = Boolean(room) || Boolean(
+        this.lastRestRoomReadState && this.lastRestRoomReadState.gameStateExists
+      );
+      if (!room && storedGameStateExists) {
+        return {
+          ok: false,
+          code: "room_state_incomplete",
+          error: "既存ルームの公開状態が欠けているため、新規初期化を中止しました。履歴を確認してから復旧してください。",
+        };
+      }
       if (!room && path !== "/api/host/import-config" && path !== "/api/host/update-config") {
         return { ok: false, code: "not_initialized", error: "ゲームルームがまだ初期化されていません。Host認証をやり直してください。" };
       }
       const currentRoom = room || initializedRoom(this.engine, this.roomId, payload.config);
-      const result = this.applyMutation(path, payload, currentRoom);
+      const result = this.applyMutation(path, payload, currentRoom, { initializeRoom: !room });
       if (!result.ok) return result;
 
       if (path === "/api/host/import-config" || path === "/api/host/start-game-config" || path === "/api/host/update-config") {
         const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom, this.serverNowIso());
+        const startsNextGame = path === "/api/host/import-config" || path === "/api/host/start-game-config";
         const currentGameAlreadyArchived = (currentRoom.completedGames || []).some((game) => game.gameId === currentRoom.gameId);
-        const archivedGame = !currentGameAlreadyArchived && (path === "/api/host/import-config" || path === "/api/host/start-game-config")
+        const archivedGame = !currentGameAlreadyArchived && startsNextGame
           ? (nextRoom.completedGames || []).find((game) => game.gameId === currentRoom.gameId)
           : null;
+        if (archivedGame) upsertCompletedGameSummary(nextRoom, archivedGame);
         const shouldExportArchivedGame = archivedGame
           ? queueArchiveForGame(nextRoom, currentRoom.archive, archivedGame, this.roomId)
           : false;
-        await this.writeRestRoomChildren(nextRoom, {
+        const historyError = historyPreservationFailure(currentRoom, nextRoom);
+        if (historyError) return historyError;
+        const transition = await this.commitRestRoomChildren(nextRoom, currentRoom, {
           previousRoom: currentRoom,
           clearVolatile: path === "/api/host/import-config" || path === "/api/host/start-game-config",
           includeRootPlayers: true,
+          historyGameIds: archivedGame ? [archivedGame.gameId] : [],
+          upsertHistoryPlayers: Boolean(room) && startsNextGame,
         });
+        if (!transition.ok) return transition;
         if (archivedGame && shouldExportArchivedGame) {
           const archiveResult = await this.exportArchiveGame(
             archivedGame,
@@ -506,10 +533,13 @@
         : null;
       if (finalizedGame) {
         nextRoom.completedGames = (nextRoom.completedGames || []).concat(finalizedGame);
+        upsertCompletedGameSummary(nextRoom, finalizedGame);
       }
       const shouldExportFinalizedGame = finalizedGame
         ? queueArchiveForGame(nextRoom, currentRoom.archive, finalizedGame, this.roomId)
         : false;
+      const historyError = historyPreservationFailure(currentRoom, nextRoom);
+      if (historyError) return historyError;
       const transition = await this.commitHostAtomicUpdate(path, currentRoom, nextRoom);
       if (!transition.ok) return transition;
       if (finalizedGame && shouldExportFinalizedGame) {
@@ -572,6 +602,8 @@
           code: error.code || "auth",
           error: error.message === "HOST_UID_NOT_ALLOWED"
             ? "このFirebase uidはHost allowlistに登録されていません。"
+            : error.message === "ROOM_STATE_INCOMPLETE"
+              ? "既存ルームの公開状態が欠けているため、新規初期化を中止しました。履歴を確認してから復旧してください。"
             : (error.message || "Host権限を確認できませんでした。"),
         };
       }
@@ -591,8 +623,15 @@
           error.code = "auth";
           throw error;
         }
-        const publicSnapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/public`));
-        if (!publicSnapshot.exists()) {
+        const base = await this.readRestNodes(
+          restMutationBaseReadPaths("host", this.auth.uid, true, true)
+        );
+        if (!base.public && persistedGameStateExists(base)) {
+          const error = new Error("ROOM_STATE_INCOMPLETE");
+          error.code = "room_state_incomplete";
+          throw error;
+        }
+        if (!base.public) {
           await this.writeRestRoomChildren(initializedRoom(this.engine, this.roomId));
         } else {
           await this.backfillHistoryIndexes();
@@ -656,6 +695,8 @@
       next.config = room.config;
       next.tickets = room.tickets;
       next.completedGames = room.completedGames || [];
+      next.completedGameSummaries = room.completedGameSummaries || [];
+      next.historyPlayers = room.historyPlayers || [];
       next.operations = room.operations || [];
       next.operations.unshift({ at: this.serverNowIso(), actor: "host", action: "firebase-commit-result" });
       touch(next);
@@ -757,6 +798,10 @@
         ? restMutationBaseReadPaths(this.getRole(), this.auth.uid, hostAllowed, Boolean(options.includeCompletedGames))
         : restBaseReadPaths(this.getRole(), this.auth.uid, hostAllowed);
       const base = await this.readRestNodes(paths);
+      this.lastRestRoomReadState = {
+        gameStateExists: persistedGameStateExists(base),
+        publicExists: Boolean(base.public),
+      };
       if (!base.public) return null;
       if (base.roles && base.roles.hosts && base.roles.hosts[this.auth.uid]) this.debug.isHostAllowed = true;
       const stageId = currentStageIdFromNodes(base);
@@ -1019,6 +1064,7 @@
       delete nodes.tickets;
       delete nodes.ticketPresence;
       delete nodes.results;
+      HISTORY_PARENT_KEYS.forEach((key) => delete nodes[key]);
       if (options.clearVolatile && options.previousRoom) {
         volatileStageIds(options.previousRoom).forEach((stageId) => {
           writes.push([`tickets/${stageId}`, null]);
@@ -1028,6 +1074,13 @@
       }
       Object.keys(nodes).forEach((key) => {
         writes.push([key, emptyObjectToNull(nodes[key])]);
+      });
+      const historyUpdates = historyChildUpdates(room, {
+        gameIds: options.historyGameIds || [],
+        includeHistoryPlayers: Boolean(options.upsertHistoryPlayers),
+      });
+      Object.keys(historyUpdates).forEach((path) => {
+        writes.push([path, historyUpdates[path]]);
       });
       if (publicNode) writes.push(["public", publicNode]);
       if (this.sdk.update) {
@@ -1121,12 +1174,14 @@
           [`rooms/${this.roomId}/public`]: nodes.public,
           [`rooms/${this.roomId}/meta`]: nodes.meta,
           [`rooms/${this.roomId}/operations`]: emptyObjectToNull(nodes.operations),
-          [`rooms/${this.roomId}/historyPlayers`]: emptyObjectToNull(nodes.historyPlayers),
-          [`rooms/${this.roomId}/completedGameSummaries`]: emptyObjectToNull(nodes.completedGameSummaries),
-          [`rooms/${this.roomId}/completedGamePublicDetails`]: emptyObjectToNull(nodes.completedGamePublicDetails),
-          [`rooms/${this.roomId}/completedGameDetails`]: emptyObjectToNull(nodes.completedGameDetails),
-          [`rooms/${this.roomId}/completedGamePlayerDetails`]: emptyObjectToNull(nodes.completedGamePlayerDetails),
         };
+        const historyUpdates = historyChildUpdates(nextRoom, {
+          gameIds: historyGameIds(nextRoom),
+          includeHistoryPlayers: true,
+        });
+        Object.keys(historyUpdates).forEach((childPath) => {
+          updates[`rooms/${this.roomId}/${childPath}`] = historyUpdates[childPath];
+        });
         (nextRoom.players || []).forEach((player) => {
           updates[`rooms/${this.roomId}/playerStats/${player.uuid}`] = nodes.playerStats[player.uuid];
           const master = rootPlayers[player.uuid];
@@ -1163,29 +1218,43 @@
         this.debug.lastTransactionPublic = compactStatus(nextRoom);
         return { ok: true };
       } catch (error) {
-        this.debug.lastRulesError = error && error.message ? error.message : String(error);
-        let actualPublic = null;
-        try {
-          const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/public`));
-          actualPublic = snapshot.exists() ? snapshot.val() : null;
-          this.debug.lastTransactionPublic = actualPublic;
-        } catch (readError) {
-          this.log("firebase.atomic-refresh.error", { message: readError && readError.message ? readError.message : String(readError) });
-        }
-        const conflict = actualPublic && !publicMatches(actualPublic, compactStatus(currentRoom));
-        return {
-          ok: false,
-          code: conflict ? "version_conflict" : "rules_or_conflict",
-          error: conflict
-            ? "DB上のフェーズまたはバージョンが更新されています。再読み込みしてください。"
-            : (this.debug.lastRulesError || "Firebase Rulesにより原子的更新が拒否されました。"),
-          debug: {
-            expectedPublic: compactStatus(currentRoom),
-            attemptedPublic: compactStatus(nextRoom),
-            actualPublic,
-          },
-        };
+        return this.firebaseMutationFailure(error, currentRoom, nextRoom);
       }
+    }
+
+    async commitRestRoomChildren(nextRoom, currentRoom, options = {}) {
+      try {
+        await this.writeRestRoomChildren(nextRoom, options);
+        this.debug.lastTransactionPublic = compactStatus(nextRoom);
+        return { ok: true };
+      } catch (error) {
+        return this.firebaseMutationFailure(error, currentRoom, nextRoom);
+      }
+    }
+
+    async firebaseMutationFailure(error, currentRoom, nextRoom) {
+      this.debug.lastRulesError = error && error.message ? error.message : String(error);
+      let actualPublic = null;
+      try {
+        const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/public`));
+        actualPublic = snapshot.exists() ? snapshot.val() : null;
+        this.debug.lastTransactionPublic = actualPublic;
+      } catch (readError) {
+        this.log("firebase.atomic-refresh.error", { message: readError && readError.message ? readError.message : String(readError) });
+      }
+      const conflict = actualPublic && !publicMatches(actualPublic, compactStatus(currentRoom));
+      return {
+        ok: false,
+        code: conflict ? "version_conflict" : "rules_or_conflict",
+        error: conflict
+          ? "DB上のフェーズまたはバージョンが更新されています。再読み込みしてください。"
+          : (this.debug.lastRulesError || "Firebase Rulesにより原子的更新が拒否されました。"),
+        debug: {
+          expectedPublic: compactStatus(currentRoom),
+          attemptedPublic: compactStatus(nextRoom),
+          actualPublic,
+        },
+      };
     }
 
     async writeHostSideEffects(path, currentRoom, nextRoom) {
@@ -1421,6 +1490,123 @@
     return common.concat(["players", `playerStats/${uid}`, `scores/${uid}`]);
   }
 
+  const HISTORY_PARENT_KEYS = [
+    "completedGameSummaries",
+    "completedGamePublicDetails",
+    "completedGameDetails",
+    "completedGamePlayerDetails",
+    "historyPlayers",
+  ];
+
+  function persistedGameStateExists(nodes) {
+    return [
+      "meta",
+      "public",
+      "config",
+      "players",
+      "playerStats",
+      "tickets",
+      "ticketPresence",
+      "results",
+      "scores",
+      "completedGameSummaries",
+      "completedGamePublicDetails",
+      "completedGameDetails",
+      "completedGamePlayerDetails",
+      "historyPlayers",
+      "operations",
+      "archive",
+      "snapshot",
+    ].some((key) => storedNodeExists(nodes && nodes[key]));
+  }
+
+  function storedNodeExists(value) {
+    if (value === null || value === undefined) return false;
+    if (typeof value !== "object") return true;
+    return Object.keys(value).length > 0;
+  }
+
+  function historyGameIds(room) {
+    const ids = new Set();
+    storedCollectionValues(room && room.completedGames).forEach((game) => {
+      if (game && game.gameId) ids.add(String(game.gameId));
+    });
+    storedCollectionValues(room && room.completedGameSummaries).forEach((game) => {
+      if (game && game.gameId) ids.add(String(game.gameId));
+    });
+    return Array.from(ids);
+  }
+
+  function historyProfileIds(room) {
+    return storedCollectionValues(room && room.historyPlayers)
+      .map((player) => player && player.profileId)
+      .filter(Boolean)
+      .map(String);
+  }
+
+  function storedCollectionValues(value) {
+    return Array.isArray(value) ? value : Object.values(value || {});
+  }
+
+  function missingHistoryIds(currentIds, nextIds) {
+    const next = new Set(nextIds || []);
+    return (currentIds || []).filter((id) => !next.has(id));
+  }
+
+  function historyPreservationFailure(currentRoom, nextRoom) {
+    const missingGameIds = missingHistoryIds(historyGameIds(currentRoom), historyGameIds(nextRoom));
+    const missingProfileIds = missingHistoryIds(historyProfileIds(currentRoom), historyProfileIds(nextRoom));
+    if (!missingGameIds.length && !missingProfileIds.length) return null;
+    return {
+      ok: false,
+      code: "history_preservation_failed",
+      error: "既存のゲーム履歴またはSkillプロフィールが減る更新を中止しました。再読み込みして履歴を確認してください。",
+      missingGameIds,
+      missingProfileIds,
+    };
+  }
+
+  function changedCompletedGameIds(currentRoom, nextRoom) {
+    const current = new Map(storedCollectionValues(currentRoom && currentRoom.completedGames)
+      .filter((game) => game && game.gameId)
+      .map((game) => [String(game.gameId), JSON.stringify(game)]));
+    return storedCollectionValues(nextRoom && nextRoom.completedGames)
+      .filter((game) => game && game.gameId)
+      .filter((game) => current.get(String(game.gameId)) !== JSON.stringify(game))
+      .map((game) => String(game.gameId));
+  }
+
+  function historyChildUpdates(room, options = {}) {
+    const nodes = roomToFirebaseNodes(room || {});
+    const updates = {};
+    const gameIds = [...new Set((options.gameIds || []).map(String).filter(firebaseExistingKey))];
+    gameIds.forEach((gameId) => {
+      [
+        "completedGameSummaries",
+        "completedGamePublicDetails",
+        "completedGameDetails",
+      ].forEach((parent) => {
+        if (nodes[parent] && nodes[parent][gameId]) {
+          updates[`${parent}/${gameId}`] = nodes[parent][gameId];
+        }
+      });
+      Object.keys(nodes.completedGamePlayerDetails || {}).forEach((uid) => {
+        const details = nodes.completedGamePlayerDetails[uid];
+        if (details && details[gameId]) {
+          updates[`completedGamePlayerDetails/${uid}/${gameId}`] = details[gameId];
+        }
+      });
+    });
+    if (options.includeHistoryPlayers) {
+      Object.keys(nodes.historyPlayers || {}).forEach((profileId) => {
+        if (firebaseExistingKey(profileId) && nodes.historyPlayers[profileId]) {
+          updates[`historyPlayers/${profileId}`] = nodes.historyPlayers[profileId];
+        }
+      });
+    }
+    return updates;
+  }
+
   function volatileStageIds(room) {
     const ids = new Set(Object.keys(room.tickets || {}));
     Object.keys(room.ticketPresence || {}).forEach((stageId) => ids.add(stageId));
@@ -1453,29 +1639,30 @@
       if (stageId) updates[roomPath(`results/${stageId}`)] = nodes.results && nodes.results[stageId] || null;
       updates[roomPath("scores")] = emptyObjectToNull(nodes.scores);
       updates[roomPath("playerStats")] = emptyObjectToNull(nodes.playerStats);
-      updates[roomPath("historyPlayers")] = emptyObjectToNull(nodes.historyPlayers);
     }
 
     if (path === "/api/host/start-stage" || path === "/api/host/advance") {
       updates[roomPath("players")] = emptyObjectToNull(nodes.players);
       updates[roomPath("playerStats")] = emptyObjectToNull(nodes.playerStats);
-      updates[roomPath("historyPlayers")] = emptyObjectToNull(nodes.historyPlayers);
     }
 
     if (path === "/api/host/update-room-settings") {
       updates[roomPath("roomSettings/countdownSeconds")] = nodes.roomSettings.countdownSeconds;
     }
 
-    const completedGameChanged =
-      (nextRoom.completedGames || []).length > (currentRoom.completedGames || []).length ||
-      path === "/api/host/archive-current";
-    if (completedGameChanged) {
-      updates[roomPath("completedGameSummaries")] = emptyObjectToNull(nodes.completedGameSummaries);
-      updates[roomPath("completedGamePublicDetails")] = emptyObjectToNull(nodes.completedGamePublicDetails);
-      updates[roomPath("completedGameDetails")] = emptyObjectToNull(nodes.completedGameDetails);
-      updates[roomPath("completedGamePlayerDetails")] = emptyObjectToNull(nodes.completedGamePlayerDetails);
-      updates[roomPath("historyPlayers")] = emptyObjectToNull(nodes.historyPlayers);
+    const completedGameIds = changedCompletedGameIds(currentRoom, nextRoom);
+    if (completedGameIds.length) {
       updates[roomPath("archive")] = emptyObjectToNull(nodes.archive);
+    }
+
+    if (["/api/host/commit-result", "/api/host/start-stage", "/api/host/advance", "/api/host/archive-current"].includes(path)) {
+      const historyUpdates = historyChildUpdates(nextRoom, {
+        gameIds: completedGameIds,
+        includeHistoryPlayers: true,
+      });
+      Object.keys(historyUpdates).forEach((childPath) => {
+        updates[roomPath(childPath)] = historyUpdates[childPath];
+      });
     }
 
     if (path === "/api/host/remove-player") {
@@ -1729,6 +1916,18 @@
 
   function completedGameSummaries(games) {
     return (games || []).map(completedGameSummaryNode);
+  }
+
+  function upsertCompletedGameSummary(room, game) {
+    if (!room || !game || !game.gameId) return;
+    const summaries = Array.isArray(room.completedGameSummaries)
+      ? room.completedGameSummaries.slice()
+      : Object.values(room.completedGameSummaries || {});
+    const summary = completedGameSummaryNode(game);
+    const index = summaries.findIndex((item) => item && item.gameId === game.gameId);
+    if (index >= 0) summaries[index] = summary;
+    else summaries.push(summary);
+    room.completedGameSummaries = summaries;
   }
 
   function completedGameSummaryNode(game) {
@@ -2122,9 +2321,11 @@
   function stampHostRoom(room, roomId, previousRoom, updatedAt) {
     const next = room || {};
     next.roomId = roomId;
-    if (previousRoom && next.gameId === previousRoom.gameId) {
+    if (previousRoom) {
       next.roomVersion = Number(previousRoom.roomVersion || 0) + 1;
-      next.createdAt = previousRoom.createdAt || next.createdAt;
+      if (next.gameId === previousRoom.gameId) {
+        next.createdAt = previousRoom.createdAt || next.createdAt;
+      }
     } else {
       next.roomVersion = Number(next.roomVersion || 0);
     }
@@ -2501,6 +2702,10 @@
     firebaseStageSubscriptionPaths,
     restMutationBaseReadPaths,
     hostAtomicUpdates,
+    historyChildUpdates,
+    historyGameIds,
+    historyPreservationFailure,
+    persistedGameStateExists,
     recoverCareerSkillState,
     archiveGameForCurrentRoom,
     pendingArchiveGameIds,

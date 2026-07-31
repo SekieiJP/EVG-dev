@@ -2310,13 +2310,15 @@
 
   async function startNextGameFromConfig(config, logKind) {
     const normalizedConfig = Engine.normalizeConfig(config);
-    const hasCurrentGameProgress = state.room.players.length || Object.keys(state.room.stageResults || {}).length;
-    const nextRoom = hasCurrentGameProgress ? Engine.createNextGameRoom(state.room, normalizedConfig) : Engine.createInitialRoom(normalizedConfig);
-    const result = await runMutation(
+    const baseVersion = Number(state.room && state.room.roomVersion || 0);
+    const nextRoom = state.room
+      ? Engine.createNextGameRoom(state.room, normalizedConfig)
+      : Engine.createInitialRoom(normalizedConfig);
+    const result = await maybeBusy("次ゲームを開始中…", () => runMutation(
       () => ({ ok: true, room: nextRoom }),
       "/api/host/import-config",
-      { config: normalizedConfig, preservePlayers: true }
-    );
+      { config: normalizedConfig, preservePlayers: true, baseVersion }
+    ));
     if (!result.ok) return showToast(result.error);
     state.room = result.room;
     saveRoom(logKind || "host.config.import", "host");
@@ -2326,11 +2328,12 @@
 
   async function startGameConfig(configId) {
     const beforeGameId = state.room.gameId;
-    const result = await runMutation(
+    const baseVersion = Number(state.room.roomVersion || 0);
+    const result = await maybeBusy("次ゲームを開始中…", () => runMutation(
       () => ({ ok: false, room: state.room, error: "次ゲーム候補を取得できません。" }),
       "/api/host/start-game-config",
-      { configId }
-    );
+      { configId, baseVersion }
+    ));
     if (!result.ok) return showToast(result.error || "次ゲームを開始できません。");
     state.room = result.room;
     state.nextGameConfigsLoadedAt = "";
@@ -2605,6 +2608,7 @@
       room: normalized.room || state.room,
       player: normalized.player || normalized.me,
       ticket: normalized.ticket,
+      code: normalized.code || "",
       error: normalized.error || normalized.message,
     };
   }

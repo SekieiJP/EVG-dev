@@ -175,10 +175,55 @@ run("next game keeps room settings and separated audio settings", () => {
   assert.notStrictEqual(second.archive, first.archive);
 });
 
+run("next game keeps completed history and the public Skill index in an empty lobby", () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.players = [];
+  room.stageResults = {};
+  room.completedGames = [{
+    gameId: "completed-1",
+    title: "Completed",
+    scores: { alice: 12 },
+    rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 12, skill: 48 }],
+    stageResults: {},
+  }];
+  room.completedGameSummaries = [{
+    gameId: "completed-1",
+    title: "Completed",
+    finishedAt: "2026-07-30T00:00:00.000Z",
+  }];
+  room.historyPlayers = [{
+    profileId: "p_alice",
+    name: "Alice",
+    currentSkill: 48,
+    updatedAt: "2026-07-30T00:00:00.000Z",
+  }];
+
+  const next = Engine.createNextGameRoom(
+    room,
+    Engine.DEFAULT_CONFIG,
+    "2026-07-31T00:00:00.000Z"
+  );
+
+  assert.deepStrictEqual(next.completedGames, room.completedGames);
+  assert.deepStrictEqual(next.completedGameSummaries, room.completedGameSummaries);
+  assert.deepStrictEqual(next.historyPlayers, room.historyPlayers);
+  assert.notStrictEqual(next.completedGames, room.completedGames);
+  assert.notStrictEqual(next.completedGameSummaries, room.completedGameSummaries);
+  assert.notStrictEqual(next.historyPlayers, room.historyPlayers);
+  assert.strictEqual(next.historyPlayers[0].currentSkill, 48);
+});
+
 run("next game keeps only same-day stage participants and resets their game scores", () => {
   const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   room.players = [
-    { uuid: "today", name: "Today", skill: 72, stageSkillHistory: [32, 40], connected: true },
+    {
+      uuid: "today",
+      name: "Today",
+      skill: 72,
+      stageSkillHistory: [32, 40],
+      appliedSkillStageIds: ['["game-1","stage-001"]', '["game-1","stage-002"]'],
+      connected: true,
+    },
     { uuid: "yesterday", name: "Yesterday", skill: 55, stageSkillHistory: [55], connected: true },
     { uuid: "abstained", name: "Abstained", skill: 44, stageSkillHistory: [44], connected: true },
   ];
@@ -204,6 +249,10 @@ run("next game keeps only same-day stage participants and resets their game scor
   assert.deepStrictEqual(next.players.map((player) => player.uuid), ["today"]);
   assert.strictEqual(next.players[0].skill, 72);
   assert.deepStrictEqual(next.players[0].stageSkillHistory, [32, 40]);
+  assert.deepStrictEqual(next.players[0].appliedSkillStageIds, [
+    '["game-1","stage-001"]',
+    '["game-1","stage-002"]',
+  ]);
   assert.deepStrictEqual(next.scores, { today: 0 });
 });
 

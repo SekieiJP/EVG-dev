@@ -146,6 +146,17 @@ run("Host can persist the room countdown setting", () => {
   assert.strictEqual(appSource.includes("Engine.MAX_COUNTDOWN_SECONDS"), true);
 });
 
+run("next-game controls preserve an existing empty lobby and block duplicate clicks while saving", () => {
+  const importer = section(appSource, "async function startNextGameFromConfig", "async function startGameConfig");
+  const catalogStarter = section(appSource, "async function startGameConfig", "function isEditingPlayerText");
+  assert.strictEqual(importer.includes("hasCurrentGameProgress"), false);
+  assert.strictEqual(importer.includes("state.room\n      ? Engine.createNextGameRoom"), true);
+  assert.strictEqual(importer.includes('maybeBusy("次ゲームを開始中…"'), true);
+  assert.strictEqual(importer.includes("baseVersion"), true);
+  assert.strictEqual(catalogStarter.includes('maybeBusy("次ゲームを開始中…"'), true);
+  assert.strictEqual(catalogStarter.includes("baseVersion"), true);
+});
+
 run("archive recovery is available for queued jobs and manual save waits for final", () => {
   const archivePanel = section(appSource, "function renderArchivePanel", "function renderGameConfigOption");
   assert.strictEqual(

@@ -154,8 +154,10 @@ Host / Screen / Player browser
 ### 4.3 状態管理方針
 - **Single Source of Truth はRTDB** とする。クライアントは役割別の小ノード購読から表示モデルを作り、進行中room全体をlocalStorageへ保存しない。
 - Host、Player、Screenは `public`、現在ステージ設定、必要な本人/投影用データをRTDB購読で自動追従する。HTTPの定期ポーリング、GAS `/api/status`、同一端末 `BroadcastChannel` 同期は本番経路に使わない。
-- `public` のフェーズ遷移はHost allowlist uidだけが実行できる。クライアントは読取り時の `expectedPhase` と `roomVersion` を添えて変更を作り、Rulesが既存値に対する正しい次フェーズと `roomVersion + 1` を検証する。競合時は書込み全体を拒否して最新 `public` を再取得する。Playerの「次へ」ボタンでフェーズを進めたり、ランキング画面に意図的に置き去りにしたりしない。
+- `public` のフェーズ遷移はHost allowlist uidだけが実行できる。クライアントは読取り時の `expectedPhase` と `roomVersion` を添えて変更を作り、Rulesが既存値に対する正しい次フェーズと `roomVersion + 1` を検証する。gameIdを変更する次ゲーム開始も同じversion CASを必須とし、`public` 自体の初回作成だけを例外とする。競合時は書込み全体を拒否して最新 `public` を再取得する。Playerの「次へ」ボタンでフェーズを進めたり、ランキング画面に意図的に置き去りにしたりしない。
 - Hostがステージ集計を確定するときは、RTDBルートを基準にした1回のmulti-location `update()` で、フェーズ、`results/{stageId}`、`scores/{uid}`、`playerStats/{uid}`、プレイヤー履歴、操作ログを原子的に一括反映する。フェーズを先に確定して副作用を後書きする二段階方式と、個別順次書込みは禁止する。Rulesのversion/phase検証または既存結果により拒否された場合はupdate全体が反映されず、二重集計を防ぐ。
+- 通常Host操作は `completedGameSummaries`、`completedGamePublicDetails`、`completedGameDetails`、`completedGamePlayerDetails`、`historyPlayers` の親ノードを全置換しない。完了ゲームは `{gameId}`、公開Skillプロフィールは `{profileId}` の子パスだけを非nullで追記・修復する。Rulesは親書込み、既存子の削除、path keyとpayload内IDの不一致を拒否する。
+- Host初期化は `public`、`meta`、現ゲーム設定、参加者、結果、完了履歴等のゲーム状態がすべて未作成の場合だけ許可する。`public` が欠損していて他のゲーム状態または履歴が残る場合は `room_state_incomplete` として停止し、空の初期roomで上書きしない。allowlist、room settings、次ゲームテンプレートだけの事前作成はゲーム状態の存在とはみなさない。
 - 既存データ移行でroot `players/{uid}` が未作成の場合、通常room `elevator-game-live` の現在参加者であるuidに限り、同roomのallowlist済みHostが欠損確認の読取りを行える。任意の欠損uidをHostが探索できる規則にはしない。作成時の認可は `newData.roomId` と同roomのHost allowlistを照合し、room mirror、公開履歴、schemaVersionと同じmulti-location `update()`で原子的に作成する。
 
 ### 4.4 RTDB購読と同期
@@ -443,7 +445,8 @@ Host / Screen / Player browser
 - 日付は各ステージ集計時刻と次ゲーム開始時刻を日本時間（Asia/Tokyo）で比較する。日付をまたぐゲームでは、次ゲーム開始日と同じ日に集計されたステージへ参加したプレイヤーだけを引き継ぐ。
 - 次ゲームではゲーム内累積得点、チケット、ステージ結果、現在ステージ位置はリセットする。
 - 終了済みゲームの結果はRTDBの履歴ノードへ確定し、次ゲーム開始後も9項目の戦歴計算に含める。GASアーカイブの成功は次ゲーム開始の前提にしない。
-- 参加者を破棄して完全に初期化する操作は、設定JSON importとは別のReset操作で行う。
+- 既存roomは参加者0人・ステージ結果0件の空ロビーでも必ず履歴保持型の次ゲームとして扱う。設定JSON importまたは次ゲーム候補開始の直前に、既存gameIdと公開Skill profileIdが次状態の集合にすべて残ることを検査し、1件でも減る場合は `history_preservation_failed` としてRTDB更新とGAS送信を行わない。
+- 参加者と履歴を破棄して完全に初期化する操作は、設定JSON importとは別の管理用Reset API・確認画面・権限で行う。通常クライアントには履歴削除権限を与えず、管理用Resetを実装・有効化するまでは完全Resetを提供しない。
 - PlayerとScreenは `public.activeGameId` / `public.gameId` のRTDB購読で新ゲームを検出し、新しい現在フェーズへ自動追従する。
 
 ### 8.4 進行途中の中断と次ゲーム開始
@@ -461,8 +464,8 @@ Host / Screen / Player browser
 | 時刻同期 | `/.info/serverTimeOffset` 購読 | 補正済みサーバ時刻を算出する |
 | 状態購読 | `public` と役割別小ノード購読 | HTTP polling・全room取得を使わずに表示を同期する |
 | Player command | `players/{uid}`、`tickets/{stageId}/{uid}`、`ticketPresence/{stageId}/{uid}` | 本人の参加、改名、投票、棄権のみ。Rulesで `auth.uid == uid` を必須にする |
-| Host phase command | `public` を含むmulti-location update + Rules CAS | `expectedPhase` と `roomVersion` に相当する既存値検証をRulesで行い、次フェーズと時刻を確定する |
-| Host result commit | `public`、`results`、`scores`、`playerStats`、履歴、`operations` の単一multi-location update | フェーズを含む同一ステージの結果・得点・Skill・操作ログを原子的に反映する。競合・既存結果はupdate全体を拒否する |
+| Host phase command | `public` を含むmulti-location update + Rules CAS | `expectedPhase` と `roomVersion` に相当する既存値検証をRulesで行い、次フェーズと時刻を確定する。gameId変更時もversionを1増やす |
+| Host result commit | `public`、`results`、`scores`、`playerStats`、履歴子パス、`operations` の単一multi-location update | フェーズを含む同一ステージの結果・得点・Skill・操作ログを原子的に反映する。履歴親は置換せず、競合・既存結果・履歴削除はupdate全体を拒否する |
 | 次ゲーム設定 | `nextGameConfigs/{configId}` | Host allowlistのみが候補を登録・更新・選択できる |
 | 戦歴参照 | `completedGameSummaries`、本人詳細ノード | 公開サマリと本人だけの詳細を分離する |
 | GAS archive | archive専用HTTP endpoint | final/中断後の確定payloadを冪等にSpreadsheetへ出力する。進行操作には使わない |

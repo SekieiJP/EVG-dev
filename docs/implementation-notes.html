@@ -453,6 +453,22 @@
       </section>
 
       <section>
+        <h2>2026-07-31 次ゲーム開始時の履歴消失防止 r10</h2>
+        <ul>
+          <li><strong>障害原因:</strong> JSON Importと次ゲーム候補開始が、既存roomの存在ではなく<code>players</code>または<code>results</code>の有無で初期room/次roomを選んでいた。参加者0人・results 0件の既存ロビーでは履歴なし初期roomを生成し、共通writerが5種類の空履歴親を<code>null</code>へ変換して削除していた。<code>update-config</code>と公開状態欠損時のHost初期化にも同型の親置換経路があった。</li>
+          <li><strong>デザインの決定:</strong> 保存済みゲーム状態があるroomは空ロビーでも常に<code>createNextGameRoom()</code>へ通す。初期化はゲーム状態が全て未作成の場合だけ許可し、<code>public</code>だけ欠損して履歴等が残る場合は<code>room_state_incomplete</code>で安全側に停止する。事前配置されたHost allowlist、room settings、次ゲームテンプレートだけはゲーム状態とみなさない。</li>
+          <li><strong>デザインの決定:</strong> 通常writerから<code>completedGameSummaries</code>、<code>completedGamePublicDetails</code>、<code>completedGameDetails</code>、<code>completedGamePlayerDetails</code>、<code>historyPlayers</code>の親書込みを常時除外した。final、中断、手動archive修復、Skill backfillは対象<code>gameId</code>/<code>profileId</code>子だけを非nullでupsertする。</li>
+          <li><strong>多層防御:</strong> 書込み前に既存gameIdと公開Skill profileIdが次状態のsupersetであることを検査し、減少時は<code>history_preservation_failed</code>としてRTDB更新・GAS送信前に停止する。Rulesでも5履歴親、既存子の削除、path keyとpayload内IDの不一致を拒否する。アプリ検査が読んでいない公開/本人詳細も、旧子パスを一切触らないwriterとRules非削除で保持する。</li>
+          <li><strong>競合対策:</strong> gameId変更時も<code>roomVersion</code>を旧値+1とし、Import/次ゲーム開始requestへ画面が読んだ<code>baseVersion</code>を付ける。待機overlayで同一タブの連打を抑止し、別タブ・別Hostの後発multi-location updateはRules CASで副作用ごと拒否して<code>version_conflict</code>を返す。</li>
+          <li><strong>トレードオフ:</strong> 同一gameIdの修復はRulesで許可するため、子内部の全stage集合が縮まないことまではRulesだけで一般的に比較しない。通常クライアントは修復対象の完全payloadを作るUnit testとgameId集合guardで補完する。履歴の完全Resetは誤操作リスクが高いため、この改修では破壊API/画面を新設せず通常Importから到達不能のままとした。必要時は別権限・別承認の管理手順を設計する。</li>
+          <li><strong>検証:</strong> 空ロビーImport、前日参加者の退室、同日Skill履歴保持とscore 0、履歴親非書込み、新規game子だけの追記、guard時のRTDB/GAS副作用0、baseVersion競合、欠損public安全停止、final/手動archive/backfill子書込みをUnitへ固定した。Browser E2Eではmock接続を明示し、空ロビーImport後のreload/fresh Historyと同期2click抑止を確認した。Rules emulatorには親null/縮小、子null、ID不一致、混在atomic rollback、作成/修復成功を追加した。</li>
+          <li><strong>テスト環境の制約:</strong> Unit、負荷モデル、Playwrightはローカル実行する。Rules emulator用テストは追加済みだが、このMacにはJava RuntimeがないためDatabase emulator本体は起動できない。Firebase CLIのRules dry-runと本番反映前後のRules本文一致で補完し、この制約をemulator成功とは記録しない。</li>
+          <li><strong>リリース前バックアップ:</strong> 本番RTDB全体を読取り専用で<code>/private/tmp/evg-r10-predeploy-rtdb-20260731.json</code>へ退避し、JSON parse成功、155,437 bytes、SHA-256 <code>a97916a5d3e281cc9ec0f80caef527dcdcad18b67e14bf096897146b08a95a79</code>を確認した。退避時点はschema v3、完了ゲーム1件、公開Skillプロフィール6件である。一時領域は長期保管先ではない。</li>
+          <li><strong>データ復旧境界:</strong> このr10は今後の削除防止であり、すでに消失した本番履歴を推測復元しない。Spreadsheet所有者によるGAS/Spreadsheetバックアップは今回まだ実施されていないため、GAS archive、保存済みRTDB export、root playerを照合する本番履歴復旧は、そのバックアップ後の別payload・別承認として扱う。</li>
+        </ul>
+      </section>
+
+      <section>
         <h2>未解決の質問</h2>
         <ul>
           <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>

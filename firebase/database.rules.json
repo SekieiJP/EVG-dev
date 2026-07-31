@@ -32,7 +32,7 @@
         "public": {
           ".read": "auth != null",
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
-          ".validate": "newData.hasChildren(['gameId', 'phase', 'roomVersion', 'currentStageIndex', 'currentStageId']) && newData.child('gameId').isString() && newData.child('phase').isString() && newData.child('phase').val().matches(/^(lobby|stage_intro|voting|countdown|tallying|reveal|ranking|final)$/) && newData.child('roomVersion').isNumber() && newData.child('currentStageIndex').isNumber() && newData.child('currentStageId').isString() && (!data.exists() || newData.child('gameId').val() !== data.child('gameId').val() || newData.child('roomVersion').val() === data.child('roomVersion').val() + 1) && (!data.exists() || newData.child('gameId').val() !== data.child('gameId').val() || newData.child('phase').val() === data.child('phase').val() || (data.child('phase').val() === 'lobby' && newData.child('phase').val() === 'stage_intro') || (data.child('phase').val() === 'stage_intro' && newData.child('phase').val() === 'voting') || (data.child('phase').val() === 'voting' && newData.child('phase').val() === 'countdown') || (data.child('phase').val() === 'countdown' && newData.child('phase').val() === 'reveal') || (data.child('phase').val() === 'tallying' && newData.child('phase').val() === 'reveal') || (data.child('phase').val() === 'reveal' && newData.child('phase').val() === 'ranking') || (data.child('phase').val() === 'ranking' && (newData.child('phase').val() === 'stage_intro' || newData.child('phase').val() === 'final')))"
+          ".validate": "newData.hasChildren(['gameId', 'phase', 'roomVersion', 'currentStageIndex', 'currentStageId']) && newData.child('gameId').isString() && newData.child('phase').isString() && newData.child('phase').val().matches(/^(lobby|stage_intro|voting|countdown|tallying|reveal|ranking|final)$/) && newData.child('roomVersion').isNumber() && newData.child('currentStageIndex').isNumber() && newData.child('currentStageId').isString() && (!data.exists() || newData.child('roomVersion').val() === data.child('roomVersion').val() + 1) && (!data.exists() || newData.child('gameId').val() !== data.child('gameId').val() || newData.child('phase').val() === data.child('phase').val() || (data.child('phase').val() === 'lobby' && newData.child('phase').val() === 'stage_intro') || (data.child('phase').val() === 'stage_intro' && newData.child('phase').val() === 'voting') || (data.child('phase').val() === 'voting' && newData.child('phase').val() === 'countdown') || (data.child('phase').val() === 'countdown' && newData.child('phase').val() === 'reveal') || (data.child('phase').val() === 'tallying' && newData.child('phase').val() === 'reveal') || (data.child('phase').val() === 'reveal' && newData.child('phase').val() === 'ranking') || (data.child('phase').val() === 'ranking' && (newData.child('phase').val() === 'stage_intro' || newData.child('phase').val() === 'final')))"
         },
         "config": {
           ".read": "auth != null",
@@ -116,28 +116,44 @@
         },
         "completedGameSummaries": {
           ".read": "auth != null",
-          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
+          ".write": false,
+          "$gameId": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true && newData.exists()",
+            ".validate": "newData.hasChildren(['gameId']) && newData.child('gameId').isString() && newData.child('gameId').val() === $gameId"
+          }
         },
         "completedGamePublicDetails": {
           ".read": "auth != null",
-          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
+          ".write": false,
+          "$gameId": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true && newData.exists()",
+            ".validate": "newData.hasChildren(['gameId']) && newData.child('gameId').isString() && newData.child('gameId').val() === $gameId"
+          }
         },
         "completedGameDetails": {
           ".read": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
-          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
+          ".write": false,
+          "$gameId": {
+            ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true && newData.exists()",
+            ".validate": "newData.hasChildren(['gameId']) && newData.child('gameId').isString() && newData.child('gameId').val() === $gameId"
+          }
         },
         "completedGamePlayerDetails": {
-          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+          ".write": false,
           "$uid": {
             ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true)",
-            ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
+            ".write": false,
+            "$gameId": {
+              ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true && newData.exists()",
+              ".validate": "newData.hasChildren(['gameId']) && newData.child('gameId').isString() && newData.child('gameId').val() === $gameId"
+            }
           }
         },
         "historyPlayers": {
           ".read": "auth != null",
-          ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+          ".write": false,
           "$profileId": {
-            ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+            ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true && newData.exists()",
             ".validate": "newData.hasChildren(['profileId', 'name', 'currentSkill', 'updatedAt']) && newData.child('profileId').val() === $profileId",
             "profileId": { ".validate": "newData.isString() && newData.val().length > 2 && newData.val().length <= 32" },
             "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24" },

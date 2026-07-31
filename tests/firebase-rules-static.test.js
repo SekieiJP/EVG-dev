@@ -33,9 +33,11 @@ run("snapshot node is not readable or writable", () => {
 });
 
 run("public writes require version increment and allowed phases", () => {
-  assert.match(roomRules.public[".validate"], /roomVersion/);
-  assert.match(roomRules.public[".validate"], /data\.child\('roomVersion'\)\.val\(\) \+ 1/);
-  assert.match(roomRules.public[".validate"], /lobby\|stage_intro\|voting\|countdown\|tallying\|reveal\|ranking\|final/);
+  const validation = roomRules.public[".validate"];
+  assert.match(validation, /roomVersion/);
+  assert.match(validation, /\(!data\.exists\(\) \|\| newData\.child\('roomVersion'\)\.val\(\) === data\.child\('roomVersion'\)\.val\(\) \+ 1\)/);
+  assert.doesNotMatch(validation, /gameId'\)\.val\(\) !== data\.child\('gameId'\)\.val\(\) \|\| newData\.child\('roomVersion/);
+  assert.match(validation, /lobby\|stage_intro\|voting\|countdown\|tallying\|reveal\|ranking\|final/);
 });
 
 run("stage results allow create or delete but never overwrite", () => {
@@ -63,13 +65,30 @@ run("completed game history is split into public summaries and scoped details", 
   assert.strictEqual(roomRules.completedGameSummaries[".read"], "auth != null");
   assert.match(roomRules.completedGameDetails[".read"], /roles'\)\.child\('hosts/);
   assert.strictEqual(roomRules.completedGamePlayerDetails[".read"], undefined);
-  assert.match(roomRules.completedGamePlayerDetails[".write"], /roles'\)\.child\('hosts/);
+  assert.strictEqual(roomRules.completedGamePlayerDetails[".write"], false);
   assert.match(roomRules.completedGamePlayerDetails.$uid[".read"], /auth\.uid === \$uid/);
-  assert.match(roomRules.completedGamePlayerDetails.$uid[".write"], /roles'\)\.child\('hosts/);
+  assert.strictEqual(roomRules.completedGamePlayerDetails.$uid[".write"], false);
   assert.strictEqual(roomRules.completedGamePublicDetails[".read"], "auth != null");
-  assert.match(roomRules.completedGamePublicDetails[".write"], /roles'\)\.child\('hosts/);
   assert.strictEqual(roomRules.historyPlayers[".read"], "auth != null");
+  assert.strictEqual(roomRules.historyPlayers[".write"], false);
+
+  [
+    roomRules.completedGameSummaries,
+    roomRules.completedGamePublicDetails,
+    roomRules.completedGameDetails,
+  ].forEach((historyRules) => {
+    assert.strictEqual(historyRules[".write"], false);
+    assert.match(historyRules.$gameId[".write"], /roles'\)\.child\('hosts/);
+    assert.match(historyRules.$gameId[".write"], /newData\.exists\(\)/);
+    assert.match(historyRules.$gameId[".validate"], /newData\.child\('gameId'\)\.val\(\) === \$gameId/);
+  });
+
+  const playerGameRules = roomRules.completedGamePlayerDetails.$uid.$gameId;
+  assert.match(playerGameRules[".write"], /roles'\)\.child\('hosts/);
+  assert.match(playerGameRules[".write"], /newData\.exists\(\)/);
+  assert.match(playerGameRules[".validate"], /newData\.child\('gameId'\)\.val\(\) === \$gameId/);
   assert.match(roomRules.historyPlayers.$profileId[".write"], /roles'\)\.child\('hosts/);
+  assert.match(roomRules.historyPlayers.$profileId[".write"], /newData\.exists\(\)/);
   assert.match(roomRules.historyPlayers.$profileId[".validate"], /currentSkill/);
   assert.doesNotMatch(roomRules.historyPlayers.$profileId[".validate"], /uuid|uid/);
 });

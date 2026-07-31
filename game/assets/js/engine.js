@@ -142,6 +142,8 @@
     const startedAt = validIsoTimestamp(nextGameStartedAt) ? nextGameStartedAt : nowIso();
     const archived = archiveCurrentGame(room, startedAt);
     next.completedGames = archived ? (room.completedGames || []).concat(archived) : deepClone(room.completedGames || []);
+    next.completedGameSummaries = deepClone(room.completedGameSummaries || []);
+    next.historyPlayers = deepClone(room.historyPlayers || []);
     next.players = nextGamePlayers(room, startedAt);
     next.scores = next.players.reduce((scores, player) => {
       scores[player.uuid] = 0;
