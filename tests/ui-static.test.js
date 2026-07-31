@@ -123,11 +123,16 @@ run("static assets include release cache busting query", () => {
     "./assets/js/config.js",
     "./assets/js/engine.js",
     "./assets/vendor/qrcode-generator/qrcode.js",
+    "./assets/js/public-projection.js",
     "./assets/js/firebase-adapter.js",
     "./assets/js/app.js",
   ].forEach((asset) => {
     assert.strictEqual(indexSource.includes(`${asset}?v=`), true, asset);
   });
+  assert.ok(
+    indexSource.indexOf("./assets/js/public-projection.js") < indexSource.indexOf("./assets/js/firebase-adapter.js"),
+    "public projection must load before the Firebase adapter"
+  );
 });
 
 run("player countdown updates do not rerender active ticket input", () => {

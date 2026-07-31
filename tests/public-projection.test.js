@@ -82,6 +82,9 @@ function fixtureRoom() {
   const room = {
     roomId: "unit-room",
     gameId: result.gameId,
+    phase: Engine.PHASES.REVEAL,
+    currentStageIndex: 0,
+    roomVersion: 7,
     config: {
       schemaVersion: "1.0.0",
       gameMeta: {
@@ -248,4 +251,47 @@ run("all public-readable nodes recursively exclude private keys and known raw ui
   });
   assert.strictEqual(serialized.includes("must-not-leak"), false);
   assert.strictEqual(serialized.includes("also-private"), false);
+});
+
+run("role reconstruction gives Screen only public aliases and animation payloads", () => {
+  const { room, stage, uids } = fixtureRoom();
+  const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(room);
+  const screen = EVGFirebaseAdapter.roomFromFirebaseNodes(nodes, Engine, {
+    role: "screen",
+    uid: "screen-auth-uid",
+  });
+  const serialized = JSON.stringify(screen);
+  Object.values(uids).forEach((uid) => {
+    assert.strictEqual(serialized.includes(uid), false, `Screen reconstructed a raw uid: ${uid}`);
+  });
+  assert.deepStrictEqual(screen.tickets, {});
+  assert.strictEqual(screen.config.stages[0].events[0].correctAnswer, undefined);
+  assert.strictEqual(screen.stageResults[stage.stageId].publicProjection, true);
+  assert.strictEqual(screen.stageResults[stage.stageId].timeline.length, stage.params.N);
+  assert.strictEqual(screen.stageResults[stage.stageId].scoreCheckpoints.length, stage.params.N + 1);
+  assert.strictEqual(Object.keys(screen.scores).every((id) => /^p_[a-z0-9]+$/.test(id)), true);
+});
+
+run("role reconstruction gives Player self private detail and other players only aliases", () => {
+  const { room, stage, uids } = fixtureRoom();
+  const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(room);
+  const player = EVGFirebaseAdapter.roomFromFirebaseNodes(nodes, Engine, {
+    role: "player",
+    uid: uids.alice,
+  });
+  const serialized = JSON.stringify(player);
+  assert.strictEqual(serialized.includes(uids.alice), true);
+  [uids.bob, uids.carol, uids.dave].forEach((uid) => {
+    const index = serialized.indexOf(uid);
+    assert.strictEqual(
+      index >= 0 ? serialized.slice(Math.max(0, index - 100), index + uid.length + 100) : "",
+      "",
+      `Player reconstructed another raw uid: ${uid}`
+    );
+  });
+  assert.deepStrictEqual(Object.keys(player.tickets[stage.stageId]), [uids.alice]);
+  assert.ok(player.stageResults[stage.stageId].players[uids.alice].ticket);
+  assert.strictEqual(player.stageResults[stage.stageId].players[uids.bob], undefined);
+  assert.ok(player.stageResults[stage.stageId].players[Projection.publicProfileId(uids.bob)]);
+  assert.strictEqual(player.config.stages[0].events[0].correctAnswer, undefined);
 });

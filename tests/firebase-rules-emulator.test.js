@@ -4,11 +4,152 @@ const {
   assertSucceeds,
   initializeTestEnvironment,
 } = require("@firebase/rules-unit-testing");
+const Projection = require("../game/assets/js/public-projection");
 
 const projectId = "evg-rules-test";
 const roomId = "unit-room";
 const productionRoomId = "elevator-game-live";
 const versionRoomId = "version-room";
+const privacyRoomId = "privacy-room";
+const aliceProfileId = Projection.publicProfileId("alice");
+const bobProfileId = Projection.publicProfileId("bob");
+const missingRootProfileId = Projection.publicProfileId("missing-root");
+
+function privacyRoomNode() {
+  const stageId = "privacy-stage";
+  const calculatedAt = "2026-08-01T00:00:00.000Z";
+  const publicPlayer = (profileId, name, order) => ({ profileId, name, connected: true, order });
+  const publicScore = (profileId, name, total, order) => ({ profileId, name, total, order });
+  const publicResultPlayer = (profileId, name, order) => ({ profileId, name, order });
+  const checkpointScore = (profileId, score, delta) => ({ profileId, score, delta, reason: delta ? "上昇報酬" : "変動なし" });
+  return {
+    roles: { hosts: { "privacy-host": true } },
+    meta: {
+      roomId: privacyRoomId,
+      title: "Privacy rules test",
+      schemaVersion: "firebase-rtdb-v4-public-projection",
+      activeGameId: "privacy-game",
+      status: "active",
+      createdAt: calculatedAt,
+      updatedAt: calculatedAt,
+    },
+    public: publicNode({
+      gameId: "privacy-game",
+      phase: "countdown",
+      roomVersion: 4,
+      currentStageId: stageId,
+    }),
+    config: {
+      schemaVersion: "1.0.0",
+      gameMeta: { title: "Privacy rules test", apiKey: "must-not-be-readable" },
+      stages: [{
+        stageId,
+        name: "Privacy stage",
+        params: { N: 2, X: 2, P: 10, Q: 1 },
+        events: [{
+          type: "E1_prediction",
+          question: "Who wins?",
+          answerFormat: "player",
+          correctAnswer: "alice",
+          scoreOnCorrect: 1,
+          scoreOnWrong: 0,
+          scoreOnNoAnswer: 0,
+        }],
+      }],
+    },
+    publicConfig: {
+      schemaVersion: "1.0.0",
+      gameMeta: { title: "Privacy rules test" },
+      stages: [{
+        stageId,
+        name: "Privacy stage",
+        params: { N: 2, X: 2, P: 10, Q: 1 },
+        events: [{
+          type: "E1_prediction",
+          question: "Who wins?",
+          answerFormat: "player",
+          scoreOnCorrect: 1,
+          scoreOnWrong: 0,
+          scoreOnNoAnswer: 0,
+        }],
+      }],
+    },
+    players: {
+      alice: { profileId: aliceProfileId, name: "Alice", connected: true, joinedAt: calculatedAt, lastSeenAt: calculatedAt },
+      bob: { profileId: bobProfileId, name: "Bob", connected: true, joinedAt: calculatedAt, lastSeenAt: calculatedAt },
+    },
+    playerStats: {
+      alice: { currentSkill: 0, stageSkillHistoryJson: "[]", appliedSkillStageIdsJson: "[]", updatedAt: calculatedAt },
+      bob: { currentSkill: 0, stageSkillHistoryJson: "[]", appliedSkillStageIdsJson: "[]", updatedAt: calculatedAt },
+    },
+    tickets: {
+      [stageId]: {
+        alice: { uuid: "alice", boardFloor: 1, exitFloor: 2, predictions: ["bob"], abstained: false, submittedAt: calculatedAt },
+      },
+    },
+    ticketPresence: {
+      [stageId]: {
+        alice: { status: "submitted", updatedAt: calculatedAt },
+        bob: { status: "none", updatedAt: calculatedAt },
+      },
+    },
+    results: {
+      [stageId]: {
+        stageId,
+        players: {
+          alice: { uuid: "alice", name: "Alice", ticket: { uuid: "alice", predictions: ["bob"] }, score: 10, stageSkill: 40 },
+          bob: { uuid: "bob", name: "Bob", ticket: null, score: 0, stageSkill: null },
+        },
+        rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 10 }],
+      },
+    },
+    scores: {
+      alice: { total: 10, updatedAt: calculatedAt },
+      bob: { total: 0, updatedAt: calculatedAt },
+    },
+    publicPlayers: {
+      [aliceProfileId]: publicPlayer(aliceProfileId, "Alice", 0),
+      [bobProfileId]: publicPlayer(bobProfileId, "Bob", 1),
+    },
+    publicProfileOwners: {
+      [aliceProfileId]: "alice",
+      [bobProfileId]: "bob",
+    },
+    publicTicketPresence: {
+      [stageId]: {
+        [aliceProfileId]: { profileId: aliceProfileId, status: "submitted" },
+        [bobProfileId]: { profileId: bobProfileId, status: "none" },
+      },
+    },
+    publicScores: {
+      [aliceProfileId]: publicScore(aliceProfileId, "Alice", 10, 0),
+      [bobProfileId]: publicScore(bobProfileId, "Bob", 0, 1),
+    },
+    publicResults: {
+      [stageId]: {
+        gameId: "privacy-game",
+        stageId,
+        stageName: "Privacy stage",
+        calculatedAt,
+        floorCount: 2,
+        players: {
+          [aliceProfileId]: publicResultPlayer(aliceProfileId, "Alice", 0),
+          [bobProfileId]: publicResultPlayer(bobProfileId, "Bob", 1),
+        },
+        timeline: [
+          { floor: 1, boarding: [aliceProfileId], blocked: [], exiting: [], passengersBeforeCheck: [], passengersAfterCheck: [aliceProfileId], forcedOff: [], danger: false, scoreChanged: true },
+          { floor: 2, boarding: [], blocked: [], exiting: [aliceProfileId], passengersBeforeCheck: [aliceProfileId], passengersAfterCheck: [aliceProfileId], forcedOff: [], danger: false, scoreChanged: false },
+        ],
+        scoreCheckpoints: [
+          { floor: 0, scores: { [aliceProfileId]: checkpointScore(aliceProfileId, 0, 0), [bobProfileId]: checkpointScore(bobProfileId, 0, 0) } },
+          { floor: 1, scores: { [aliceProfileId]: checkpointScore(aliceProfileId, 10, 10), [bobProfileId]: checkpointScore(bobProfileId, 0, 0) } },
+          { floor: 2, scores: { [aliceProfileId]: checkpointScore(aliceProfileId, 10, 0), [bobProfileId]: checkpointScore(bobProfileId, 0, 0) } },
+        ],
+        rankings: [{ profileId: aliceProfileId, name: "Alice", rank: 1, score: 10 }],
+      },
+    },
+  };
+}
 
 function publicNode(overrides = {}) {
   return Object.assign({
@@ -76,6 +217,7 @@ async function main() {
           [versionRoomId]: {
             roles: { hosts: { host: true } },
           },
+          [privacyRoomId]: privacyRoomNode(),
         },
         archives: {
           "legacy-archive": {
@@ -89,7 +231,104 @@ async function main() {
     const host = env.authenticatedContext("host").database();
     const productionHost = env.authenticatedContext("production-host").database();
     const alice = env.authenticatedContext("alice").database();
+    const bob = env.authenticatedContext("bob").database();
     const stranger = env.authenticatedContext("stranger").database();
+    const privacyHost = env.authenticatedContext("privacy-host").database();
+    const guest = env.unauthenticatedContext().database();
+
+    await assertSucceeds(privacyHost.ref(`rooms/${privacyRoomId}/config`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/config`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/players`).once("value"));
+    await assertSucceeds(alice.ref(`rooms/${privacyRoomId}/players/alice`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/players/bob`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/tickets/privacy-stage`).once("value"));
+    await assertSucceeds(alice.ref(`rooms/${privacyRoomId}/tickets/privacy-stage/alice`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/ticketPresence/privacy-stage`).once("value"));
+    await assertSucceeds(alice.ref(`rooms/${privacyRoomId}/ticketPresence/privacy-stage/alice`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/results/privacy-stage`).once("value"));
+    await assertSucceeds(alice.ref(`rooms/${privacyRoomId}/results/privacy-stage/players/alice`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/results/privacy-stage/players/bob`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/scores`).once("value"));
+    await assertSucceeds(alice.ref(`rooms/${privacyRoomId}/scores/alice`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/scores/bob`).once("value"));
+
+    for (const publicPath of [
+      "publicConfig",
+      "publicPlayers",
+      "publicTicketPresence/privacy-stage",
+      "publicResults/privacy-stage",
+      "publicScores",
+    ]) {
+      await assertSucceeds(stranger.ref(`rooms/${privacyRoomId}/${publicPath}`).once("value"));
+      await assertFails(guest.ref(`rooms/${privacyRoomId}/${publicPath}`).once("value"));
+    }
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/publicProfileOwners`).once("value"));
+    await assertSucceeds(alice.ref(`rooms/${privacyRoomId}/publicProfileOwners/${aliceProfileId}`).once("value"));
+    await assertFails(alice.ref(`rooms/${privacyRoomId}/publicProfileOwners/${bobProfileId}`).once("value"));
+
+    const newbieProfileId = Projection.publicProfileId("newbie");
+    const joinedAt = "2026-08-01T00:00:01.000Z";
+    const newbie = env.authenticatedContext("newbie").database();
+    await assertFails(newbie.ref(`rooms/${privacyRoomId}/publicPlayers/${newbieProfileId}`).set({
+      profileId: newbieProfileId,
+      name: "Unowned",
+      connected: true,
+      order: 2,
+    }));
+    await assertSucceeds(newbie.ref().update({
+      [`rooms/${privacyRoomId}/players/newbie`]: {
+        profileId: newbieProfileId,
+        name: "Newbie",
+        connected: true,
+        joinedAt,
+        lastSeenAt: joinedAt,
+      },
+      [`rooms/${privacyRoomId}/publicProfileOwners/${newbieProfileId}`]: "newbie",
+      [`rooms/${privacyRoomId}/publicPlayers/${newbieProfileId}`]: {
+        profileId: newbieProfileId,
+        name: "Newbie",
+        connected: true,
+        order: 2,
+      },
+      "players/newbie": {
+        name: "Newbie",
+        currentSkill: 0,
+        stageSkillHistoryJson: "[]",
+        appliedSkillStageIdsJson: "[]",
+        joinedAt,
+        lastSeenAt: joinedAt,
+        updatedAt: joinedAt,
+        roomId: privacyRoomId,
+      },
+    }));
+    await assertSucceeds(newbie.ref().update({
+      [`rooms/${privacyRoomId}/tickets/privacy-stage/newbie`]: {
+        uuid: "newbie",
+        boardFloor: 1,
+        exitFloor: 2,
+        predictions: [aliceProfileId],
+        abstained: false,
+        submittedAt: joinedAt,
+      },
+      [`rooms/${privacyRoomId}/ticketPresence/privacy-stage/newbie`]: {
+        status: "submitted",
+        updatedAt: joinedAt,
+      },
+      [`rooms/${privacyRoomId}/publicTicketPresence/privacy-stage/${newbieProfileId}`]: {
+        profileId: newbieProfileId,
+        status: "submitted",
+      },
+    }));
+    await assertFails(bob.ref(`rooms/${privacyRoomId}/publicPlayers/${aliceProfileId}`).update({
+      name: "Forged Alice",
+    }));
+    await assertFails(bob.ref(`rooms/${privacyRoomId}/publicProfileOwners/${aliceProfileId}`).set("bob"));
+    await assertFails(privacyHost.ref(`rooms/${privacyRoomId}/publicResults/privacy-stage`).update({
+      uuid: "raw-uid-must-not-be-public",
+    }));
+    await assertSucceeds(privacyHost.ref(`rooms/${privacyRoomId}/publicScores/${aliceProfileId}`).update({
+      total: 11,
+    }));
 
     await assertSucceeds(host.ref(`rooms/${roomId}/operations/rules-boundary`).set({
       at: "2026-07-29T00:00:00.000Z",
@@ -163,7 +402,7 @@ async function main() {
       [`rooms/${productionRoomId}/meta`]: {
         roomId: productionRoomId,
         title: "Production rules test",
-        schemaVersion: "firebase-rtdb-v3-skill-history",
+        schemaVersion: "firebase-rtdb-v4-public-projection",
         activeGameId: "production-game",
         status: "active",
         createdAt: "2026-07-29T00:00:00.000Z",
@@ -175,6 +414,23 @@ async function main() {
         appliedSkillStageIdsJson: "[\"[\\\"production-game\\\",\\\"stage-001\\\"]\",\"[\\\"production-game\\\",\\\"stage-002\\\"]\"]",
         updatedAt: "2026-07-29T00:00:05.000Z",
       },
+      [`rooms/${productionRoomId}/players/missing-root/profileId`]: missingRootProfileId,
+      [`rooms/${productionRoomId}/publicConfig`]: {
+        schemaVersion: "1.0.0",
+        gameMeta: { title: "Production rules test" },
+        stages: [{
+          stageId: "stage-001",
+          name: "Stage 1",
+          params: { N: 3, X: 2, P: 10, Q: 1 },
+        }],
+      },
+      [`rooms/${productionRoomId}/publicPlayers/${missingRootProfileId}`]: {
+        profileId: missingRootProfileId,
+        name: "Missing Root",
+        connected: true,
+        order: 0,
+      },
+      [`rooms/${productionRoomId}/publicProfileOwners/${missingRootProfileId}`]: "missing-root",
       [`rooms/${productionRoomId}/historyPlayers/p_missing_root`]: {
         profileId: "p_missing_root",
         name: "Missing Root",
@@ -184,7 +440,7 @@ async function main() {
       [`rooms/${productionRoomId}/operations/backfill`]: {
         at: "2026-07-29T00:00:05.000Z",
         actor: "host",
-        action: "firebase-backfill-skill-history",
+        action: "firebase-backfill-public-projection",
       },
       "players/missing-root": {
         name: "Missing Root",

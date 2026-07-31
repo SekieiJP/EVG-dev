@@ -139,7 +139,7 @@ run("firebase nodes round-trip room state without snapshot", () => {
   assert.strictEqual(nodes.snapshot, undefined);
   assert.strictEqual(nodes.completedGames, undefined);
   assert.strictEqual(nodes.meta.hostUid, undefined);
-  assert.strictEqual(nodes.meta.schemaVersion, "firebase-rtdb-v3-skill-history");
+  assert.strictEqual(nodes.meta.schemaVersion, "firebase-rtdb-v4-public-projection");
   assert.strictEqual(nodes.players.alice.name, "Alice");
   assert.strictEqual(nodes.scores.alice.total, 12);
   assert.strictEqual(nodes.roomSettings.countdownSeconds, 24);
@@ -148,7 +148,7 @@ run("firebase nodes round-trip room state without snapshot", () => {
   nodes.roles = { hosts: { "host-uid": true } };
   const restored = EVGFirebaseAdapter.roomFromFirebaseNodes(nodes, Engine);
   assert.strictEqual(restored.hostUid, "host-uid");
-  assert.strictEqual(restored.firebaseSchemaVersion, "firebase-rtdb-v3-skill-history");
+  assert.strictEqual(restored.firebaseSchemaVersion, "firebase-rtdb-v4-public-projection");
   assert.strictEqual(restored.phase, Engine.PHASES.VOTING);
   assert.strictEqual(restored.roomVersion, 7);
   assert.strictEqual(restored.countdownSeconds, 24);
@@ -431,6 +431,10 @@ runAsync("firebase profile writes root and room nodes atomically without invalid
   assert.strictEqual(existingCalls[0].updates["players/alice"].name, "Alice Renamed");
   assert.strictEqual(existingCalls[0].updates["rooms/unit-room/players/alice"].name, "Alice Renamed");
   assert.strictEqual(existingCalls[0].updates["rooms/unit-room/playerStats/alice"].currentSkill, 42);
+  const aliceProfileId = EVGFirebaseAdapter.publicProfileId("alice");
+  assert.strictEqual(existingCalls[0].updates["rooms/unit-room/players/alice"].profileId, aliceProfileId);
+  assert.strictEqual(existingCalls[0].updates[`rooms/unit-room/publicPlayers/${aliceProfileId}`].profileId, aliceProfileId);
+  assert.strictEqual(existingCalls[0].updates[`rooms/unit-room/publicProfileOwners/${aliceProfileId}`], "alice");
 
   const newCalls = [];
   const newAdapter = makeAdapter(Engine.createInitialRoom(Engine.DEFAULT_CONFIG), null, "new-player", newCalls);
@@ -444,6 +448,9 @@ runAsync("firebase profile writes root and room nodes atomically without invalid
   assert.strictEqual(newCalls[0].updates["players/new-player"].currentSkill, 0);
   assert.strictEqual(newCalls[0].updates["rooms/unit-room/players/new-player"].name, "New Player");
   assert.strictEqual(newCalls[0].updates["rooms/unit-room/playerStats/new-player"], undefined);
+  const newProfileId = EVGFirebaseAdapter.publicProfileId("new-player");
+  assert.strictEqual(newCalls[0].updates["rooms/unit-room/players/new-player"].profileId, newProfileId);
+  assert.strictEqual(newCalls[0].updates[`rooms/unit-room/publicProfileOwners/${newProfileId}`], "new-player");
 });
 
 run("firebase history detail keys preserve valid Unicode game ids", () => {
@@ -605,7 +612,10 @@ run("firebase can reconstruct player-owned completed game details from summaries
     },
   };
 
-  const restored = EVGFirebaseAdapter.roomFromFirebaseNodes(nodes, Engine);
+  const restored = EVGFirebaseAdapter.roomFromFirebaseNodes(nodes, Engine, {
+    role: "player",
+    uid: "alice",
+  });
 
   assert.strictEqual(restored.completedGames.length, 1);
   assert.strictEqual(restored.completedGames[0].title, "Previous Game");
@@ -955,6 +965,7 @@ run("firebase subscriptions are scoped by screen role", () => {
   const lockedHostPaths = EVGFirebaseAdapter.firebaseBaseSubscriptionPaths("host", "host-uid", false);
   const playerPaths = EVGFirebaseAdapter.firebaseBaseSubscriptionPaths("player", "player-uid");
   const screenPaths = EVGFirebaseAdapter.firebaseBaseSubscriptionPaths("screen", "screen-uid");
+  const historyPaths = EVGFirebaseAdapter.firebaseBaseSubscriptionPaths("history", "history-uid");
   const hostStagePaths = EVGFirebaseAdapter.firebaseStageSubscriptionPaths("host", "host-uid", "stage-001");
   const lockedHostStagePaths = EVGFirebaseAdapter.firebaseStageSubscriptionPaths("host", "host-uid", "stage-001", false);
   const screenStagePaths = EVGFirebaseAdapter.firebaseStageSubscriptionPaths("screen", "screen-uid", "stage-001");
@@ -963,7 +974,7 @@ run("firebase subscriptions are scoped by screen role", () => {
   assert.strictEqual(hostPaths.includes(""), false);
   assert.strictEqual(playerPaths.includes(""), false);
   assert.strictEqual(hostPaths.includes("roles/hosts/host-uid"), true);
-  assert.deepStrictEqual(lockedHostPaths, ["meta", "public", "config", "roomSettings", "roles/hosts/host-uid"]);
+  assert.deepStrictEqual(lockedHostPaths, ["meta", "public", "roomSettings", "publicConfig", "roles/hosts/host-uid"]);
   assert.strictEqual(hostPaths.includes("tickets"), false);
   assert.strictEqual(hostPaths.includes("results"), false);
   assert.strictEqual(hostPaths.includes("completedGameDetails"), false);
@@ -971,7 +982,15 @@ run("firebase subscriptions are scoped by screen role", () => {
   assert.strictEqual(hostPaths.includes("completedGames"), false);
   assert.strictEqual(screenPaths.includes("tickets"), false);
   assert.strictEqual(screenPaths.includes("results"), false);
+  assert.strictEqual(screenPaths.includes("players"), false);
+  assert.strictEqual(screenPaths.includes("scores"), false);
+  assert.strictEqual(screenPaths.includes("publicConfig"), true);
+  assert.strictEqual(screenPaths.includes("publicPlayers"), true);
+  assert.strictEqual(screenPaths.includes("publicScores"), true);
   assert.strictEqual(playerPaths.includes("tickets"), false);
+  assert.strictEqual(playerPaths.includes("players"), false);
+  assert.strictEqual(playerPaths.includes("publicPlayers"), true);
+  assert.strictEqual(playerPaths.includes("publicScores"), true);
   assert.strictEqual(playerPaths.includes("completedGameSummaries"), true);
   assert.strictEqual(playerPaths.includes("historyPlayers"), false);
   assert.strictEqual(playerPaths.includes("completedGameDetails"), false);
@@ -979,12 +998,19 @@ run("firebase subscriptions are scoped by screen role", () => {
   assert.strictEqual(playerPaths.includes("scores/player-uid"), true);
   assert.deepStrictEqual(hostStagePaths, ["ticketPresence/stage-001", "tickets/stage-001", "results/stage-001"]);
   assert.deepStrictEqual(lockedHostStagePaths, []);
-  assert.deepStrictEqual(screenStagePaths, ["ticketPresence/stage-001", "results/stage-001"]);
+  assert.deepStrictEqual(screenStagePaths, ["publicTicketPresence/stage-001", "publicResults/stage-001"]);
   assert.deepStrictEqual(playerStagePaths, [
     "ticketPresence/stage-001/player-uid",
     "tickets/stage-001/player-uid",
     "results/stage-001/players/player-uid",
-    "results/stage-001/rankings",
+    "publicResults/stage-001",
+  ]);
+  assert.deepStrictEqual(historyPaths, [
+    "meta",
+    "public",
+    "completedGameSummaries",
+    "historyPlayers",
+    "completedGamePlayerDetails/history-uid",
   ]);
 });
 
@@ -1329,13 +1355,20 @@ runAsync("firebase Host backfill reads every current result and atomically write
     70
   );
   assert.strictEqual(rootUpdate["rooms/unit-room/historyPlayers"], undefined);
+  const aliceProfileId = EVGFirebaseAdapter.publicProfileId("alice");
+  assert.strictEqual(rootUpdate["rooms/unit-room/players/alice/profileId"], aliceProfileId);
+  assert.strictEqual(rootUpdate[`rooms/unit-room/publicPlayers/${aliceProfileId}`].profileId, aliceProfileId);
+  assert.strictEqual(rootUpdate[`rooms/unit-room/publicProfileOwners/${aliceProfileId}`], "alice");
+  assert.ok(rootUpdate["rooms/unit-room/publicConfig"]);
+  assert.ok(rootUpdate["rooms/unit-room/publicResults/stage-001"]);
+  assert.strictEqual(JSON.stringify(rootUpdate["rooms/unit-room/publicResults/stage-001"]).includes("alice"), false);
   assert.strictEqual(
     rootUpdate["rooms/unit-room/meta"].schemaVersion,
-    "firebase-rtdb-v3-skill-history"
+    "firebase-rtdb-v4-public-projection"
   );
 
   const migrated = Engine.deepClone(room);
-  migrated.firebaseSchemaVersion = "firebase-rtdb-v3-skill-history";
+  migrated.firebaseSchemaVersion = "firebase-rtdb-v4-public-projection";
   adapter.readRestRoom = async () => migrated;
   reads.length = 0;
   rootUpdate = null;
@@ -1495,6 +1528,12 @@ run("firebase host transition update is atomic across public results skill and p
   const updates = EVGFirebaseAdapter.hostAtomicUpdates("/api/host/commit-result", current, next, "unit-room", Engine);
   assert.strictEqual(updates["rooms/unit-room/public"].roomVersion, 5);
   assert.ok(updates["rooms/unit-room/results/stage-001"]);
+  assert.ok(updates["rooms/unit-room/publicResults/stage-001"]);
+  assert.strictEqual(
+    JSON.stringify(updates["rooms/unit-room/publicResults/stage-001"]).includes('"uuid"'),
+    false
+  );
+  assert.ok(updates[`rooms/unit-room/publicScores/${EVGFirebaseAdapter.publicProfileId("alice")}`]);
   assert.strictEqual(updates["rooms/unit-room/scores"], undefined);
   assert.strictEqual(updates["rooms/unit-room/playerStats"], undefined);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(updates, "rooms/unit-room/scores/alice/total"), true);

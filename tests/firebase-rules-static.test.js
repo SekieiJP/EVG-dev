@@ -1,9 +1,28 @@
 const assert = require("assert");
 const fs = require("fs");
+const { buildCompatRules } = require("../scripts/build-firebase-rules-compat");
 
-const rules = JSON.parse(fs.readFileSync("firebase/database.rules.json", "utf8")).rules;
+const finalRulesDocument = JSON.parse(fs.readFileSync("firebase/database.rules.json", "utf8"));
+const rules = finalRulesDocument.rules;
 const roomRules = rules.rooms.$roomId;
 const rulesText = JSON.stringify(rules);
+
+function changedLeafPaths(left, right, prefix = "") {
+  const keys = new Set(Object.keys(left || {}).concat(Object.keys(right || {})));
+  return Array.from(keys).flatMap((key) => {
+    const path = prefix ? `${prefix}/${key}` : key;
+    const leftValue = left && left[key];
+    const rightValue = right && right[key];
+    if (
+      leftValue && rightValue &&
+      typeof leftValue === "object" && typeof rightValue === "object" &&
+      !Array.isArray(leftValue) && !Array.isArray(rightValue)
+    ) {
+      return changedLeafPaths(leftValue, rightValue, path);
+    }
+    return JSON.stringify(leftValue) === JSON.stringify(rightValue) ? [] : [path];
+  });
+}
 
 function run(name, fn) {
   try {
@@ -46,6 +65,52 @@ run("stage results allow create or delete but never overwrite", () => {
   assert.match(roomRules.results.$stageId[".write"], /!data\.exists\(\) \|\| newData\.val\(\) === null/);
 });
 
+run("private live-game parents are Host-only and Player reads stop at self children", () => {
+  ["config", "players", "results", "scores"].forEach((key) => {
+    assert.match(roomRules[key][".read"], /roles'\)\.child\('hosts/);
+  });
+  assert.strictEqual(roomRules.ticketPresence[".read"], false);
+  assert.match(roomRules.ticketPresence.$stageId[".read"], /roles'\)\.child\('hosts/);
+  assert.strictEqual(roomRules.players[".write"], false);
+  assert.strictEqual(roomRules.scores[".write"], false);
+  assert.match(roomRules.players.$uid[".read"], /auth\.uid === \$uid/);
+  assert.match(roomRules.ticketPresence.$stageId.$uid[".read"], /auth\.uid === \$uid/);
+  assert.match(roomRules.results.$stageId.players.$uid[".read"], /auth\.uid === \$uid/);
+  assert.match(roomRules.scores.$uid[".read"], /auth\.uid === \$uid/);
+});
+
+run("public projections are authenticated, allowlisted, and keep owner mapping private", () => {
+  ["publicConfig", "publicPlayers", "publicTicketPresence", "publicResults", "publicScores"].forEach((key) => {
+    assert.strictEqual(roomRules[key][".read"], "auth != null");
+  });
+  assert.match(roomRules.publicProfileOwners[".read"], /roles'\)\.child\('hosts/);
+  assert.strictEqual(roomRules.publicProfileOwners[".write"], false);
+  assert.match(roomRules.publicProfileOwners.$profileId[".write"], /newData\.parent\(\)\.parent\(\)\.child\('players'/);
+  assert.match(roomRules.publicPlayers.$profileId[".write"], /publicProfileOwners/);
+  assert.match(roomRules.publicTicketPresence.$stageId.$profileId[".write"], /publicProfileOwners/);
+  assert.strictEqual(roomRules.publicPlayers.$profileId.$other[".validate"], false);
+  assert.strictEqual(roomRules.publicTicketPresence.$stageId.$profileId.$other[".validate"], false);
+  assert.strictEqual(roomRules.publicResults.$stageId.$other[".validate"], false);
+  assert.strictEqual(roomRules.publicScores.$profileId.$other[".validate"], false);
+  assert.strictEqual(roomRules.publicConfig.$other[".validate"], false);
+  assert.doesNotMatch(JSON.stringify(roomRules.publicResults), /uuid|ticket|prediction|stageSkill/i);
+});
+
+run("compatibility Rules are generated from final Rules and reopen only legacy reads", () => {
+  const generated = buildCompatRules(finalRulesDocument);
+  const checkedIn = JSON.parse(fs.readFileSync("firebase/database.rules.compat-v4.json", "utf8"));
+  assert.deepStrictEqual(checkedIn, generated);
+  assert.deepStrictEqual(changedLeafPaths(finalRulesDocument, generated).sort(), [
+    "rules/rooms/$roomId/config/.read",
+    "rules/rooms/$roomId/players/.read",
+    "rules/rooms/$roomId/players/.write",
+    "rules/rooms/$roomId/results/$stageId/.read",
+    "rules/rooms/$roomId/scores/.read",
+    "rules/rooms/$roomId/scores/.write",
+    "rules/rooms/$roomId/ticketPresence/$stageId/.read",
+  ]);
+});
+
 run("player master and self stats writes are explicitly scoped", () => {
   assert.match(roomRules.playerStats.$uid[".write"], /auth\.uid === \$uid/);
   assert.match(rules.players.$uid[".read"], /auth\.uid === \$uid/);
@@ -57,6 +122,8 @@ run("player master and self stats writes are explicitly scoped", () => {
   assert.match(rules.players.$uid[".write"], /stageSkillHistory/);
   assert.match(rules.players.$uid[".validate"], /currentSkill/);
   assert.strictEqual(rules.players.$uid.$other[".validate"], false);
+  assert.match(roomRules.players.$uid.profileId[".validate"], /p_/);
+  assert.match(roomRules.players.$uid.name[".validate"], /pendingName/);
 });
 
 run("completed game history is split into public summaries and scoped details", () => {

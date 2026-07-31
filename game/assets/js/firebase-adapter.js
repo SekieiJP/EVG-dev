@@ -2,7 +2,18 @@
   const MOCK_DB_KEY = "evg.firebase.mock.db.v1";
   const AUTH_KEY = "evg.firebase.auth.v1";
   const CHANNEL_NAME = "evg.firebase.mock.channel.v1";
-  const FIREBASE_SCHEMA_VERSION = "firebase-rtdb-v3-skill-history";
+  const PublicProjection = root.EVGPublicProjection || (
+    typeof require === "function" ? require("./public-projection") : null
+  );
+  const FIREBASE_SCHEMA_VERSION = "firebase-rtdb-v4-public-projection";
+  const PUBLIC_PROJECTION_KEYS = [
+    "publicConfig",
+    "publicPlayers",
+    "publicTicketPresence",
+    "publicResults",
+    "publicScores",
+    "publicProfileOwners",
+  ];
 
   function createFirebaseAdapter(options) {
     return new FirebaseAdapter(options || {});
@@ -146,7 +157,10 @@
       };
       const emit = () => {
         if (!initializedBasePaths.has("public") || !nodes.public) return;
-        callback(roomFromFirebaseNodes(nodes, this.engine));
+        callback(roomFromFirebaseNodes(nodes, this.engine, {
+          role: this.getRole(),
+          uid: this.auth && this.auth.uid || "",
+        }));
       };
       const attach = (path) => {
         const unsubscribe = this.sdk.onValue(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), (snapshot) => {
@@ -531,7 +545,9 @@
           );
           nextRoom.archive = archiveResult.archive || nextRoom.archive;
         }
-        return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload).room });
+        return Object.assign({}, result, {
+          room: this.publicRoom(nextRoom, Object.assign({}, payload, { role: "host" })).room,
+        });
       }
 
       const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom, this.serverNowIso());
@@ -560,7 +576,9 @@
         );
         nextRoom.archive = archiveResult.archive || nextRoom.archive;
       }
-      return Object.assign({}, result, { room: this.publicRoom(nextRoom, payload).room });
+      return Object.assign({}, result, {
+        room: this.publicRoom(nextRoom, Object.assign({}, payload, { role: "host" })).room,
+      });
     }
 
     async postRestPlayer(path, payload) {
@@ -794,7 +812,10 @@
     readMockRoom() {
       const db = loadJson(MOCK_DB_KEY, {});
       const entry = db.rooms && db.rooms[this.roomId];
-      return roomFromFirebaseNodes(entry, this.engine);
+      return roomFromFirebaseNodes(entry, this.engine, {
+        role: this.getRole(),
+        uid: this.auth && this.auth.uid || this.getUuid() || "",
+      });
     }
 
     writeMockRoom(room) {
@@ -826,7 +847,10 @@
         mergeNodes(base, allResults);
       } else {
         const stageId = currentStageIdFromNodes(base);
-        if (!stageId) return roomFromFirebaseNodes(base, this.engine);
+        if (!stageId) return roomFromFirebaseNodes(base, this.engine, {
+          role: this.getRole(),
+          uid: this.auth.uid,
+        });
         const stage = await this.readRestNodes(firebaseStageSubscriptionPaths(
           this.getRole(),
           this.auth.uid,
@@ -835,7 +859,10 @@
         ));
         mergeNodes(base, stage);
       }
-      return roomFromFirebaseNodes(base, this.engine);
+      return roomFromFirebaseNodes(base, this.engine, {
+        role: this.getRole(),
+        uid: this.auth.uid,
+      });
     }
 
     async readGameConfigs() {
@@ -1079,6 +1106,9 @@
       room.roomId = this.roomId;
       const nodes = roomToFirebaseNodes(room);
       const previousNodes = options.previousRoom ? roomToFirebaseNodes(options.previousRoom) : null;
+      const projectionWrites = publicProjectionChildDiffs(previousNodes, nodes, {
+        removeMissing: Boolean(previousNodes),
+      });
       delete nodes.roles;
       const writes = [];
       const publicNode = nodes.public;
@@ -1092,6 +1122,7 @@
       delete nodes.tickets;
       delete nodes.ticketPresence;
       delete nodes.results;
+      PUBLIC_PROJECTION_KEYS.forEach((key) => delete nodes[key]);
       HISTORY_PARENT_KEYS.forEach((key) => delete nodes[key]);
       if (options.clearVolatile && options.previousRoom) {
         volatileStageIds(options.previousRoom).forEach((stageId) => {
@@ -1103,6 +1134,7 @@
       Object.keys(nodes).forEach((key) => {
         writes.push([key, emptyObjectToNull(nodes[key])]);
       });
+      projectionWrites.forEach((entry) => writes.push(entry));
       appendCollectionChildDiff(writes, "players", previousNodes && previousNodes.players, playerNodes, {
         removeMissing: Boolean(previousNodes),
         leafKeys: ["name", "connected", "joinedAt", "lastSeenAt", "pendingName"],
@@ -1226,7 +1258,7 @@
         nextRoom.operations.unshift({
           at: nextRoom.updatedAt,
           actor: "host",
-          action: "firebase-backfill-skill-history",
+          action: "firebase-backfill-public-projection",
         });
         nextRoom.operations = nextRoom.operations.slice(0, 100);
         const nodes = roomToFirebaseNodes(nextRoom);
@@ -1235,6 +1267,9 @@
           [`rooms/${this.roomId}/meta`]: nodes.meta,
           [`rooms/${this.roomId}/operations`]: emptyObjectToNull(nodes.operations),
         };
+        publicProjectionChildDiffs(null, nodes, { removeMissing: false }).forEach(([childPath, value]) => {
+          updates[`rooms/${this.roomId}/${childPath}`] = value;
+        });
         const historyUpdates = historyChildUpdates(nextRoom, {
           gameIds: historyGameIds(nextRoom),
           includeHistoryPlayers: true,
@@ -1243,6 +1278,7 @@
           updates[`rooms/${this.roomId}/${childPath}`] = historyUpdates[childPath];
         });
         (nextRoom.players || []).forEach((player) => {
+          updates[`rooms/${this.roomId}/players/${player.uuid}/profileId`] = publicProfileId(player.uuid);
           updates[`rooms/${this.roomId}/playerStats/${player.uuid}`] = nodes.playerStats[player.uuid];
           const master = rootPlayers[player.uuid];
           const masterHistory = normalizeSkillHistory(
@@ -1319,9 +1355,13 @@
 
     async writeHostSideEffects(path, currentRoom, nextRoom) {
       const updates = {};
+      const currentNodes = roomToFirebaseNodes(currentRoom);
       const nodes = roomToFirebaseNodes(nextRoom);
       updates["meta"] = nodes.meta;
       updates["operations"] = nodes.operations;
+      publicProjectionChildDiffs(currentNodes, nodes, { removeMissing: true }).forEach(([childPath, value]) => {
+        updates[childPath] = value;
+      });
       if (path === "/api/host/commit-result") {
         const stage = this.engine.getCurrentStage(currentRoom);
         const stageId = stage && stage.stageId;
@@ -1364,7 +1404,14 @@
 
   function roomToFirebaseNodes(room) {
     const stage = room.config && room.config.stages ? room.config.stages[room.currentStageIndex || 0] : null;
-    return {
+    if (!PublicProjection) throw new Error("EVGPublicProjection is required before firebase-adapter.js");
+    const projection = PublicProjection.buildPublicProjection(room);
+    const publicHistory = PublicProjection.scrubPublicValue({
+      completedGameSummaries: keyBy(completedGameSummaries(room.completedGames || []), "gameId", (summary) => summary),
+      completedGamePublicDetails: keyBy(room.completedGames || [], "gameId", completedGamePublicDetailNode),
+      historyPlayers: keyBy(historyPlayers(room), "profileId", (player) => player),
+    }, room);
+    return Object.assign({
       meta: {
         roomId: room.roomId || "",
         title: room.config && room.config.gameMeta ? room.config.gameMeta.title : "エレベーターゲーム",
@@ -1381,11 +1428,11 @@
       tickets: room.tickets || {},
       ticketPresence: ticketPresence(room, stage && stage.stageId),
       results: room.stageResults || {},
-      completedGameSummaries: keyBy(completedGameSummaries(room.completedGames || []), "gameId", (summary) => summary),
-      completedGamePublicDetails: keyBy(room.completedGames || [], "gameId", completedGamePublicDetailNode),
+      completedGameSummaries: publicHistory.completedGameSummaries,
+      completedGamePublicDetails: publicHistory.completedGamePublicDetails,
       completedGameDetails: keyBy(room.completedGames || [], "gameId", completedGameDetailNode),
       completedGamePlayerDetails: completedGamePlayerDetails(room.completedGames || []),
-      historyPlayers: keyBy(historyPlayers(room), "profileId", (player) => player),
+      historyPlayers: publicHistory.historyPlayers,
       scores: Object.keys(room.scores || {}).reduce((acc, uuid) => {
         acc[uuid] = { total: room.scores[uuid], updatedAt: room.updatedAt || nowIso() };
         return acc;
@@ -1403,43 +1450,39 @@
         seMuted: room.seMuted !== undefined ? Boolean(room.seMuted) : Boolean(room.muted),
       },
       archive: room.archive || null,
-    };
+    }, projection);
   }
 
-  function roomFromFirebaseNodes(nodes, engine) {
+  function roomFromFirebaseNodes(nodes, engine, options = {}) {
     if (!nodes) return null;
+    const role = options.role || "host";
+    const selfUid = String(options.uid || "");
     if (nodes.snapshot && !nodes.public && !nodes.players) return normalizeRoomShape(nodes.snapshot, engine);
     if (isLegacyRoomNodes(nodes)) {
       return normalizeRoomShape(nodes, engine);
     }
-    const fallback = engine.createInitialRoom(nodes.config || engine.DEFAULT_CONFIG);
+    const selectedConfig = role === "host"
+      ? (nodes.config || nodes.publicConfig)
+      : (nodes.publicConfig || null);
+    const fallback = engine.createInitialRoom(selectedConfig || engine.DEFAULT_CONFIG);
     const status = nodes.public || {};
-    const players = Object.keys(nodes.players || {}).map((uuid) => {
-      const player = nodes.players[uuid] || {};
-      const stats = nodes.playerStats && nodes.playerStats[uuid] ? nodes.playerStats[uuid] : {};
-      return {
-        uuid,
-        name: player.name || uuid,
-        connected: player.connected !== false,
-        joinedAt: player.joinedAt || fallback.createdAt,
-        lastSeenAt: player.lastSeenAt || "",
-        pendingName: player.pendingName || null,
-        skill: Number(stats.currentSkill || 0),
-        stageSkillHistory: storedArray(stats.stageSkillHistoryJson, stats.stageSkillHistory).map(Number).filter(Number.isFinite),
-        appliedSkillStageIds: storedArray(stats.appliedSkillStageIdsJson, stats.appliedSkillStageIds).map(String),
-      };
-    });
-    const scores = Object.keys(nodes.scores || {}).reduce((acc, uuid) => {
-      const value = nodes.scores[uuid];
-      acc[uuid] = typeof value === "number" ? value : Number(value && value.total || 0);
-      return acc;
-    }, {});
+    const players = role === "host"
+      ? privatePlayersFromFirebase(nodes, fallback)
+      : publicPlayersFromFirebase(nodes, fallback, role === "player" ? selfUid : "");
+    const scores = role === "host"
+      ? privateScoresFromFirebase(nodes.scores)
+      : publicScoresFromFirebase(nodes.publicScores, role === "player" ? selfUid : "", nodes.scores);
     const settings = nodes.roomSettings || {};
-    const completedGameDetails = normalizeCompletedGames(nodes.completedGameDetails || nodes.completedGames || {});
+    const completedGameDetails = role === "host"
+      ? normalizeCompletedGames(nodes.completedGameDetails || nodes.completedGames || {})
+      : [];
     const completedGameSummariesValue = normalizeCompletedGameSummaries(
       nodes.completedGameSummaries || keyBy(completedGameSummaries(completedGameDetails), "gameId", (summary) => summary)
     );
-    const uid = firstPlayerDetailUid(nodes.completedGamePlayerDetails);
+    const canUsePersonalDetail = role === "player" || role === "history";
+    const uid = canUsePersonalDetail && selfUid && nodes.completedGamePlayerDetails && nodes.completedGamePlayerDetails[selfUid]
+      ? selfUid
+      : "";
     const personalCompletedGames = uid
       ? normalizeCompletedGames(nodes.completedGamePlayerDetails[uid] || {})
       : [];
@@ -1459,25 +1502,36 @@
       firebaseSchemaVersion: nodes.meta && nodes.meta.schemaVersion || "",
       hostUid: firstHostUid(nodes.roles) || (nodes.meta && nodes.meta.hostUid) || "",
       gameId: status.gameId || (nodes.meta && nodes.meta.activeGameId) || fallback.gameId,
-      config: nodes.config || fallback.config,
+      config: selectedConfig || fallback.config,
       phase: status.phase || fallback.phase,
       currentStageIndex: Number(status.currentStageIndex || 0),
       players,
-      tickets: nodes.tickets || {},
-      stageResults: normalizeStageResults(nodes.results || {}),
+      tickets: privateTicketsForRole(nodes.tickets, role, selfUid),
+      stageResults: role === "host"
+        ? normalizeStageResults(nodes.results || {})
+        : publicStageResultsFromFirebase(
+          nodes.publicResults,
+          nodes.results,
+          role === "player" ? selfUid : "",
+          nodes.publicConfig
+        ),
       scores,
       completedGames,
       completedGameSummaries: completedGameSummariesValue,
       historyPlayers: historyPlayersValue,
-      operations: Object.values(nodes.operations || {}).sort((a, b) => String(b.at || "").localeCompare(String(a.at || ""))),
+      operations: role === "host"
+        ? Object.values(nodes.operations || {}).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))
+        : [],
       countdownEndsAt: status.countdownEndsAt || null,
       tallyingEndsAt: status.tallyingEndsAt || null,
       animationStartedAt: status.animationStartedAt || null,
       animationSkippedAt: status.animationSkippedAt || null,
       revealEndsAt: status.revealEndsAt || null,
       roomVersion: Number(status.roomVersion || 0),
-      ticketPresence: nodes.ticketPresence || {},
-      archive: nodes.archive || null,
+      ticketPresence: role === "screen"
+        ? publicPresenceFromFirebase(nodes.publicTicketPresence)
+        : privatePresenceForRole(nodes.ticketPresence, role, selfUid),
+      archive: role === "host" ? nodes.archive || null : null,
       countdownSeconds: settings.countdownSeconds !== undefined
         ? Number(settings.countdownSeconds)
         : fallback.countdownSeconds,
@@ -1490,6 +1544,280 @@
       createdAt: nodes.meta && nodes.meta.createdAt || fallback.createdAt,
       updatedAt: nodes.meta && nodes.meta.updatedAt || fallback.updatedAt,
     }, engine);
+  }
+
+  function privatePlayersFromFirebase(nodes, fallback) {
+    return Object.keys(nodes.players || {}).map((uuid) => {
+      const player = nodes.players[uuid] || {};
+      const stats = nodes.playerStats && nodes.playerStats[uuid] ? nodes.playerStats[uuid] : {};
+      return {
+        uuid,
+        profileId: PublicProjection.publicProfileId(uuid),
+        name: player.name || uuid,
+        connected: player.connected !== false,
+        joinedAt: player.joinedAt || fallback.createdAt,
+        lastSeenAt: player.lastSeenAt || "",
+        pendingName: player.pendingName || null,
+        skill: Number(stats.currentSkill || 0),
+        stageSkillHistory: storedArray(stats.stageSkillHistoryJson, stats.stageSkillHistory).map(Number).filter(Number.isFinite),
+        appliedSkillStageIds: storedArray(stats.appliedSkillStageIdsJson, stats.appliedSkillStageIds).map(String),
+      };
+    });
+  }
+
+  function publicPlayersFromFirebase(nodes, fallback, selfUid) {
+    const selfProfileId = selfUid ? PublicProjection.publicProfileId(selfUid) : "";
+    const selfPlayer = selfUid && nodes.players && nodes.players[selfUid] || null;
+    const selfStats = selfUid && nodes.playerStats && nodes.playerStats[selfUid] || {};
+    const players = Object.keys(nodes.publicPlayers || {}).map((profileId, index) => {
+      const publicPlayer = nodes.publicPlayers[profileId] || {};
+      const isSelf = Boolean(selfUid && profileId === selfProfileId && selfPlayer);
+      return {
+        uuid: isSelf ? selfUid : profileId,
+        profileId,
+        name: isSelf ? selfPlayer.name || publicPlayer.name || profileId : publicPlayer.name || profileId,
+        connected: publicPlayer.connected !== false,
+        joinedAt: isSelf ? selfPlayer.joinedAt || fallback.createdAt : fallback.createdAt,
+        lastSeenAt: isSelf ? selfPlayer.lastSeenAt || "" : "",
+        pendingName: isSelf ? selfPlayer.pendingName || null : null,
+        skill: isSelf ? Number(selfStats.currentSkill || 0) : 0,
+        stageSkillHistory: isSelf
+          ? storedArray(selfStats.stageSkillHistoryJson, selfStats.stageSkillHistory).map(Number).filter(Number.isFinite)
+          : [],
+        appliedSkillStageIds: isSelf
+          ? storedArray(selfStats.appliedSkillStageIdsJson, selfStats.appliedSkillStageIds).map(String)
+          : [],
+        order: Number.isFinite(Number(publicPlayer.order)) ? Number(publicPlayer.order) : index,
+      };
+    }).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name, "ja"));
+    if (selfPlayer && !players.some((player) => player.uuid === selfUid)) {
+      players.push({
+        uuid: selfUid,
+        profileId: selfProfileId,
+        name: selfPlayer.name || selfUid,
+        connected: selfPlayer.connected !== false,
+        joinedAt: selfPlayer.joinedAt || fallback.createdAt,
+        lastSeenAt: selfPlayer.lastSeenAt || "",
+        pendingName: selfPlayer.pendingName || null,
+        skill: Number(selfStats.currentSkill || 0),
+        stageSkillHistory: storedArray(selfStats.stageSkillHistoryJson, selfStats.stageSkillHistory).map(Number).filter(Number.isFinite),
+        appliedSkillStageIds: storedArray(selfStats.appliedSkillStageIdsJson, selfStats.appliedSkillStageIds).map(String),
+        order: players.length,
+      });
+    }
+    return players;
+  }
+
+  function privateScoresFromFirebase(scoresNode) {
+    return Object.keys(scoresNode || {}).reduce((acc, uuid) => {
+      const value = scoresNode[uuid];
+      acc[uuid] = typeof value === "number" ? value : Number(value && value.total || 0);
+      return acc;
+    }, {});
+  }
+
+  function privateTicketsForRole(ticketsNode, role, selfUid) {
+    if (role === "host") return ticketsNode || {};
+    if (role !== "player" || !selfUid) return {};
+    return Object.keys(ticketsNode || {}).reduce((stages, stageId) => {
+      if (ticketsNode[stageId] && ticketsNode[stageId][selfUid]) {
+        stages[stageId] = { [selfUid]: ticketsNode[stageId][selfUid] };
+      }
+      return stages;
+    }, {});
+  }
+
+  function privatePresenceForRole(presenceNode, role, selfUid) {
+    if (role === "host") return presenceNode || {};
+    if (role !== "player" || !selfUid) return {};
+    return Object.keys(presenceNode || {}).reduce((stages, stageId) => {
+      if (presenceNode[stageId] && presenceNode[stageId][selfUid]) {
+        stages[stageId] = { [selfUid]: presenceNode[stageId][selfUid] };
+      }
+      return stages;
+    }, {});
+  }
+
+  function publicScoresFromFirebase(scoresNode, selfUid, privateScores) {
+    const selfProfileId = selfUid ? PublicProjection.publicProfileId(selfUid) : "";
+    const scores = Object.keys(scoresNode || {}).reduce((acc, profileId) => {
+      const value = scoresNode[profileId];
+      const key = selfUid && profileId === selfProfileId ? selfUid : profileId;
+      acc[key] = typeof value === "number" ? value : Number(value && value.total || 0);
+      return acc;
+    }, {});
+    if (selfUid && privateScores && privateScores[selfUid] !== undefined) {
+      const value = privateScores[selfUid];
+      scores[selfUid] = typeof value === "number" ? value : Number(value && value.total || 0);
+    }
+    return scores;
+  }
+
+  function publicPresenceFromFirebase(presenceNode) {
+    return Object.keys(presenceNode || {}).reduce((stages, stageId) => {
+      stages[stageId] = Object.keys(presenceNode[stageId] || {}).reduce((entries, profileId) => {
+        const item = presenceNode[stageId][profileId] || {};
+        entries[profileId] = {
+          profileId,
+          status: item.status || "none",
+        };
+        return entries;
+      }, {});
+      return stages;
+    }, {});
+  }
+
+  function publicStageResultsFromFirebase(publicResults, privateResults, selfUid, publicConfig) {
+    const selfProfileId = selfUid ? PublicProjection.publicProfileId(selfUid) : "";
+    const privateNormalized = normalizeStageResults(privateResults || {});
+    const projected = Object.keys(publicResults || {}).reduce((stages, stageId) => {
+      const source = publicResults[stageId] || {};
+      const mapId = (profileId) => selfUid && profileId === selfProfileId ? selfUid : profileId;
+      const players = Object.keys(source.players || {}).reduce((entries, profileId) => {
+        const item = source.players[profileId] || {};
+        const mappedId = mapId(profileId);
+        entries[mappedId] = {
+          uuid: mappedId,
+          profileId,
+          name: item.name || profileId,
+          order: Number(item.order || 0),
+        };
+        return entries;
+      }, {});
+      const timeline = arrayFromFirebase(source.timeline).map((step) => {
+        const next = Object.assign({}, step);
+        ["boarding", "blocked", "exiting", "passengersBeforeCheck", "passengersAfterCheck", "forcedOff"].forEach((key) => {
+          next[key] = arrayFromFirebase(next[key]).map(mapId);
+        });
+        return next;
+      });
+      const scoreCheckpoints = arrayFromFirebase(source.scoreCheckpoints).map((checkpoint) => {
+        const scores = Object.keys(checkpoint && checkpoint.scores || {}).reduce((entries, profileId) => {
+          const mappedId = mapId(profileId);
+          entries[mappedId] = Object.assign({}, checkpoint.scores[profileId], {
+            profileId,
+            uuid: mappedId,
+          });
+          return entries;
+        }, {});
+        return { floor: Number(checkpoint && checkpoint.floor || 0), scores };
+      });
+      const rankings = arrayFromFirebase(source.rankings).map((row) => {
+        const profileId = row && (row.profileId || row.uuid) || "";
+        return Object.assign({}, row, { profileId, uuid: mapId(profileId) });
+      });
+      stages[stageId] = {
+        gameId: source.gameId || "",
+        stageId: source.stageId || stageId,
+        stageName: source.stageName || stageId,
+        calculatedAt: source.calculatedAt || "",
+        floorCount: Number(source.floorCount || timeline.length || 1),
+        players,
+        timeline,
+        scoreCheckpoints,
+        rankings,
+        publicProjection: true,
+      };
+      return stages;
+    }, {});
+    Object.keys(privateNormalized).forEach((stageId) => {
+      const privateResult = privateNormalized[stageId] || {};
+      const selfResult = selfUid && privateResult.players && privateResult.players[selfUid]
+        ? privatePlayerResultForSelf(privateResult.players[selfUid], selfUid, publicConfig, stageId)
+        : null;
+      if (!projected[stageId] && selfResult) {
+        projected[stageId] = {
+          stageId: privateResult.stageId || stageId,
+          stageName: privateResult.stageName || stageId,
+          calculatedAt: privateResult.calculatedAt || "",
+          players: { [selfUid]: selfResult },
+          timeline: [],
+          scoreCheckpoints: [],
+          rankings: [],
+        };
+      } else if (projected[stageId] && selfResult) {
+        projected[stageId].players[selfUid] = selfResult;
+      }
+    });
+    return projected;
+  }
+
+  function privatePlayerResultForSelf(source, selfUid, publicConfig, stageId) {
+    const player = source || {};
+    const predictionFormats = predictionFormatsForStage(publicConfig, stageId);
+    const ticket = player.ticket && typeof player.ticket === "object"
+      ? {
+          uuid: selfUid,
+          boardFloor: Number(player.ticket.boardFloor || 0),
+          exitFloor: Number(player.ticket.exitFloor || 0),
+          predictions: arrayFromFirebase(player.ticket.predictions).map((value, index) => {
+            return publicPredictionIdentity(value, predictionFormats[index], selfUid);
+          }),
+          abstained: Boolean(player.ticket.abstained),
+          submittedAt: String(player.ticket.submittedAt || ""),
+          clientVersion: player.ticket.clientVersion === undefined || player.ticket.clientVersion === null
+            ? null
+            : String(player.ticket.clientVersion),
+        }
+      : null;
+    return {
+      uuid: selfUid,
+      name: String(player.name || "プレイヤー").slice(0, 24),
+      ticket,
+      status: String(player.status || "absent"),
+      invalidReason: String(player.invalidReason || ""),
+      actualRise: Number(player.actualRise || 0),
+      chargedDistance: Number(player.chargedDistance || 0),
+      successPoint: Number(player.successPoint || 0),
+      eventBonus: Number(player.eventBonus || 0),
+      penalty: Number(player.penalty || 0),
+      score: Number(player.score || 0),
+      forcedOff: Boolean(player.forcedOff),
+      boardedAt: player.boardedAt === null || player.boardedAt === undefined ? null : Number(player.boardedAt),
+      exitedAt: player.exitedAt === null || player.exitedAt === undefined ? null : Number(player.exitedAt),
+      successfulIntervals: arrayFromFirebase(player.successfulIntervals).map((interval) => ({
+        from: Number(interval && interval.from || 0),
+        to: Number(interval && interval.to || 0),
+        sameFloor: Boolean(interval && interval.sameFloor),
+        floorUnit: Boolean(interval && interval.floorUnit),
+        occupancy: Number(interval && interval.occupancy || 0),
+      })),
+      predictionBreakdown: arrayFromFirebase(player.predictionBreakdown).map((item, index) => {
+        const format = item && item.answerFormat || predictionFormats[index] || "";
+        return {
+          question: String(item && item.question || "").slice(0, 500),
+          answerFormat: String(format),
+          answer: publicPredictionIdentity(item && item.answer, format, selfUid),
+          correctAnswer: publicPredictionIdentity(item && item.correctAnswer, format, selfUid),
+          matched: Boolean(item && item.matched),
+          noAnswer: Boolean(item && item.noAnswer),
+          score: Number(item && item.score || 0),
+        };
+      }),
+      eventBreakdown: arrayFromFirebase(player.eventBreakdown).map((item) => ({
+        label: String(item && item.label || "").slice(0, 80),
+        value: String(item && item.value || "").slice(0, 200),
+      })),
+      stageSkill: player.stageSkill === null || player.stageSkill === undefined ? null : Number(player.stageSkill),
+      skillBefore: player.skillBefore === null || player.skillBefore === undefined ? null : Number(player.skillBefore),
+      skillAfter: player.skillAfter === null || player.skillAfter === undefined ? null : Number(player.skillAfter),
+      skillDelta: player.skillDelta === null || player.skillDelta === undefined ? null : Number(player.skillDelta),
+    };
+  }
+
+  function predictionFormatsForStage(config, stageId) {
+    const stages = arrayFromFirebase(config && config.stages);
+    const stage = stages.find((item) => String(item && item.stageId || "") === String(stageId || ""));
+    return arrayFromFirebase(stage && stage.events)
+      .filter((event) => event && event.type === "E1_prediction")
+      .map((event) => String(event.answerFormat || ""));
+  }
+
+  function publicPredictionIdentity(value, answerFormat, selfUid) {
+    if (!["player", "player_uuid"].includes(String(answerFormat || ""))) return value;
+    const identity = String(value === undefined || value === null ? "" : value);
+    if (!identity || identity === selfUid || /^p_[a-z0-9]+$/.test(identity)) return identity;
+    return publicProfileId(identity);
   }
 
   function isPlayerWritePath(path) {
@@ -1507,18 +1835,18 @@
   }
 
   function firebaseBaseSubscriptionPaths(role, uid, hostAllowed = true) {
-    const common = ["meta", "public", "config", "roomSettings"];
+    const safeCommon = ["meta", "public", "roomSettings"];
     if (role === "host") {
-      if (!hostAllowed) return common.concat([`roles/hosts/${uid}`]);
-      return common.concat([`roles/hosts/${uid}`, "players", "playerStats", "scores", "completedGameSummaries", "historyPlayers", "operations", "archive"]);
+      if (!hostAllowed) return safeCommon.concat(["publicConfig", `roles/hosts/${uid}`]);
+      return safeCommon.concat(["config", `roles/hosts/${uid}`, "players", "playerStats", "scores", "completedGameSummaries", "historyPlayers", "operations", "archive"]);
     }
     if (role === "screen") {
-      return common.concat(["players", "scores"]);
+      return safeCommon.concat(["publicConfig", "publicPlayers", "publicScores"]);
     }
     if (role === "history") {
-      return common.concat(["players", `playerStats/${uid}`, "scores", "completedGameSummaries", "historyPlayers", `completedGamePlayerDetails/${uid}`]);
+      return ["meta", "public", "completedGameSummaries", "historyPlayers", `completedGamePlayerDetails/${uid}`];
     }
-    return common.concat(["players", `players/${uid}`, `playerStats/${uid}`, `scores/${uid}`, "completedGameSummaries", `completedGamePlayerDetails/${uid}`]);
+    return safeCommon.concat(["publicConfig", "publicPlayers", "publicScores", `players/${uid}`, `playerStats/${uid}`, `scores/${uid}`, "completedGameSummaries", `completedGamePlayerDetails/${uid}`]);
   }
 
   function firebaseStageSubscriptionPaths(role, uid, stageId, hostAllowed = true) {
@@ -1527,10 +1855,10 @@
       return [`ticketPresence/${stageId}`, `tickets/${stageId}`, `results/${stageId}`];
     }
     if (role === "screen") {
-      return [`ticketPresence/${stageId}`, `results/${stageId}`];
+      return [`publicTicketPresence/${stageId}`, `publicResults/${stageId}`];
     }
     if (role === "player") {
-      return [`ticketPresence/${stageId}/${uid}`, `tickets/${stageId}/${uid}`, `results/${stageId}/players/${uid}`, `results/${stageId}/rankings`];
+      return [`ticketPresence/${stageId}/${uid}`, `tickets/${stageId}/${uid}`, `results/${stageId}/players/${uid}`, `publicResults/${stageId}`];
     }
     return [];
   }
@@ -1540,14 +1868,14 @@
   }
 
   function restMutationBaseReadPaths(role, uid, hostAllowed, includeCompletedGames) {
-    const common = ["meta", "public", "config", "roomSettings"];
+    const safeCommon = ["meta", "public", "roomSettings"];
     if (role === "host") {
-      if (!hostAllowed) return common.concat([`roles/hosts/${uid}`]);
-      const paths = common.concat([`roles/hosts/${uid}`, "players", "playerStats", "scores", "historyPlayers", "operations", "archive"]);
+      if (!hostAllowed) return safeCommon.concat(["publicConfig", `roles/hosts/${uid}`]);
+      const paths = safeCommon.concat(["config", `roles/hosts/${uid}`, "players", "playerStats", "scores", "historyPlayers", "operations", "archive"]);
       if (includeCompletedGames) paths.push("completedGameSummaries", "completedGameDetails");
       return paths;
     }
-    return common.concat(["players", `playerStats/${uid}`, `scores/${uid}`]);
+    return safeCommon.concat(["publicConfig", "publicPlayers", "publicScores", `players/${uid}`, `playerStats/${uid}`, `scores/${uid}`]);
   }
 
   const HISTORY_PARENT_KEYS = [
@@ -1693,6 +2021,9 @@
     updates[roomPath("public")] = nodes.public;
     updates[roomPath("meta")] = nodes.meta;
     updates[roomPath("operations")] = emptyObjectToNull(nodes.operations);
+    publicProjectionChildDiffs(currentNodes, nodes, { removeMissing: true }).forEach(([childPath, value]) => {
+      updates[roomPath(childPath)] = value;
+    });
 
     if (path === "/api/host/commit-result") {
       const stage = engine.getCurrentStage(currentRoom);
@@ -2077,15 +2408,7 @@
   }
 
   function publicProfileId(uid) {
-    const value = String(uid || "");
-    let first = 2166136261;
-    let second = 3339675911;
-    for (let index = 0; index < value.length; index += 1) {
-      const code = value.charCodeAt(index);
-      first = Math.imul(first ^ code, 16777619);
-      second = Math.imul(second ^ (code + index + 97), 2246822519);
-    }
-    return `p_${(first >>> 0).toString(36)}${(second >>> 0).toString(36)}`;
+    return PublicProjection.publicProfileId(uid);
   }
 
   function queuedArchiveState(roomId, gameId, archiveId, pendingGameIds) {
@@ -2387,7 +2710,8 @@
   function currentStageIdFromNodes(nodes) {
     if (nodes.public && nodes.public.currentStageId) return nodes.public.currentStageId;
     const index = nodes.public ? Number(nodes.public.currentStageIndex || 0) : 0;
-    const stages = nodes.config && nodes.config.stages ? nodes.config.stages : [];
+    const config = nodes.config || nodes.publicConfig || {};
+    const stages = config.stages || [];
     const stage = stages[index] || null;
     return stage && stage.stageId || "";
   }
@@ -2439,6 +2763,34 @@
   function firebaseValuesEqual(left, right) {
     if (left === right) return true;
     return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function publicProjectionChildDiffs(currentNodes, nextNodes, options = {}) {
+    const current = currentNodes || {};
+    const next = nextNodes || {};
+    const writes = [];
+    if (!firebaseValuesEqual(current.publicConfig, next.publicConfig)) {
+      writes.push(["publicConfig", emptyObjectToNull(next.publicConfig)]);
+    }
+    ["publicPlayers", "publicResults", "publicScores", "publicProfileOwners"].forEach((key) => {
+      appendCollectionChildDiff(writes, key, current[key], next[key], {
+        removeMissing: Boolean(options.removeMissing),
+      });
+    });
+    const stageIds = new Set(Object.keys(next.publicTicketPresence || {}));
+    if (options.removeMissing) {
+      Object.keys(current.publicTicketPresence || {}).forEach((stageId) => stageIds.add(stageId));
+    }
+    stageIds.forEach((stageId) => {
+      appendCollectionChildDiff(
+        writes,
+        `publicTicketPresence/${stageId}`,
+        current.publicTicketPresence && current.publicTicketPresence[stageId],
+        next.publicTicketPresence && next.publicTicketPresence[stageId],
+        { removeMissing: Boolean(options.removeMissing) }
+      );
+    });
+    return writes;
   }
 
   function appendCollectionChildDiff(target, prefix, currentCollection, nextCollection, options = {}) {
@@ -2510,6 +2862,11 @@
     if (path.indexOf("/api/player/") === 0 && nodes.players && nodes.players[uid]) {
       updates[`players/${uid}`] = nodes.players[uid];
       if (nodes.playerStats && nodes.playerStats[uid]) updates[`playerStats/${uid}`] = nodes.playerStats[uid];
+      const profileId = PublicProjection.publicProfileId(uid);
+      if (nodes.publicPlayers && nodes.publicPlayers[profileId]) {
+        updates[`publicPlayers/${profileId}`] = nodes.publicPlayers[profileId];
+        updates[`publicProfileOwners/${profileId}`] = uid;
+      }
     }
     if (path === "/api/ticket/submit" || path === "/api/ticket/abstain") {
       const stage = room.config && room.config.stages ? room.config.stages[room.currentStageIndex || 0] : null;
@@ -2519,6 +2876,15 @@
       }
       if (stageId && nodes.ticketPresence && nodes.ticketPresence[stageId] && nodes.ticketPresence[stageId][uid]) {
         updates[`ticketPresence/${stageId}/${uid}`] = nodes.ticketPresence[stageId][uid];
+      }
+      const profileId = PublicProjection.publicProfileId(uid);
+      if (
+        stageId &&
+        nodes.publicTicketPresence &&
+        nodes.publicTicketPresence[stageId] &&
+        nodes.publicTicketPresence[stageId][profileId]
+      ) {
+        updates[`publicTicketPresence/${stageId}/${profileId}`] = nodes.publicTicketPresence[stageId][profileId];
       }
     }
     return updates;
@@ -2622,6 +2988,7 @@
 
   function publicPlayerNode(player) {
     return {
+      profileId: publicProfileId(player.uuid),
       name: player.name,
       connected: player.connected !== false,
       joinedAt: player.joinedAt || "",
@@ -2683,21 +3050,19 @@
   }
 
   function sanitizeRoom(room, role, uuid, engine) {
-    const copy = engine.deepClone(room);
-    if (role !== "screen" && role !== "host") {
-      copy.tickets = {};
-      Object.keys(room.tickets || {}).forEach((stageId) => {
-        copy.tickets[stageId] = {};
-        if (uuid && room.tickets[stageId] && room.tickets[stageId][uuid]) copy.tickets[stageId][uuid] = room.tickets[stageId][uuid];
-      });
+    if (role === "host") return engine.deepClone(room);
+    const nodes = roomToFirebaseNodes(room);
+    if (uuid) {
+      nodes.completedGamePlayerDetails = nodes.completedGamePlayerDetails && nodes.completedGamePlayerDetails[uuid]
+        ? { [uuid]: nodes.completedGamePlayerDetails[uuid] }
+        : {};
+    } else {
+      nodes.completedGamePlayerDetails = {};
     }
-    if (role === "player" && uuid) {
-      copy.players = (copy.players || []).map((player) => {
-        if (player.uuid === uuid) return player;
-        return { uuid: player.uuid, name: player.name, connected: player.connected !== false };
-      });
-    }
-    return copy;
+    return roomFromFirebaseNodes(nodes, engine, {
+      role: role === "screen" ? "screen" : "player",
+      uid: uuid || "",
+    });
   }
 
   function normalizeRoomShape(room, engine) {
@@ -2734,7 +3099,10 @@
   }
 
   function publicPlayers(players) {
-    return (players || []).map((player) => ({ uuid: player.uuid, name: player.name }));
+    return (players || []).map((player) => {
+      const profileId = PublicProjection.publicProfileId(player.uuid);
+      return { uuid: profileId, profileId, name: player.name };
+    });
   }
 
   function playerParticipatedInGame(game, uuid) {

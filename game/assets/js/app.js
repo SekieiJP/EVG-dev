@@ -1199,10 +1199,12 @@
   }
 
   function renderFloorEvent(floor, step, result, tickets, danger, currentFloor) {
-    const blocked = Object.values(tickets)
-      .filter((ticket) => !ticket.abstained && ticket.boardFloor === floor)
-      .map((ticket) => ticket.uuid)
-      .filter((uuid) => ["invalid", "not_boarded"].includes(result.players[uuid] ? result.players[uuid].status : ""));
+    const blocked = step && Array.isArray(step.blocked)
+      ? step.blocked
+      : Object.values(tickets)
+        .filter((ticket) => !ticket.abstained && ticket.boardFloor === floor)
+        .map((ticket) => ticket.uuid)
+        .filter((uuid) => ["invalid", "not_boarded"].includes(result.players[uuid] ? result.players[uuid].status : ""));
     const forced = step ? step.forcedOff : [];
     const boarding = step ? step.boarding.filter((uuid) => !forced.includes(uuid)) : [];
     const exiting = step ? step.exiting : [];
@@ -1317,16 +1319,19 @@
     if (!stage || !result || Number(stage.params.N || 0) < REVEAL_SKIP_EMPTY_MIN_FLOORS) return false;
     const step = (result.timeline || []).find((item) => Number(item.floor) === floor);
     if (hasRevealMovement(step, result)) return false;
+    if (step && step.scoreChanged) return false;
     return !hasRevealBonusAtFloor(stage, result, floor);
   }
 
   function hasRevealMovement(step, result) {
     if (!step) return false;
     const stageTickets = result.stageId && state.room && state.room.tickets ? state.room.tickets[result.stageId] || {} : {};
-    const blocked = Object.values(stageTickets)
-      .filter((ticket) => !ticket.abstained && Number(ticket.boardFloor) === Number(step.floor))
-      .map((ticket) => ticket.uuid)
-      .filter((uuid) => ["invalid", "not_boarded"].includes(result.players[uuid] ? result.players[uuid].status : ""));
+    const blocked = Array.isArray(step.blocked)
+      ? step.blocked
+      : Object.values(stageTickets)
+        .filter((ticket) => !ticket.abstained && Number(ticket.boardFloor) === Number(step.floor))
+        .map((ticket) => ticket.uuid)
+        .filter((uuid) => ["invalid", "not_boarded"].includes(result.players[uuid] ? result.players[uuid].status : ""));
     return Boolean(
       (step.boarding || []).length ||
       (step.exiting || []).length ||
@@ -1387,6 +1392,24 @@
 
   function buildRevealScoreRows(stage, result, currentFloor) {
     const playerOrder = new Map((state.room.players || []).map((player, index) => [player.uuid, index]));
+    const projectedCheckpoint = (result.scoreCheckpoints || []).find((checkpoint) => Number(checkpoint.floor) === Number(currentFloor));
+    if (projectedCheckpoint) {
+      return Object.keys(projectedCheckpoint.scores || {}).map((uuid) => {
+        const score = projectedCheckpoint.scores[uuid] || {};
+        const player = result.players && result.players[uuid] || {};
+        return {
+          uuid,
+          name: player.name || uuid,
+          score: Number(score.score || 0),
+          delta: Number(score.delta || 0),
+          reason: score.reason || "変動なし",
+        };
+      }).sort((a, b) => {
+        const orderA = playerOrder.has(a.uuid) ? playerOrder.get(a.uuid) : Number.MAX_SAFE_INTEGER;
+        const orderB = playerOrder.has(b.uuid) ? playerOrder.get(b.uuid) : Number.MAX_SAFE_INTEGER;
+        return orderA - orderB || a.name.localeCompare(b.name, "ja");
+      });
+    }
     return Object.values(result.players)
       .map((playerResult) => calculateRevealScore(stage, result, playerResult, currentFloor))
       .sort((a, b) => {

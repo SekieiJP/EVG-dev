@@ -426,7 +426,7 @@ run("player prediction can target top pre-prediction scorer", () => {
     }),
     players(["A", "B"]),
     {
-      p1: { uuid: "p1", boardFloor: 1, exitFloor: 2, predictions: { 0: "p2" } },
+      p1: { uuid: "p1", boardFloor: 1, exitFloor: 2, predictions: { 0: Engine.publicProfileId("p2") } },
       p2: { uuid: "p2", boardFloor: 1, exitFloor: 10, predictions: { 0: "p2" } },
     }
   );

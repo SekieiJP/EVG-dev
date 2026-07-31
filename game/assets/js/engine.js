@@ -731,7 +731,24 @@
         return numericCorrect >= min && numericCorrect <= max;
       }
     }
+    if (event.answerFormat === "player" || event.answerFormat === "player_uuid") {
+      const normalizedAnswer = String(answer).toLowerCase();
+      const normalizedCorrect = String(correct).toLowerCase();
+      return normalizedAnswer === normalizedCorrect || normalizedAnswer === publicProfileId(correct).toLowerCase();
+    }
     return String(answer).toLowerCase() === String(correct).toLowerCase();
+  }
+
+  function publicProfileId(uid) {
+    const value = String(uid || "");
+    let first = 2166136261;
+    let second = 3339675911;
+    for (let index = 0; index < value.length; index += 1) {
+      const code = value.charCodeAt(index);
+      first = Math.imul(first ^ code, 16777619);
+      second = Math.imul(second ^ (code + index + 97), 2246822519);
+    }
+    return `p_${(first >>> 0).toString(36)}${(second >>> 0).toString(36)}`;
   }
 
   function getPredictionOptions(event) {
@@ -1123,6 +1140,7 @@
     advancePhase,
     updateRoomSettings,
     createUuid,
+    publicProfileId,
     deepClone,
     roundScore,
   };

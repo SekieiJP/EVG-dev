@@ -490,7 +490,22 @@
       Object.keys(stages || {}).forEach((stageId) => Object.keys(stages[stageId] || {}).forEach(add));
     });
     Object.keys(room && room.stageResults || {}).forEach((stageId) => {
-      const result = room.stageResults[stageId] || {};
+      collectStageResultRawIds(room.stageResults[stageId], add);
+    });
+    asArray(room && room.completedGames).forEach((game) => {
+      Object.keys(game && game.scores || {}).forEach(add);
+      asArray(game && game.playerSnapshots).forEach((player) => add(rawPlayerId(player)));
+      asArray(game && game.rankings).forEach((row) => add(row && (row.uuid || row.uid)));
+      Object.keys(game && game.stageResults || {}).forEach((stageId) => {
+        collectStageResultRawIds(game.stageResults[stageId], add);
+      });
+    });
+    asArray(room && room.historyPlayers).forEach((player) => add(player && (player.uuid || player.uid)));
+    return Array.from(ids);
+  }
+
+  function collectStageResultRawIds(stageResult, add) {
+      const result = stageResult || {};
       Object.keys(result.players || {}).forEach((key) => {
         add(key);
         add(result.players[key] && result.players[key].uuid);
@@ -499,8 +514,10 @@
       asArray(result.timeline).forEach((step) => {
         TIMELINE_ID_FIELDS.forEach((key) => asArray(step && step[key]).forEach(add));
       });
-    });
-    return Array.from(ids);
+  }
+
+  function scrubPublicValue(value, room) {
+    return scrubKnownRawIds(value, buildIdentityContext(room || {}));
   }
 
   function profileFor(rawIdentity, identities) {
@@ -592,5 +609,6 @@
     buildPublicStageResult,
     buildScoreCheckpoints,
     buildPublicProjection,
+    scrubPublicValue,
   };
 });
