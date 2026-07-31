@@ -1,6 +1,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const { buildCompatRules } = require("../scripts/build-firebase-rules-compat");
+const { buildCompatRules: buildMembershipCompatRules } = require("../scripts/build-firebase-rules-compat-v5");
 
 const finalRulesDocument = JSON.parse(fs.readFileSync("firebase/database.rules.json", "utf8"));
 const rules = finalRulesDocument.rules;
@@ -63,6 +64,7 @@ run("public writes require version increment and allowed phases", () => {
     [
       "$other",
       "abstainedCount",
+      "activeGenerationId",
       "animationSkippedAt",
       "animationStartedAt",
       "countdownEndsAt",
@@ -132,6 +134,111 @@ run("compatibility Rules are generated from final Rules and reopen only legacy r
     "rules/rooms/$roomId/scores/.write",
     "rules/rooms/$roomId/ticketPresence/$stageId/.read",
   ]);
+});
+
+run("membership compatibility Rules allow legacy shapes only before the v5 marker", () => {
+  const generated = buildMembershipCompatRules(finalRulesDocument);
+  const checkedIn = JSON.parse(fs.readFileSync("firebase/database.rules.compat-v5.json", "utf8"));
+  assert.deepStrictEqual(checkedIn, generated);
+  assert.deepStrictEqual(changedLeafPaths(finalRulesDocument, generated).sort(), [
+    "rules/rooms/$roomId/meta/.validate",
+    "rules/rooms/$roomId/playerStats/$uid/.write",
+    "rules/rooms/$roomId/playerStats/.write",
+    "rules/rooms/$roomId/players/$uid/.validate",
+    "rules/rooms/$roomId/players/$uid/.write",
+    "rules/rooms/$roomId/players/$uid/name/.validate",
+    "rules/rooms/$roomId/players/$uid/pendingName/.validate",
+    "rules/rooms/$roomId/public/.validate",
+    "rules/rooms/$roomId/publicPlayers/$profileId/.validate",
+    "rules/rooms/$roomId/publicPlayers/$profileId/.write",
+    "rules/rooms/$roomId/publicProfileOwners/$profileId/.write",
+    "rules/rooms/$roomId/publicScores/$profileId/.validate",
+    "rules/rooms/$roomId/publicScores/$profileId/.write",
+    "rules/rooms/$roomId/publicTicketPresence/$stageId/$profileId/.validate",
+    "rules/rooms/$roomId/publicTicketPresence/$stageId/$profileId/.write",
+    "rules/rooms/$roomId/publicTicketPresence/$stageId/.write",
+    "rules/rooms/$roomId/scores/$uid/.validate",
+    "rules/rooms/$roomId/scores/$uid/.write",
+    "rules/rooms/$roomId/ticketPresence/$stageId/$uid/.validate",
+    "rules/rooms/$roomId/ticketPresence/$stageId/$uid/.write",
+    "rules/rooms/$roomId/ticketPresence/$stageId/.write",
+    "rules/rooms/$roomId/tickets/$stageId/$uid/.validate",
+    "rules/rooms/$roomId/tickets/$stageId/$uid/.write",
+    "rules/rooms/$roomId/tickets/$stageId/.write",
+  ].sort());
+  changedLeafPaths(finalRulesDocument, generated).forEach((path) => {
+    const segments = path.split("/");
+    let value = generated;
+    segments.forEach((segment) => { value = value[segment]; });
+    assert.match(String(value), /membershipSchemaVersion/);
+  });
+  ["config", "players", "results", "scores"].forEach((key) => {
+    assert.strictEqual(generated.rules.rooms.$roomId[key][".read"], roomRules[key][".read"]);
+  });
+  assert.strictEqual(
+    generated.rules.rooms.$roomId.ticketPresence.$stageId[".read"],
+    roomRules.ticketPresence.$stageId[".read"]
+  );
+});
+
+run("membership generations, per-player CAS and exact name claims are enforced", () => {
+  assert.match(roomRules.meta[".validate"], /membershipSchemaVersion/);
+  assert.match(roomRules.membership[".write"], /roles'\)\.child\('hosts/);
+  assert.match(roomRules.membership[".validate"], /public'\)\.child\('activeGenerationId/);
+  assert.match(roomRules.public[".validate"], /membership'\)\.child\('activeGenerationId/);
+  assert.match(roomRules.public[".validate"], /gameId/);
+
+  const privatePlayer = roomRules.players.$uid;
+  assert.match(privatePlayer[".write"], /newData\.exists\(\)/);
+  assert.match(privatePlayer[".validate"], /profileRevision/);
+  assert.match(privatePlayer[".validate"], /nameClaims/);
+  assert.match(privatePlayer[".validate"], /publicPlayers/);
+  assert.match(privatePlayer[".validate"], /publicScores/);
+  assert.ok(privatePlayer[".validate"].includes(
+    "!data.child('profileRevision').exists() && newData.child('profileRevision').val() === 1"
+  ));
+  assert.doesNotMatch(privatePlayer.name[".validate"], /!data\.parent\(\)\.child\('pendingName'\)\.exists/);
+  assert.match(privatePlayer.name[".validate"], /data\.parent\(\)\.child\('pendingName'\)\.exists/);
+  assert.match(privatePlayer.name[".validate"], /\\x00/);
+  assert.match(privatePlayer.pendingName[".validate"], /\\x00/);
+
+  const claim = roomRules.nameClaims.$generationId.$normalizedName;
+  assert.match(roomRules.nameClaims[".read"], /roles'\)\.child\('hosts/);
+  assert.match(claim[".read"], /ownerUid/);
+  assert.match(claim[".write"], /!newData\.exists\(\)/);
+  assert.match(claim[".write"], /nameClaimKey/);
+  assert.match(claim[".write"], /pendingNameClaimKey/);
+  assert.match(claim[".validate"], /newData\.parent\(\)\.parent\(\)\.parent\(\)\.child\('players'/);
+  assert.match(claim.name[".validate"], /\\x00/);
+  assert.strictEqual(claim.$other[".validate"], false);
+
+  assert.ok(roomRules.membership.activeGenerationId[".validate"].includes(
+    "/^g_[A-Za-z0-9_-]{8,80}$/"
+  ));
+
+  [roomRules.publicPlayers.$profileId, roomRules.publicScores.$profileId].forEach((node) => {
+    assert.match(node[".write"], /newData\.exists\(\)/);
+    assert.ok(node.generationId);
+    assert.ok(node.profileRevision);
+  });
+  assert.strictEqual(roomRules.playerStats[".write"], false);
+  assert.match(roomRules.playerStats.$uid[".write"], /newData\.exists\(\)/);
+});
+
+run("ticket and presence writes are bound to stage and active generation", () => {
+  const ticket = roomRules.tickets.$stageId.$uid;
+  const privatePresence = roomRules.ticketPresence.$stageId.$uid;
+  const publicPresence = roomRules.publicTicketPresence.$stageId.$profileId;
+  [ticket, privatePresence, publicPresence].forEach((node) => {
+    assert.match(node[".validate"], /generationId/);
+    assert.match(node[".validate"], /stageId/);
+  });
+  assert.match(ticket[".validate"], /currentStageId/);
+  assert.match(privatePresence[".validate"], /publicTicketPresence/);
+  assert.match(publicPresence[".validate"], /ticketPresence/);
+  assert.match(roomRules.tickets.$stageId[".write"], /!newData\.exists\(\)/);
+  assert.match(roomRules.ticketPresence.$stageId[".write"], /!newData\.exists\(\)/);
+  assert.match(roomRules.publicTicketPresence.$stageId[".write"], /!newData\.exists\(\)/);
 });
 
 run("player master and self stats writes are explicitly scoped", () => {

@@ -11,6 +11,9 @@ const roomId = "unit-room";
 const productionRoomId = "elevator-game-live";
 const versionRoomId = "version-room";
 const privacyRoomId = "privacy-room";
+const strictRoomId = "membership-room";
+const activeGenerationId = "g_membership0001";
+const nextGenerationId = "g_membership0002";
 const aliceProfileId = Projection.publicProfileId("alice");
 const bobProfileId = Projection.publicProfileId("bob");
 const missingRootProfileId = Projection.publicProfileId("missing-root");
@@ -169,6 +172,135 @@ function publicNode(overrides = {}) {
   }, overrides);
 }
 
+function strictMembershipRoomNode() {
+  const at = "2026-08-01T00:00:00.000Z";
+  const uid = "strict-alice";
+  const profileId = Projection.publicProfileId(uid);
+  return {
+    roles: { hosts: { "strict-host": true } },
+    meta: {
+      roomId: strictRoomId,
+      title: "Membership rules test",
+      schemaVersion: "firebase-rtdb-v5-membership-generation",
+      membershipSchemaVersion: "game-membership-v1",
+      activeGameId: "membership-game-1",
+      status: "active",
+      createdAt: at,
+      updatedAt: at,
+    },
+    membership: { activeGenerationId },
+    public: publicNode({
+      gameId: "membership-game-1",
+      activeGenerationId,
+      phase: "countdown",
+      roomVersion: 1,
+      currentStageId: "stage-001",
+      playerCount: 1,
+    }),
+    players: {
+      [uid]: {
+        profileId,
+        name: "Strict Alice",
+        connected: true,
+        joinedAt: at,
+        lastSeenAt: at,
+        generationId: activeGenerationId,
+        profileRevision: 1,
+        nameClaimKey: "Strict Alice",
+      },
+    },
+    publicProfileOwners: { [profileId]: uid },
+    publicPlayers: {
+      [profileId]: {
+        profileId,
+        name: "Strict Alice",
+        connected: true,
+        order: 0,
+        generationId: activeGenerationId,
+        profileRevision: 1,
+      },
+    },
+    nameClaims: {
+      [activeGenerationId]: {
+        "Strict Alice": {
+          ownerUid: uid,
+          profileId,
+          generationId: activeGenerationId,
+          name: "Strict Alice",
+        },
+      },
+    },
+    scores: {
+      [uid]: { total: 0, updatedAt: at, generationId: activeGenerationId },
+    },
+    publicScores: {
+      [profileId]: {
+        profileId,
+        name: "Strict Alice",
+        total: 0,
+        order: 0,
+        generationId: activeGenerationId,
+        profileRevision: 1,
+      },
+    },
+  };
+}
+
+function strictJoinUpdates(uid, name, order) {
+  const at = "2026-08-01T00:00:01.000Z";
+  const profileId = Projection.publicProfileId(uid);
+  return {
+    [`players/${uid}`]: {
+      name,
+      currentSkill: 0,
+      stageSkillHistoryJson: "[]",
+      appliedSkillStageIdsJson: "[]",
+      joinedAt: at,
+      lastSeenAt: at,
+      updatedAt: at,
+      roomId: strictRoomId,
+    },
+    [`rooms/${strictRoomId}/players/${uid}`]: {
+      profileId,
+      name,
+      connected: true,
+      joinedAt: at,
+      lastSeenAt: at,
+      generationId: activeGenerationId,
+      profileRevision: 1,
+      nameClaimKey: name,
+    },
+    [`rooms/${strictRoomId}/publicProfileOwners/${profileId}`]: uid,
+    [`rooms/${strictRoomId}/publicPlayers/${profileId}`]: {
+      profileId,
+      name,
+      connected: true,
+      order,
+      generationId: activeGenerationId,
+      profileRevision: 1,
+    },
+    [`rooms/${strictRoomId}/nameClaims/${activeGenerationId}/${name}`]: {
+      ownerUid: uid,
+      profileId,
+      generationId: activeGenerationId,
+      name,
+    },
+    [`rooms/${strictRoomId}/scores/${uid}`]: {
+      total: 0,
+      updatedAt: at,
+      generationId: activeGenerationId,
+    },
+    [`rooms/${strictRoomId}/publicScores/${profileId}`]: {
+      profileId,
+      name,
+      total: 0,
+      order,
+      generationId: activeGenerationId,
+      profileRevision: 1,
+    },
+  };
+}
+
 function publicHistoryRanking(overrides = {}) {
   return Object.assign({
     profileId: aliceProfileId,
@@ -216,7 +348,7 @@ async function main() {
   const env = await initializeTestEnvironment({
     projectId,
     database: {
-      rules: fs.readFileSync("firebase/database.rules.json", "utf8"),
+      rules: fs.readFileSync("firebase/database.rules.compat-v5.json", "utf8"),
     },
   });
   try {
@@ -264,6 +396,7 @@ async function main() {
             roles: { hosts: { host: true } },
           },
           [privacyRoomId]: privacyRoomNode(),
+          [strictRoomId]: strictMembershipRoomNode(),
         },
         archives: {
           "legacy-archive": {
@@ -280,7 +413,15 @@ async function main() {
     const bob = env.authenticatedContext("bob").database();
     const stranger = env.authenticatedContext("stranger").database();
     const privacyHost = env.authenticatedContext("privacy-host").database();
+    const strictHost = env.authenticatedContext("strict-host").database();
+    const strictAlice = env.authenticatedContext("strict-alice").database();
     const guest = env.unauthenticatedContext().database();
+
+    await assertSucceeds(strictHost.ref(`rooms/${strictRoomId}/nameClaims`).once("value"));
+    await assertFails(strictAlice.ref(`rooms/${strictRoomId}/nameClaims`).once("value"));
+    await assertSucceeds(strictAlice.ref(
+      `rooms/${strictRoomId}/nameClaims/${activeGenerationId}/Strict Alice`
+    ).once("value"));
 
     await assertSucceeds(privacyHost.ref(`rooms/${privacyRoomId}/config`).once("value"));
     await assertFails(alice.ref(`rooms/${privacyRoomId}/config`).once("value"));
@@ -365,6 +506,273 @@ async function main() {
         status: "submitted",
       },
     }));
+
+    const legacyShape = env.authenticatedContext("legacy-shape").database();
+    await assertFails(legacyShape.ref().update({
+      [`rooms/${strictRoomId}/players/legacy-shape`]: {
+        profileId: Projection.publicProfileId("legacy-shape"),
+        name: "Legacy Shape",
+        connected: true,
+        joinedAt,
+        lastSeenAt: joinedAt,
+      },
+      [`rooms/${strictRoomId}/publicPlayers/${Projection.publicProfileId("legacy-shape")}`]: {
+        profileId: Projection.publicProfileId("legacy-shape"),
+        name: "Legacy Shape",
+        connected: true,
+        order: 2,
+      },
+    }));
+
+    const claimA = env.authenticatedContext("claim-a").database();
+    const claimB = env.authenticatedContext("claim-b").database();
+    const duplicateJoinResults = await Promise.allSettled([
+      claimA.ref().update(strictJoinUpdates("claim-a", "Same Name", 2)),
+      claimB.ref().update(strictJoinUpdates("claim-b", "Same Name", 3)),
+    ]);
+    if (duplicateJoinResults.filter((result) => result.status === "fulfilled").length !== 1) {
+      throw new Error(`same-name claim race did not produce exactly one winner: ${JSON.stringify(duplicateJoinResults.map((item) => item.status))}`);
+    }
+    let duplicateClaim = null;
+    await env.withSecurityRulesDisabled(async (context) => {
+      duplicateClaim = await context.database().ref(
+        `rooms/${strictRoomId}/nameClaims/${activeGenerationId}/Same Name`
+      ).once("value");
+    });
+    if (!duplicateClaim.exists() || !["claim-a", "claim-b"].includes(duplicateClaim.child("ownerUid").val())) {
+      throw new Error("same-name claim winner was not persisted");
+    }
+
+    const statsNew = env.authenticatedContext("stats-new").database();
+    const statsNewProfile = {
+      currentSkill: 0,
+      stageSkillHistoryJson: "[]",
+      appliedSkillStageIdsJson: "[]",
+      updatedAt: "2026-08-01T00:00:01.000Z",
+    };
+    await assertFails(statsNew.ref().update(Object.assign(
+      strictJoinUpdates("stats-new", "Stats New", 4),
+      { [`rooms/${strictRoomId}/playerStats/stats-new`]: statsNewProfile }
+    )));
+    await assertSucceeds(statsNew.ref().update(strictJoinUpdates("stats-new", "Stats New", 4)));
+    await assertSucceeds(statsNew.ref(
+      `rooms/${strictRoomId}/playerStats/stats-new`
+    ).set(statsNewProfile));
+
+    const strictAliceProfileId = Projection.publicProfileId("strict-alice");
+    await assertSucceeds(strictAlice.ref().update({
+      [`rooms/${strictRoomId}/players/strict-alice`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alice",
+        pendingName: "Strict Alicia",
+        connected: true,
+        joinedAt: "2026-08-01T00:00:00.000Z",
+        lastSeenAt: "2026-08-01T00:00:02.000Z",
+        generationId: activeGenerationId,
+        profileRevision: 2,
+        nameClaimKey: "Strict Alice",
+        pendingNameClaimKey: "Strict Alicia",
+      },
+      [`rooms/${strictRoomId}/publicPlayers/${strictAliceProfileId}`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alice",
+        connected: true,
+        order: 0,
+        generationId: activeGenerationId,
+        profileRevision: 2,
+      },
+      [`rooms/${strictRoomId}/publicScores/${strictAliceProfileId}`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alice",
+        total: 0,
+        order: 0,
+        generationId: activeGenerationId,
+        profileRevision: 2,
+      },
+      [`rooms/${strictRoomId}/nameClaims/${activeGenerationId}/Strict Alicia`]: {
+        ownerUid: "strict-alice",
+        profileId: strictAliceProfileId,
+        generationId: activeGenerationId,
+        name: "Strict Alicia",
+      },
+    }));
+    await assertFails(strictAlice.ref().update({
+      [`rooms/${strictRoomId}/players/strict-alice/pendingName`]: "Stale Revision",
+      [`rooms/${strictRoomId}/players/strict-alice/pendingNameClaimKey`]: "Stale Revision",
+      [`rooms/${strictRoomId}/players/strict-alice/profileRevision`]: 2,
+    }));
+    await assertSucceeds(strictAlice.ref().update({
+      [`rooms/${strictRoomId}/players/strict-alice`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alice",
+        connected: true,
+        joinedAt: "2026-08-01T00:00:00.000Z",
+        lastSeenAt: "2026-08-01T00:00:03.000Z",
+        generationId: activeGenerationId,
+        profileRevision: 3,
+        nameClaimKey: "Strict Alice",
+      },
+      [`rooms/${strictRoomId}/publicPlayers/${strictAliceProfileId}/profileRevision`]: 3,
+      [`rooms/${strictRoomId}/publicScores/${strictAliceProfileId}/profileRevision`]: 3,
+      [`rooms/${strictRoomId}/nameClaims/${activeGenerationId}/Strict Alicia`]: null,
+    }));
+    await assertFails(strictHost.ref().update({
+      [`rooms/${strictRoomId}/players/strict-alice`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alicia",
+        connected: true,
+        joinedAt: "2026-08-01T00:00:00.000Z",
+        lastSeenAt: "2026-08-01T00:00:02.000Z",
+        generationId: activeGenerationId,
+        profileRevision: 3,
+        nameClaimKey: "Strict Alicia",
+      },
+      [`rooms/${strictRoomId}/publicPlayers/${strictAliceProfileId}`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alicia",
+        connected: true,
+        order: 0,
+        generationId: activeGenerationId,
+        profileRevision: 3,
+      },
+      [`rooms/${strictRoomId}/publicScores/${strictAliceProfileId}`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alicia",
+        total: 0,
+        order: 0,
+        generationId: activeGenerationId,
+        profileRevision: 3,
+      },
+      [`rooms/${strictRoomId}/nameClaims/${activeGenerationId}/Strict Alice`]: null,
+      [`rooms/${strictRoomId}/nameClaims/${activeGenerationId}/Strict Alicia`]: {
+        ownerUid: "strict-alice",
+        profileId: strictAliceProfileId,
+        generationId: activeGenerationId,
+        name: "Strict Alicia",
+      },
+    }));
+
+    await assertSucceeds(strictHost.ref().update({
+      [`rooms/${strictRoomId}/meta`]: {
+        roomId: strictRoomId,
+        title: "Membership rules test",
+        schemaVersion: "firebase-rtdb-v5-membership-generation",
+        membershipSchemaVersion: "game-membership-v1",
+        activeGameId: "membership-game-2",
+        status: "active",
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:04.000Z",
+      },
+      [`rooms/${strictRoomId}/membership`]: { activeGenerationId: nextGenerationId },
+      [`rooms/${strictRoomId}/public`]: publicNode({
+        gameId: "membership-game-2",
+        activeGenerationId: nextGenerationId,
+        phase: "voting",
+        roomVersion: 2,
+        currentStageId: "stage-001",
+        playerCount: 1,
+        countdownEndsAt: null,
+        tallyingEndsAt: null,
+      }),
+      [`rooms/${strictRoomId}/players/strict-alice`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alice",
+        connected: true,
+        joinedAt: "2026-08-01T00:00:00.000Z",
+        lastSeenAt: "2026-08-01T00:00:04.000Z",
+        generationId: nextGenerationId,
+        profileRevision: 4,
+        nameClaimKey: "Strict Alice",
+      },
+      [`rooms/${strictRoomId}/publicPlayers/${strictAliceProfileId}`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alice",
+        connected: true,
+        order: 0,
+        generationId: nextGenerationId,
+        profileRevision: 4,
+      },
+      [`rooms/${strictRoomId}/nameClaims/${nextGenerationId}/Strict Alice`]: {
+        ownerUid: "strict-alice",
+        profileId: strictAliceProfileId,
+        generationId: nextGenerationId,
+        name: "Strict Alice",
+      },
+      [`rooms/${strictRoomId}/scores/strict-alice`]: {
+        total: 0,
+        updatedAt: "2026-08-01T00:00:04.000Z",
+        generationId: nextGenerationId,
+      },
+      [`rooms/${strictRoomId}/publicScores/${strictAliceProfileId}`]: {
+        profileId: strictAliceProfileId,
+        name: "Strict Alice",
+        total: 0,
+        order: 0,
+        generationId: nextGenerationId,
+        profileRevision: 4,
+      },
+    }));
+
+    const staleJoin = env.authenticatedContext("stale-generation").database();
+    await assertFails(staleJoin.ref().update(strictJoinUpdates("stale-generation", "Stale Generation", 4)));
+    const ticketAt = "2026-08-01T00:00:05.000Z";
+    await assertFails(strictAlice.ref().update({
+      [`rooms/${strictRoomId}/tickets/stage-001/strict-alice`]: {
+        uuid: "strict-alice",
+        stageId: "stage-001",
+        generationId: activeGenerationId,
+        boardFloor: 1,
+        exitFloor: 2,
+        predictions: [],
+        abstained: false,
+        submittedAt: ticketAt,
+      },
+      [`rooms/${strictRoomId}/ticketPresence/stage-001/strict-alice`]: {
+        status: "submitted",
+        stageId: "stage-001",
+        generationId: activeGenerationId,
+        updatedAt: ticketAt,
+      },
+      [`rooms/${strictRoomId}/publicTicketPresence/stage-001/${strictAliceProfileId}`]: {
+        profileId: strictAliceProfileId,
+        status: "submitted",
+        stageId: "stage-001",
+        generationId: activeGenerationId,
+      },
+    }));
+    await assertSucceeds(strictAlice.ref().update({
+      [`rooms/${strictRoomId}/tickets/stage-001/strict-alice`]: {
+        uuid: "strict-alice",
+        stageId: "stage-001",
+        generationId: nextGenerationId,
+        boardFloor: 1,
+        exitFloor: 2,
+        predictions: [],
+        abstained: false,
+        submittedAt: ticketAt,
+      },
+      [`rooms/${strictRoomId}/ticketPresence/stage-001/strict-alice`]: {
+        status: "submitted",
+        stageId: "stage-001",
+        generationId: nextGenerationId,
+        updatedAt: ticketAt,
+      },
+      [`rooms/${strictRoomId}/publicTicketPresence/stage-001/${strictAliceProfileId}`]: {
+        profileId: strictAliceProfileId,
+        status: "submitted",
+        stageId: "stage-001",
+        generationId: nextGenerationId,
+      },
+    }));
+    await assertFails(strictAlice.ref(`rooms/${strictRoomId}/tickets/stage-001/strict-alice`).set(null));
+    await assertFails(strictAlice.ref(`rooms/${strictRoomId}/nameClaims/${nextGenerationId}/Strict Alice`).set(null));
+    await assertFails(strictHost.ref(`rooms/${strictRoomId}/players/strict-alice`).set(null));
+    await assertSucceeds(strictHost.ref().update({
+      [`rooms/${strictRoomId}/tickets/stage-001`]: null,
+      [`rooms/${strictRoomId}/ticketPresence/stage-001`]: null,
+      [`rooms/${strictRoomId}/publicTicketPresence/stage-001`]: null,
+    }));
+
     await assertFails(bob.ref(`rooms/${privacyRoomId}/publicPlayers/${aliceProfileId}`).update({
       name: "Forged Alice",
     }));
