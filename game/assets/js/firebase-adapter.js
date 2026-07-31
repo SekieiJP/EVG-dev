@@ -309,7 +309,7 @@
       if (path === "/api/host/auth") return this.authHost(payload.password);
       if (!this.mock && isPlayerWritePath(path)) return this.postRestPlayer(path, payload);
       if (!this.mock) return this.postRestHost(path, payload);
-      const room = await this.readRoom();
+      const room = this.readMockRoom({ role: "host" });
       const result = this.applyMutation(path, payload, room);
       if (!result.ok) return result;
       await this.writeRoom(result.room);
@@ -809,11 +809,11 @@
       return this.mock ? this.writeMockRoom(room) : this.writeRestRoom(room);
     }
 
-    readMockRoom() {
+    readMockRoom(options = {}) {
       const db = loadJson(MOCK_DB_KEY, {});
       const entry = db.rooms && db.rooms[this.roomId];
       return roomFromFirebaseNodes(entry, this.engine, {
-        role: this.getRole(),
+        role: options.role || this.getRole(),
         uid: this.auth && this.auth.uid || this.getUuid() || "",
       });
     }
@@ -1476,6 +1476,9 @@
     const completedGameDetails = role === "host"
       ? normalizeCompletedGames(nodes.completedGameDetails || nodes.completedGames || {})
       : [];
+    const publicCompletedGames = role === "history"
+      ? normalizeCompletedGames(nodes.completedGamePublicDetails || {})
+      : [];
     const completedGameSummariesValue = normalizeCompletedGameSummaries(
       nodes.completedGameSummaries || keyBy(completedGameSummaries(completedGameDetails), "gameId", (summary) => summary)
     );
@@ -1486,7 +1489,11 @@
     const personalCompletedGames = uid
       ? normalizeCompletedGames(nodes.completedGamePlayerDetails[uid] || {})
       : [];
-    const completedGames = completedGameDetails.length ? completedGameDetails : mergePersonalGamesWithSummaries(personalCompletedGames, completedGameSummariesValue);
+    const completedGames = completedGameDetails.length
+      ? completedGameDetails
+      : publicCompletedGames.length
+        ? mergePersonalGamesWithSummaries(publicCompletedGames, completedGameSummariesValue)
+        : mergePersonalGamesWithSummaries(personalCompletedGames, completedGameSummariesValue);
     const historyPlayersValue = Object.keys(nodes.historyPlayers || {}).map((uuid) => {
       const player = nodes.historyPlayers[uuid] || {};
       return {
@@ -1844,7 +1851,7 @@
       return safeCommon.concat(["publicConfig", "publicPlayers", "publicScores"]);
     }
     if (role === "history") {
-      return ["meta", "public", "completedGameSummaries", "historyPlayers", `completedGamePlayerDetails/${uid}`];
+      return ["meta", "public", "completedGameSummaries", "completedGamePublicDetails", "historyPlayers", `completedGamePlayerDetails/${uid}`];
     }
     return safeCommon.concat(["publicConfig", "publicPlayers", "publicScores", `players/${uid}`, `playerStats/${uid}`, `scores/${uid}`, "completedGameSummaries", `completedGamePlayerDetails/${uid}`]);
   }

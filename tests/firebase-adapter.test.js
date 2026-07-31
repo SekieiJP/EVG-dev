@@ -1009,6 +1009,7 @@ run("firebase subscriptions are scoped by screen role", () => {
     "meta",
     "public",
     "completedGameSummaries",
+    "completedGamePublicDetails",
     "historyPlayers",
     "completedGamePlayerDetails/history-uid",
   ]);
@@ -1053,6 +1054,16 @@ run("firebase public history nodes expose skill summaries and stage rankings onl
   assert.strictEqual(JSON.stringify(nodes.historyPlayers).includes('"uuid"'), false);
   assert.strictEqual(JSON.stringify(nodes.completedGameSummaries).includes('"uuid"'), false);
   assert.strictEqual(JSON.stringify(nodes.completedGamePublicDetails).includes('"uuid"'), false);
+  const historyRoom = EVGFirebaseAdapter.roomFromFirebaseNodes({
+    meta: nodes.meta,
+    public: nodes.public,
+    completedGameSummaries: nodes.completedGameSummaries,
+    completedGamePublicDetails: nodes.completedGamePublicDetails,
+    historyPlayers: nodes.historyPlayers,
+  }, Engine, { role: "history", uid: "history-viewer" });
+  assert.strictEqual(historyRoom.completedGames.length, 1);
+  assert.strictEqual(historyRoom.completedGames[0].stageResults["stage-001"].rankings[0].score, 20);
+  assert.strictEqual(JSON.stringify(historyRoom.completedGames).includes('"uuid"'), false);
 });
 
 run("firebase career backfill rebuilds all finite current-game StageSkills and repairs a partial final archive", () => {
