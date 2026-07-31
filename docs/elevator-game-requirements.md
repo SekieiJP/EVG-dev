@@ -155,7 +155,7 @@ Host / Screen / Player browser
 - **Single Source of Truth はRTDB** とする。クライアントは役割別の小ノード購読から表示モデルを作り、進行中room全体をlocalStorageへ保存しない。
 - Host、Player、Screenは `public`、現在ステージ設定、必要な本人/投影用データをRTDB購読で自動追従する。HTTPの定期ポーリング、GAS `/api/status`、同一端末 `BroadcastChannel` 同期は本番経路に使わない。
 - `public` のフェーズ遷移はHost allowlist uidだけが実行できる。クライアントは読取り時の `expectedPhase` と `roomVersion` を添えて変更を作り、Rulesが既存値に対する正しい次フェーズと `roomVersion + 1` を検証する。gameIdを変更する次ゲーム開始も同じversion CASを必須とし、`public` 自体の初回作成だけを例外とする。競合時は書込み全体を拒否して最新 `public` を再取得する。Playerの「次へ」ボタンでフェーズを進めたり、ランキング画面に意図的に置き去りにしたりしない。
-- Hostがステージ集計を確定するときは、RTDBルートを基準にした1回のmulti-location `update()` で、フェーズ、`results/{stageId}`、`scores/{uid}`、`playerStats/{uid}`、プレイヤー履歴、操作ログを原子的に一括反映する。フェーズを先に確定して副作用を後書きする二段階方式と、個別順次書込みは禁止する。Rulesのversion/phase検証または既存結果により拒否された場合はupdate全体が反映されず、二重集計を防ぐ。
+- Hostがステージ集計を確定するときは、command受信後にRTDBから読み直した最新の参加者・ticketを正本としてサーバ補正時刻で再集計する。画面側で先に作ったpreview resultは権威値として採用しない。再集計した同一resultから得点、StageSkill、現在Skill、公開演出scheduleと `revealEndsAt` を生成し、RTDBルートを基準にした1回のmulti-location `update()` で、フェーズ、`results/{stageId}`、`scores/{uid}`、`playerStats/{uid}`、プレイヤー履歴、操作ログとともに原子的に一括反映する。フェーズを先に確定して副作用を後書きする二段階方式と、個別順次書込みは禁止する。Rulesのversion/phase検証または既存結果により拒否された場合はupdate全体が反映されず、二重集計を防ぐ。
 - 通常Host操作は `completedGameSummaries`、`completedGamePublicDetails`、`completedGameDetails`、`completedGamePlayerDetails`、`historyPlayers` の親ノードを全置換しない。完了ゲームは `{gameId}`、公開Skillプロフィールは `{profileId}` の子パスだけを非nullで追記・修復する。Rulesは親書込み、既存子の削除、path keyとpayload内IDの不一致を拒否する。
 - Host初期化は `public`、`meta`、現ゲーム設定、参加者、結果、完了履歴等のゲーム状態がすべて未作成の場合だけ許可する。`public` が欠損していて他のゲーム状態または履歴が残る場合は `room_state_incomplete` として停止し、空の初期roomで上書きしない。allowlist、room settings、次ゲームテンプレートだけの事前作成はゲーム状態の存在とはみなさない。
 - 既存データ移行でroot `players/{uid}` が未作成の場合、通常room `elevator-game-live` の現在参加者であるuidに限り、同roomのallowlist済みHostが欠損確認の読取りを行える。任意の欠損uidをHostが探索できる規則にはしない。作成時の認可は `newData.roomId` と同roomのHost allowlistを照合し、room mirror、公開履歴、schemaVersionと同じmulti-location `update()`で原子的に作成する。
@@ -465,7 +465,7 @@ Host / Screen / Player browser
 | 状態購読 | `public` と役割別小ノード購読 | HTTP polling・全room取得を使わずに表示を同期する |
 | Player command | `players/{uid}`、`tickets/{stageId}/{uid}`、`ticketPresence/{stageId}/{uid}` | 本人の参加、改名、投票、棄権のみ。Rulesで `auth.uid == uid` を必須にする |
 | Host phase command | `public` を含むmulti-location update + Rules CAS | `expectedPhase` と `roomVersion` に相当する既存値検証をRulesで行い、次フェーズと時刻を確定する。gameId変更時もversionを1増やす |
-| Host result commit | `public`、`results`、`scores`、`playerStats`、履歴子パス、`operations` の単一multi-location update | フェーズを含む同一ステージの結果・得点・Skill・操作ログを原子的に反映する。履歴親は置換せず、競合・既存結果・履歴削除はupdate全体を拒否する |
+| Host result commit | `public`、`results`、`scores`、`playerStats`、履歴子パス、`operations` の単一multi-location update | 最新RTDB ticketを再読込みして結果・得点・Skill・演出終了時刻を同じsnapshotから再計算し、原子的に反映する。履歴親は置換せず、競合・既存結果・履歴削除はupdate全体を拒否する |
 | 次ゲーム設定 | `nextGameConfigs/{configId}` | Host allowlistのみが候補を登録・更新・選択できる |
 | 戦歴参照 | `completedGameSummaries`、本人詳細ノード | 公開サマリと本人だけの詳細を分離する |
 | GAS archive | archive専用HTTP endpoint | final/中断後の確定payloadを冪等にSpreadsheetへ出力する。進行操作には使わない |

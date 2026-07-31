@@ -718,26 +718,28 @@
       return { ok: true, room: next, player: nextPlayer };
     }
 
-    commitHostResult(room, nextRoom, baseVersion) {
+    commitHostResult(room, _clientRoom, baseVersion) {
       if (String(baseVersion) !== String(room.roomVersion || 0)) {
         return { ok: false, code: "version_conflict", error: "ルーム状態が更新されています。再読み込みしてください。" };
       }
-      const stage = this.engine.getCurrentStage(room);
-      if (!stage || !nextRoom || !nextRoom.stageResults || !nextRoom.stageResults[stage.stageId]) {
-        return { ok: false, code: "bad_result", error: "結果発表状態のルームを送信してください。" };
-      }
-      const next = this.engine.deepClone(nextRoom);
-      next.roomId = room.roomId;
-      next.gameId = room.gameId;
-      next.config = room.config;
-      next.tickets = room.tickets;
-      next.completedGames = room.completedGames || [];
-      next.completedGameSummaries = room.completedGameSummaries || [];
-      next.historyPlayers = room.historyPlayers || [];
-      next.operations = room.operations || [];
-      next.operations.unshift({ at: this.serverNowIso(), actor: "host", action: "firebase-commit-result" });
-      touch(next);
-      return { ok: true, room: next, result: next.stageResults[stage.stageId] };
+      // The browser computes a preview so the Host can start the request, but it
+      // is not authoritative. A Player ticket may have reached RTDB after that
+      // preview and before postRestHost reread the room. Always tally the freshly
+      // read canonical tickets here so result, score, and Skill are one snapshot.
+      const calculatedAt = this.serverNowIso();
+      const tallied = this.engine.tallyCurrentStage(room, calculatedAt);
+      if (!tallied.ok) return Object.assign({ code: "bad_result" }, tallied);
+      const next = tallied.room;
+      const stage = this.engine.getCurrentStage(next);
+      const revealSchedule = this.engine.getRevealSchedule(stage, tallied.result);
+      const animationStartedMs = new Date(next.animationStartedAt || calculatedAt).getTime();
+      next.revealEndsAt = new Date(animationStartedMs + revealSchedule.totalSeconds * 1000).toISOString();
+      next.operations = next.operations || [];
+      next.operations.unshift({ at: calculatedAt, actor: "host", action: "firebase-commit-result" });
+      next.operations = next.operations.slice(0, 100);
+      next.roomVersion = Number(room.roomVersion || 0) + 1;
+      next.updatedAt = calculatedAt;
+      return { ok: true, room: next, result: tallied.result };
     }
 
     publicStatus(room, payload) {

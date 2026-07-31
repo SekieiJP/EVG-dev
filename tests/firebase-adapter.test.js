@@ -1796,6 +1796,121 @@ run("firebase committed tally preserves updated Skill in every authoritative nod
   assert.strictEqual(EVGFirebaseAdapter.rootPlayerNode(committed.room.players[0], "unit-room").currentSkill, tallied.room.players[0].skill);
 });
 
+runAsync("firebase result commit recalculates a late ticket from the fresh RTDB room in one atomic update", async () => {
+  let hostPreviewRoom = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  hostPreviewRoom.roomId = "unit-room";
+  hostPreviewRoom = Engine.registerPlayer(hostPreviewRoom, "Alice", "alice").room;
+  hostPreviewRoom = Engine.registerPlayer(hostPreviewRoom, "Bob", "bob").room;
+  const stage = Engine.getCurrentStage(hostPreviewRoom);
+  stage.params.N = 40;
+  hostPreviewRoom.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {} },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 4, predictions: {} },
+  };
+  hostPreviewRoom.phase = Engine.PHASES.COUNTDOWN;
+  hostPreviewRoom.roomVersion = 12;
+
+  const clientTallied = Engine.tallyCurrentStage(
+    hostPreviewRoom,
+    "2026-08-01T00:00:00.000Z"
+  ).room;
+  clientTallied.stageResults[stage.stageId].players.alice.score = 999999;
+  clientTallied.scores.alice = 999999;
+  clientTallied.players.find((player) => player.uuid === "alice").skill = 999999;
+
+  const clientRevealDuration = Engine.getRevealSchedule(
+    stage,
+    clientTallied.stageResults[stage.stageId]
+  ).totalSeconds;
+
+  // This ticket reaches RTDB after the Host preview but before postRestHost's
+  // canonical read. Ticket writes do not increment the room phase version.
+  const freshRoom = Engine.deepClone(hostPreviewRoom);
+  freshRoom.tickets[stage.stageId].alice = {
+    uuid: "alice",
+    boardFloor: 1,
+    exitFloor: 40,
+    predictions: {},
+    submittedAt: "2026-08-01T00:00:01.000Z",
+  };
+  const serverCalculatedAt = "2026-08-01T00:00:02.000Z";
+  const expected = Engine.tallyCurrentStage(freshRoom, serverCalculatedAt).room;
+  const expectedResult = expected.stageResults[stage.stageId];
+  const expectedRevealDuration = Engine.getRevealSchedule(
+    Engine.getCurrentStage(expected),
+    expectedResult
+  ).totalSeconds;
+  const expectedRevealEndsAt = new Date(
+    new Date(serverCalculatedAt).getTime() + expectedRevealDuration * 1000
+  ).toISOString();
+  assert.notStrictEqual(expectedRevealDuration, clientRevealDuration);
+  assert.notStrictEqual(
+    expectedResult.players.alice.score,
+    999999
+  );
+
+  const harness = productionLikeRestHarness(freshRoom, {});
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.firebaseDb = {};
+  adapter.sdk = harness.sdk;
+  adapter.debug.isHostAllowed = true;
+  adapter.isHostAllowed = async () => true;
+  adapter.serverNowIso = () => serverCalculatedAt;
+
+  const response = await adapter.postRestHost("/api/host/commit-result", {
+    hostToken: "firebase-host:host:test",
+    baseVersion: 12,
+    room: clientTallied,
+  });
+
+  assert.strictEqual(response.ok, true, response.error);
+  assert.strictEqual(harness.updates.length, 1);
+  assert.strictEqual(harness.updates[0].path, "/");
+  const writes = harness.updates[0].updates;
+  const storedResult = writes[`rooms/unit-room/results/${stage.stageId}`];
+  assert.strictEqual(storedResult.players.alice.ticket.exitFloor, 40);
+  assert.strictEqual(storedResult.players.alice.score, expectedResult.players.alice.score);
+  assert.strictEqual(storedResult.players.alice.stageSkill, expectedResult.players.alice.stageSkill);
+  assert.strictEqual(storedResult.calculatedAt, serverCalculatedAt);
+  assert.strictEqual(writes["rooms/unit-room/public"].animationStartedAt, serverCalculatedAt);
+  assert.strictEqual(writes["rooms/unit-room/public"].revealEndsAt, expectedRevealEndsAt);
+  assert.strictEqual(response.room.revealEndsAt, expectedRevealEndsAt);
+  assert.strictEqual(writes["rooms/unit-room/public"].roomVersion, 13);
+  assert.strictEqual(writes["rooms/unit-room/scores/alice/total"], expected.scores.alice);
+  assert.strictEqual(
+    writes["rooms/unit-room/playerStats/alice/currentSkill"],
+    expected.players.find((player) => player.uuid === "alice").skill
+  );
+  assert.strictEqual(
+    writes["players/alice/currentSkill"],
+    expected.players.find((player) => player.uuid === "alice").skill
+  );
+
+  const persistedBeforeCommit = {
+    rooms: { "unit-room": EVGFirebaseAdapter.roomToFirebaseNodes(freshRoom) },
+    players: {
+      alice: EVGFirebaseAdapter.rootPlayerNode(freshRoom.players[0], "unit-room"),
+      bob: EVGFirebaseAdapter.rootPlayerNode(freshRoom.players[1], "unit-room"),
+    },
+  };
+  const persisted = applyMultiLocationUpdates(persistedBeforeCommit, writes);
+  assert.strictEqual(persisted.rooms["unit-room"].tickets[stage.stageId].alice.exitFloor, 40);
+  assert.strictEqual(
+    persisted.rooms["unit-room"].results[stage.stageId].players.alice.ticket.exitFloor,
+    40
+  );
+  assert.strictEqual(persisted.rooms["unit-room"].scores.alice.total, expected.scores.alice);
+  assert.strictEqual(
+    JSON.parse(persisted.rooms["unit-room"].playerStats.alice.stageSkillHistoryJson).at(-1),
+    expectedResult.players.alice.stageSkill
+  );
+});
+
 run("firebase host transition update is atomic across public results skill and player master", () => {
   let current = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   current = Engine.registerPlayer(current, "Alice", "alice").room;

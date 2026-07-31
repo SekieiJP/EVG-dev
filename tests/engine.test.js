@@ -540,6 +540,28 @@ run("host deadlines and result timestamps use the injected server-corrected time
   assert.strictEqual(tallied.room.updatedAt, "2026-07-29T15:00:08.000Z");
 });
 
+run("reveal schedule is a pure result-derived duration and compresses only inactive floors", () => {
+  const longStage = stage({ params: { N: 40, X: 2, P: 10, Q: 3 } });
+  const shortResult = Engine.calculateStage(longStage, players(["A"]), {
+    p1: { uuid: "p1", boardFloor: 1, exitFloor: 3, predictions: {} },
+  }, "2026-08-01T00:00:00.000Z");
+  const fullResult = Engine.calculateStage(longStage, players(["A"]), {
+    p1: { uuid: "p1", boardFloor: 1, exitFloor: 40, predictions: {} },
+  }, "2026-08-01T00:00:00.000Z");
+  const before = JSON.stringify({ longStage, shortResult, fullResult });
+
+  const shortSchedule = Engine.getRevealSchedule(longStage, shortResult);
+  const fullSchedule = Engine.getRevealSchedule(longStage, fullResult);
+
+  assert.strictEqual(shortSchedule.hasCompressedFloors, true);
+  assert.strictEqual(fullSchedule.hasCompressedFloors, false);
+  assert.ok(Math.abs(fullSchedule.totalSeconds - 40 * Engine.REVEAL_SECONDS_PER_FLOOR) < 1e-9);
+  assert.ok(shortSchedule.totalSeconds < fullSchedule.totalSeconds);
+  assert.strictEqual(shortSchedule.floorAt(0), 1);
+  assert.strictEqual(shortSchedule.floorAt(Infinity), 40);
+  assert.strictEqual(JSON.stringify({ longStage, shortResult, fullResult }), before);
+});
+
 run("host close-voting uses the saved countdown setting", () => {
   let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   room.countdownSeconds = 24;

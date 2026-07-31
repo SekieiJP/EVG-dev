@@ -70,8 +70,8 @@
     </div>
 
     <div class="warning">
-      <strong>P0/P1のデータ修復は完了し、残りは非イベント環境での運用smokeとリリース記録です。</strong>
-      同日次ゲーム継続、前日以前の退室、全ステージのStageSkill/現在Skill、実際に未完了archiveが存在する場合のretryを小規模ゲームで確認してください。Spreadsheetは常時バックアップ済みのため都度取得を依頼しません。今回<code>gas/src/Code.gs</code>は変更しておらず、GAS再デプロイ等の運用者作業もありません。
+      <strong>データ復旧とFirebase公開投影v4への移行は完了しました。現在、運用者が行う作業はありません。</strong>
+      残るP0競合修正とP1機能をコード側で完了してから、非イベント環境の小規模smokeを依頼します。Spreadsheetは常時バックアップ済みのため都度取得を依頼しません。今回も<code>gas/src/Code.gs</code>は変更しておらず、GAS再デプロイ等の運用者作業はありません。
     </div>
 
     <h2>0. 現在確認できている本番状態</h2>
@@ -79,10 +79,10 @@
     <table>
       <thead><tr><th>確認項目</th><th>結果</th></tr></thead>
       <tbody>
-        <tr><td>GitHub Pages</td><td>最終アーカイブ全ステージ化コミット<code>21ad203</code>、アセットversion <code>260731-p0p1r11</code>を公開済み。公開adapter SHA-256 <code>61eb22acfa1a69ea31c307dc315d0364208fecbbb8ad1edde22e1873f5f38dc2</code>とローカル本文の完全一致、Pages/Verify workflow成功を確認済み。</td></tr>
-        <tr><td>現在room</td><td>修復後は<code>final</code>、<code>roomVersion=22</code>。RTDB <code>results</code>と同一gameIdのHost/公開/本人完了詳細はいずれも4ステージ・24人分。archiveは<code>exported</code>、pending 0、errorなし。</td></tr>
-        <tr><td>現行Rules</td><td>2026-07-31にr10削除防止版をrelease済み。5履歴親の書込みと既存子削除を拒否し、gameId変更時もroomVersion + 1を必須化。release後本文一致を確認済み。</td></tr>
-        <tr><td>Skill復旧結果</td><td><code>schemaVersion=firebase-rtdb-v3-skill-history</code>、有限StageSkill 29件、root欠損0人、root/roomとも非ゼロSkill 6人。</td></tr>
+        <tr><td>GitHub Pages</td><td>公開投影自己修復・Rules hardeningコミット<code>6f9906e</code>、adapterアセットversion <code>260801-p0p1r15</code>を公開済み。Pages run <code>30651833759</code>、Verify run <code>30651833515</code>は全job成功。</td></tr>
+        <tr><td>現在room</td><td><code>final</code>、<code>roomVersion=23</code>、schema v4。private/public resultsはいずれも4ステージ、public players/scoresは各6件、同一gameIdのHost/公開/本人完了詳細はいずれも4ステージ・24人分。archiveは<code>exported</code>、pending 0、errorなし。</td></tr>
+        <tr><td>現行Rules</td><td>公開payloadの全階層allowlistとprivate親閉鎖を含む最終RulesをFirebase CLIでrelease済み。再取得本文はリポジトリ版と正規化SHA-256 <code>a7c2b728a9744dc3695f96e1e38f1d9c6367d0ed3b4224315cce3446076a62d9</code>で完全一致。</td></tr>
+        <tr><td>Skill復旧結果</td><td><code>schemaVersion=firebase-rtdb-v4-public-projection</code>。復旧ゲームは有限StageSkill 29件、root 6人全員非ゼロSkill、履歴長<code>[4,5,5,5,5,5]</code>。現在ゲームもroom stats 6人全員非ゼロSkill。</td></tr>
         <tr><td>履歴・完了詳細</td><td>現在ゲームの4ステージ完了詳細に加え、消失していた旧ゲームを5履歴系へ復旧済み。復旧ゲームは5ステージ・30結果・有限StageSkill 29件・本人詳細6件。既存履歴子の変更0件を確認した。</td></tr>
         <tr><td>Host allowlist</td><td>allowlist済みHostで認証成功、<code>isHostAllowed=true</code>、Rules/subscription errorなしを確認済み。今回の修復のためのallowlist変更は行っていない。</td></tr>
         <tr><td>締切カウントダウン</td><td>既定10秒。Hostが1〜60秒の整数へ変更でき、本番<code>roomSettings/countdownSeconds</code>は10で初期化・再読取り済み。</td></tr>
@@ -120,10 +120,12 @@
       <li><strong>✅ Spreadsheetを確認済み:</strong> 同じgameId/archiveIdの4ステージ・24結果、複合キー重複0を確認した。</li>
       <li><strong>✅ 再集計済み:</strong> 「保存済み戦績を再集計」が成功し、6人の集計とSkill式の一致を確認した。</li>
       <li><strong>✅ 旧履歴を復旧済み:</strong> GASにだけ残っていた対象ゲームをRTDBの5履歴系へ復旧し、既存データ不変を確認した。</li>
-      <li><strong>実環境smokeを行う:</strong> 非イベント時間の小規模確認ゲームで、ステージ結果の得点・StageSkill・持ち点・現在Skill、同日次ゲームへの参加継続、archive export/retryを確認する。</li>
+      <li><strong>✅ 公開投影v4へ移行済み:</strong> r15を公開し、schema v4、公開4ステージ、公開Player/Score各6件、公開履歴2ゲーム、raw uid/禁止field 0件をFirebase CLIで確認した。</li>
+      <li><strong>✅ 最終Rulesを公開済み:</strong> 更新compat版を経由してprivate親を閉じ、最終Rulesの再取得本文と正規化SHA-256がリポジトリ版に一致した。</li>
+      <li><strong>コード側P0/P1完了後に実環境smokeを行う:</strong> 非イベント時間の小規模確認ゲームで、ステージ結果の得点・StageSkill・持ち点・現在Skill、同日次ゲームへの参加継続、archive export/retryを確認する。</li>
     </ol>
 
-    <p>Skill backfill、戦績表示、Firebase Rules反映、r11公開、現在ゲームの4ステージ修復、Spreadsheetの冪等upsert/recalculate、旧履歴消失のRTDB復旧は完了しています。P1の残作業は、非イベントの小規模ゲームでの同日継続・前日以前の退室・StageSkill/現在Skill・archive retryの実環境smokeと、リリース記録です。</p>
+    <p>Skill backfill、戦績表示、Firebase Rules最終反映、公開投影v4、現在ゲームの4ステージ修復、Spreadsheetの冪等upsert/recalculate、旧履歴消失のRTDB復旧は完了しています。追加監査で見つかったP0競合修正とP1機能をコード側で完了してから、非イベントの小規模ゲームによる実環境smokeへ進みます。</p>
 
     <div class="notice">
       <strong>認証情報や共有リンクをこの文書やGitに貼り付けないでください。</strong>

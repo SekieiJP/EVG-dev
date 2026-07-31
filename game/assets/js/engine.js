@@ -18,6 +18,10 @@
   const DEFAULT_COUNTDOWN_SECONDS = 10;
   const MIN_COUNTDOWN_SECONDS = 1;
   const MAX_COUNTDOWN_SECONDS = 60;
+  const REVEAL_SECONDS_PER_FLOOR = 1.6;
+  const REVEAL_MIN_SECONDS = 12;
+  const REVEAL_SKIP_EMPTY_MIN_FLOORS = 30;
+  const REVEAL_EMPTY_FLOOR_FACTOR = 0.3;
 
   const DEFAULT_CONFIG = {
     schemaVersion: "1.0.0",
@@ -460,6 +464,115 @@
     result.recovered = recoveringMissingResult;
     next.updatedAt = resultAt;
     return { room: next, ok: true, result };
+  }
+
+  function getRevealSchedule(stage, result) {
+    const floorCount = Math.max(1, Number(stage && stage.params ? stage.params.N : 1) || 1);
+    const baseFloorSeconds = Math.max(REVEAL_MIN_SECONDS, floorCount * REVEAL_SECONDS_PER_FLOOR) / floorCount;
+    const durations = Array.from({ length: floorCount }, (_, index) => {
+      const floor = index + 1;
+      return shouldCompressRevealFloor(stage, result, floor)
+        ? baseFloorSeconds * REVEAL_EMPTY_FLOOR_FACTOR
+        : baseFloorSeconds;
+    });
+    const totalSeconds = durations.reduce((sum, seconds) => sum + seconds, 0);
+    return {
+      durations,
+      totalSeconds,
+      hasCompressedFloors: durations.some((seconds) => seconds < baseFloorSeconds),
+      floorAt(elapsedSeconds) {
+        if (!Number.isFinite(elapsedSeconds)) return floorCount;
+        let cursor = 0;
+        for (let index = 0; index < durations.length; index += 1) {
+          cursor += durations[index];
+          if (elapsedSeconds < cursor) return index + 1;
+        }
+        return floorCount;
+      },
+    };
+  }
+
+  function shouldCompressRevealFloor(stage, result, floor) {
+    if (!stage || !result || Number(stage.params && stage.params.N || 0) < REVEAL_SKIP_EMPTY_MIN_FLOORS) return false;
+    const step = (result.timeline || []).find((item) => Number(item.floor) === Number(floor));
+    if (hasRevealMovement(step, result, floor)) return false;
+    return !hasRevealScoreChange(stage, result, step, floor);
+  }
+
+  function hasRevealMovement(step, result, floor) {
+    if (!step) return false;
+    const blocked = Array.isArray(step.blocked)
+      ? step.blocked
+      : Object.keys(result.players || {}).filter((key) => {
+          const player = result.players[key] || {};
+          return player.ticket &&
+            !player.ticket.abstained &&
+            Number(player.ticket.boardFloor) === Number(floor) &&
+            ["invalid", "not_boarded"].includes(player.status);
+        });
+    return Boolean(
+      (step.boarding || []).length ||
+      (step.exiting || []).length ||
+      (step.forcedOff || []).length ||
+      blocked.length
+    );
+  }
+
+  function hasRevealScoreChange(stage, result, step, floor) {
+    if (step && Object.prototype.hasOwnProperty.call(step, "scoreChanged")) {
+      return Boolean(step.scoreChanged);
+    }
+    return Object.keys(result.players || {}).some((key) => {
+      return revealPlayerScoreDeltaAtFloor(stage, result, result.players[key] || {}, key, floor) !== 0;
+    });
+  }
+
+  function revealPlayerScoreDeltaAtFloor(stage, result, player, playerKey, floor) {
+    const ticket = player && player.ticket;
+    if (!ticket || ticket.abstained) return 0;
+    const targetFloor = Number(floor);
+    const playerId = String(player.uuid || playerKey || "");
+    const wholeRouteMultiplier = (stage.events || []).reduce((multiplier, event) => {
+      return event.type === "E3b_score_multiplier" && routeTouchesZone(ticket, event)
+        ? multiplier * Number(event.multiplier || 1)
+        : multiplier;
+    }, 1);
+    let delta = (player.successfulIntervals || []).reduce((sum, interval) => {
+      const intervalFloor = Number(interval.sameFloor ? interval.from : interval.to);
+      if (intervalFloor !== targetFloor) return sum;
+      const distance = interval.sameFloor ? 1 : Number(interval.to || 0) - Number(interval.from || 0);
+      let multiplier = wholeRouteMultiplier;
+      (stage.events || []).forEach((event) => {
+        if (event.type === "E3a_zone_multiplier" && intervalOverlapsZone(interval, event)) {
+          multiplier *= Number(event.multiplier || 1);
+        }
+        if (event.type === "E5_occupancy_multiplier" && Number(interval.occupancy || 0) >= Number(event.threshold || Infinity)) {
+          multiplier *= Number(event.multiplier || 1);
+        }
+      });
+      return sum + distance * Number(stage.params && stage.params.P || 0) * multiplier;
+    }, 0);
+    (stage.events || []).forEach((event) => {
+      if (event.type === "E4_special_floor" && Number(event.floor) === targetFloor) {
+        const floorStep = (result.timeline || []).find((item) => Number(item.floor) === targetFloor);
+        if (floorStep && (floorStep.passengersAfterCheck || []).map(String).includes(playerId)) {
+          delta += Number(event.bonus !== undefined ? event.bonus : event.score || 0);
+        }
+      }
+      if (event.type === "E6_view_bonus" && player.status === "success" && Number(ticket.exitFloor) === targetFloor) {
+        delta += Number(ticket.exitFloor || 0) * Number(event.bonusPerExitFloor !== undefined ? event.bonusPerExitFloor : event.multiplier || 0);
+      }
+      if (event.type === "E7_entry_fee" && Number(ticket.boardFloor) === targetFloor) {
+        delta += Number(event.score || 0);
+      }
+      if (event.type === "E8_completion_bonus" && player.status === "success" && Number(ticket.exitFloor) === targetFloor) {
+        delta += Number(event.score || 0);
+      }
+    });
+    if (targetFloor === Number(stage.params && stage.params.N || 0)) {
+      delta += (player.predictionBreakdown || []).reduce((sum, item) => sum + Number(item.score || 0), 0);
+    }
+    return roundScore(delta);
   }
 
   function calculateStage(stage, players, ticketsByUuid, calculatedAt) {
@@ -1118,6 +1231,10 @@
     DEFAULT_COUNTDOWN_SECONDS,
     MIN_COUNTDOWN_SECONDS,
     MAX_COUNTDOWN_SECONDS,
+    REVEAL_SECONDS_PER_FLOOR,
+    REVEAL_MIN_SECONDS,
+    REVEAL_SKIP_EMPTY_MIN_FLOORS,
+    REVEAL_EMPTY_FLOOR_FACTOR,
     createInitialRoom,
     createNextGameRoom,
     archiveCurrentGame,
@@ -1133,6 +1250,7 @@
     getPredictionEvents,
     calculateStage,
     tallyCurrentStage,
+    getRevealSchedule,
     applyStageSkills,
     calculateCurrentSkill,
     skillStageApplicationId,

@@ -565,8 +565,22 @@
           <li><strong>Skill・履歴監査:</strong> 復旧ゲームは有限StageSkill 29件、root player 6人全員非ゼロSkill、履歴長<code>[4,5,5,5,5,5]</code>を維持した。現在ゲームは有限StageSkill 24件、現参加者root 6人全員非ゼロSkill、各4件履歴である。公開設定、公開result、公開player/score/presence、公開完了サマリ/詳細を既知root uidと禁止field名で再帰監査し、raw uid一致0件、ticket/予想/内訳/StageSkill履歴等の禁止key 0件を確認した。</li>
           <li><strong>自己修復:</strong> schema v4だけを完了markerとして即returnすると、公開枝が後から欠損・不完全になった場合に自己修復できない。r15ではHost再開時にprivate results/完了詳細からcanonical公開値を生成し、欠損・差分のある公開childだけを冪等upsertする。正常な旧ゲーム、meta/public/roomVersion、operations、root player、playerStats、historyPlayers、Skill履歴は更新しない。空roomは追加読取り・書込みを行わない。</li>
           <li><strong>Rules hardening:</strong> 最終Rulesの<code>public</code>、<code>completedGameSummaries</code>、<code>completedGamePublicDetails</code>をserializerの全階層field allowlistへ変更し、型、数値index、profileId、gameId/stageId key一致、<code>$other=false</code>を検証する。Hostであってもuuid、ticket、予想、内訳、StageSkill/history、未知field、collectionのscalar偽装を書けないRules emulator回帰を追加した。更新版compat Rulesは最終Rulesから再生成し、旧client用の差分7 leafだけを維持する。</li>
-          <li><strong>検証:</strong> 既存Hostセッションの起動順、空room非初期化、欠損3ステージ＋不完全な現ステージ、6種の公開枝、現ゲームHistory順位、旧ゲーム保全、root/room Skill履歴不変、2回目無書込みをUnitへ追加した。Rules emulatorを含むCI成功後に更新版compat RulesをCLI deployし、r15 backfillを確認してからprivate親を閉じる最終Rulesへ切り替える。</li>
+          <li><strong>検証:</strong> 既存Hostセッションの起動順、空room非初期化、欠損3ステージ＋不完全な現ステージ、6種の公開枝、現ゲームHistory順位、旧ゲーム保全、root/room Skill履歴不変、2回目無書込みをUnitへ追加した。更新版RulesはCIのJava 21 emulatorを含む全jobに成功した。</li>
+          <li><strong>最終Rules公開:</strong> r15のPages run <code>30651833759</code>とVerify run <code>30651833515</code>成功後、更新版compat RulesをFirebase CLIでreleaseし、再取得本文が正規化SHA-256 <code>63d2efe7a7cc111b98a40f85763d427349cb983990a02bf18862a623ed3e893f</code>で完全一致することを確認した。続いてprivate親を閉じる最終Rulesをreleaseし、再取得本文がリポジトリ版と正規化SHA-256 <code>a7c2b728a9744dc3695f96e1e38f1d9c6367d0ed3b4224315cce3446076a62d9</code>で完全一致した。Firebase Console/Chromeは再認証後の作業には使用していない。</li>
+          <li><strong>最終Rules後のCLI確認:</strong> schema v4、publicResults 4ステージ、publicPlayers/publicScores各6件、公開完了詳細2ゲーム（5・4ステージ、各ステージ6順位行）、room stats 6人全員非ゼロSkill、復旧対象root 6人全員非ゼロSkill・履歴長<code>[4,5,5,5,5,5]</code>を再確認した。Rules deployによるデータ変化はない。</li>
           <li><strong>GAS境界:</strong> <code>gas/src/Code.gs</code>は変更していない。Spreadsheetの都度バックアップおよびGASの運用者作業は不要である。</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>2026-08-01 P0 遅着ticketの確定再集計 r16</h2>
+        <ul>
+          <li><strong>障害条件:</strong> Host画面が集計previewを作った後、結果commit用にRTDB roomを再読込みするまでに、締切内のPlayer ticketが到着する場合がある。従来は最新ticket枝を読み直しても画面から送られた古いresultを採用したため、そのticketが結果・得点・StageSkillへ反映されない競合が残っていた。</li>
+          <li><strong>デザインの決定:</strong> 画面のpreview resultを権威値として扱わず、adapterがcommand受信後に読んだ最新private player/ticketと補正済みサーバ時刻から同じステージを再集計する。そのcanonical resultから得点、StageSkill、現在Skill、公開結果を作り、既存の1回のroot multi-location updateへ保存する。</li>
+          <li><strong>演出時刻の整合:</strong> ticketの乗降階が変わると、30階以上で使う空階圧縮scheduleの長さも変わり得る。reveal schedule計算をUIから純粋なEngine関数へ移し、adapterも最新resultのdurationと同じ<code>animationStartedAt</code>から<code>revealEndsAt</code>を確定する。結果だけ最新、終了時刻だけ古いpreviewという混在を許さない。</li>
+          <li><strong>トレードオフ:</strong> Host画面側のpreviewは操作開始と即時表示のため残すが、保存値の計算には使わない。追加のネットワーク購読やpollingは増やさず、すでに行っているmutation用room読取りの値を利用する。Sparkでは信頼済みHostブラウザ内の再計算であり、Rulesが計算式を独立再検証するわけではない。</li>
+          <li><strong>検証:</strong> 40階ステージでpreview後にticketを3階から40階へ更新し、最新ticket、結果、score、StageSkill、root/room Skill、最新result由来の<code>revealEndsAt</code>が1回のatomic updateに入る回帰テストを追加した。Unit/staticと50人×20ステージ負荷モデルは成功し、アセットversionを<code>260801-p0p1r16</code>へ更新した。</li>
+          <li><strong>GAS・Rules境界:</strong> <code>gas/src/Code.gs</code>とFirebase Rulesは変更していないため、この修正単体の運用者作業やRules再deployは不要である。</li>
         </ul>
       </section>
 

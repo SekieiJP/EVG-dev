@@ -4,6 +4,7 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const appSource = fs.readFileSync(path.join(root, "game/assets/js/app.js"), "utf8");
+const engineSource = fs.readFileSync(path.join(root, "game/assets/js/engine.js"), "utf8");
 const cssSource = fs.readFileSync(path.join(root, "game/assets/css/styles.css"), "utf8");
 const configSource = fs.readFileSync(path.join(root, "game/assets/js/config.js"), "utf8");
 const indexSource = fs.readFileSync(path.join(root, "game/index.html"), "utf8");
@@ -46,10 +47,11 @@ run("screen reveal score boxes occupy the side panel", () => {
 });
 
 run("long reveal animation compresses empty floors", () => {
-  assert.strictEqual(appSource.includes("const REVEAL_SKIP_EMPTY_MIN_FLOORS = 30"), true);
-  assert.strictEqual(appSource.includes("const REVEAL_EMPTY_FLOOR_FACTOR = 0.3"), true);
-  assert.strictEqual(appSource.includes("function shouldCompressRevealFloor"), true);
-  assert.strictEqual(appSource.includes("function hasRevealBonusAtFloor"), true);
+  assert.strictEqual(engineSource.includes("const REVEAL_SKIP_EMPTY_MIN_FLOORS = 30"), true);
+  assert.strictEqual(engineSource.includes("const REVEAL_EMPTY_FLOOR_FACTOR = 0.3"), true);
+  assert.strictEqual(engineSource.includes("function shouldCompressRevealFloor"), true);
+  const revealSchedule = section(appSource, "function getRevealSchedule", "function isRevealComplete");
+  assert.strictEqual(revealSchedule.includes("Engine.getRevealSchedule(stage, result)"), true);
 });
 
 run("reveal camera position is driven by computed schedule", () => {

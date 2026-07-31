@@ -352,17 +352,19 @@ Rules validation
 
 ### Result commit
 
-結果発表開始時はHostブラウザがticketを読み、決定的な集計関数で結果を計算する。
+結果発表開始時はHostブラウザがcommand送信前にpreviewを計算できるが、そのpreview resultは権威値として採用しない。adapterはcommand受信後にmutation用のprivate player/ticketをRTDBから再読込みし、補正済みサーバ時刻と決定的な集計関数でcanonical resultを再計算する。
 
-書き込みは、DBルートに対する**1回のmulti-location `update()`**で `public`、`results/{stageId}`、全 `scores/{uid}`、全 `playerStats/{uid}`、root `players/{uid}`、公開履歴のprofileId子、`operations` を同時に確定する。順次 `set()`、複数回の `update()`、phase先行確定、履歴親の全置換は使わない。
+同じcanonical resultからscore、StageSkill、現在Skill、公開投影、空階圧縮を含むreveal schedule、`animationStartedAt` / `revealEndsAt` を生成する。書き込みは、DBルートに対する**1回のmulti-location `update()`**で `public`、`results/{stageId}`、全 `scores/{uid}`、全 `playerStats/{uid}`、root `players/{uid}`、公開履歴のprofileId子、`operations` を同時に確定する。順次 `set()`、複数回の `update()`、phase先行確定、履歴親の全置換は使わない。これによりHost preview作成後かつ締切内に到着したticketを取りこぼさず、結果と演出終了時刻が異なるsnapshotに由来する状態も作らない。
 
-このcommitでは、StageSkill履歴の追記と現在Skill（全履歴の上位5件、最高値を含む）の更新も同じpayloadに含める。二重集計を防ぐため、Rulesのphase/version CASと `results/{stageId}` の新規作成検証で、古いHost操作または既存結果への再commitをupdate全体として拒否する。Sparkでは完全なサーバ再計算ができないため、Blaze移行時にCloud Functionsで再計算検証を追加する。
+このcommitでは、StageSkill履歴の追記と現在Skill（全履歴の上位5件、最高値を含む）の更新も同じpayloadに含める。二重集計を防ぐため、Rulesのphase/version CASと `results/{stageId}` の新規作成検証で、古いHost操作または既存結果への再commitをupdate全体として拒否する。Sparkでは信頼済みHostブラウザ内の再計算であり、Rulesが計算式そのものを独立検証するわけではない。Blaze移行時はCloud Functionsへ同じ再計算と検証を移せる。
 
 StageSkillの適用済みキーはstageId単独ではなく `JSON.stringify([gameId, stageId])` とする。同じconfig/stageIdを別ゲームで再利用しても、新ゲームのSkillを誤って既適用扱いしない。旧plain stageId markerは由来ゲームを一意に証明できないため値を保持するが、新規判定には使わず、推測で特定ゲームへスコープしない。
 
 既存データ移行ではroot `players/{uid}` の非空履歴をcanonicalとして保持する。root履歴が空の場合だけ、`results` 全件と `completedGameDetails` を読み、有限なStageSkill（0を含む）をゲーム単位ステージキーで重複排除して復元する。rootが空でもroom側に由来不明の非空履歴と旧plain markerがある場合、StageSkillの数値一致から由来を推測せず、監査エラーとして移行を中止する。復元は `public.roomVersion + 1` を含む単一multi-location updateで、root player、room `playerStats`、公開Skill index、完了履歴を同時に揃える。現ゲームと完了詳細で同じキー・同じuidのStageSkillが食い違う場合も移行を中止し、上書きしない。
 
-移行成功時は `meta.schemaVersion` を `firebase-rtdb-v3-skill-history` へ更新する。以後のHost認証ではこのversionを確認してbackfillを省略し、認証のたびにroomVersionや履歴を書き直さない。multi-location updateが拒否された場合はschemaVersionも更新されないため、次回認証で安全に再試行できる。
+Skill履歴と公開投影の初回移行成功時は `meta.schemaVersion` を `firebase-rtdb-v4-public-projection` へ更新する。旧schemaからの移行は、root/room Skill、公開投影、履歴修復、schema markerを同じmulti-location updateで確定する。updateが拒否された場合はschemaVersionも更新されないため、次回Host認証で安全に再試行できる。
+
+schema v4以後の有効なHostセッション再開では、private `results` / `completedGameDetails` と現在の公開枝を読み、canonical公開投影との差分だけを冪等upsertする。公開枝が正常なら書込みは0件とし、欠損・不完全な場合も `meta`、`public`、roomVersion、root player、`playerStats`、`historyPlayers`、Skill履歴は変更しない。schema markerだけを完全性の根拠にして即returnしてはならない。
 
 通常運用の購読は引き続き `results/{currentStageId}` に限定する。移行時だけはallowlist済みHostに `results` 親の一回読取りを許可し、Player/Screenが親を一括取得することはRulesで拒否する。rootに非空canonical履歴があるプレイヤーはroot profile自体を書き直さず、room `playerStats` と公開indexだけを同期する。
 
