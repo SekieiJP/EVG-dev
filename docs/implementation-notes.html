@@ -519,6 +519,22 @@
       </section>
 
       <section>
+        <h2>2026-08-01 P0再監査: 競合防止と公開投影の基礎</h2>
+        <ul>
+          <li><strong>監査で判明した仕様違反:</strong> Hostの結果確定が<code>scores</code>/<code>playerStats</code>親、ステージ開始が<code>players</code>/<code>playerStats</code>親を古いsnapshotから全置換していた。Playerのjoin/renameは<code>roomVersion</code>を増やさないため、Host読取り後に到着した別参加者をCASで検出できず消す競合があった。</li>
+          <li><strong>競合修正:</strong> Host更新をuid子・変更leafだけのmulti-location updateへ変更した。結果確定は当該ステージ結果と変化した得点/Skillだけ、ステージ開始は既存uidの<code>name</code>/<code>pendingName</code>だけを書く。Playerのticketとpresence、root playerとroom profileもそれぞれ1回のroot updateへまとめた。</li>
+          <li><strong>回帰検証:</strong> Host読取り後に別Playerのjoinと既存Playerのrenameが到着してから結果確定またはステージ開始しても、同時更新を削除・上書きせず親パスを書かないUnitを追加した。新規root playerでは現行Rulesが書込み前rootを参照するためroom側の冗長statsを同一更新から外し、値0の新規Playerは既存の読取りfallbackで扱う。</li>
+          <li><strong>公開境界の監査:</strong> 認証済みPlayerが<code>players</code>、<code>ticketPresence/{stageId}</code>、<code>results/{stageId}</code>、<code>scores</code>を直接読めるため、購読を小さい子パスにしてもraw uid、他人のticket/予想/内訳/StageSkillへ直接到達できた。<code>operations</code>の読取りをallowlist済みHostへ限定し、未使用のroot <code>archives/{archiveId}</code>は完全に閉じた。</li>
+          <li><strong>公開投影の設計:</strong> private正本とは別に<code>publicConfig</code>、<code>publicPlayers</code>、<code>publicTicketPresence</code>、<code>publicResults</code>、<code>publicScores</code>を生成する純粋なserializerを追加した。公開結果はopaque <code>profileId</code>、表示名、乗降timeline、階別得点checkpoint、順位だけを持ち、raw uid、ticket、予想回答/正解、内訳、StageSkillを含めない。</li>
+          <li><strong>予想の正解秘匿:</strong> <code>publicConfig</code>はevent type別allowlistで生成し、Player入力に必要な質問・形式・選択肢・得点設定だけを残す。固定<code>correctAnswer</code>、任意未知field、Host設定は公開しない。</li>
+          <li><strong>トレードオフ:</strong> Screenの20fps再生に必要な全階の公開演出データは結果確定時に一度配信するため、将来階の会場公開予定情報をDeveloper Toolsで先読みすること自体は防がない。private ticket、回答、内訳、Skill、raw uidを配信しないことを本P0の認可境界とする。</li>
+          <li><strong>段階移行:</strong> serializerはまだ本番購読へ接続していない。加算Rules、現room投影backfill、新client公開、private親を閉じる最終Rulesの順で切り替え、旧Screenを先に壊したりprivate結果だけを確定する状態を作らない。</li>
+          <li><strong>残る競合:</strong> 同じuidの<code>pendingName</code>をHost読取り後に再変更する競合と、次ゲーム切替で除外予定の同じuidが同時再参加する競合には追加CAS/在室世代が必要である。別uidの同時joinとHostが触らないrenameの消失は今回解消した。</li>
+          <li><strong>検証:</strong> 全Unit/static、公開5枝の再帰的禁止キー・既知raw uid不在、private最終得点と公開checkpoint一致、<code>git diff --check</code>を通過した。Rules emulatorはCIのJava 21環境で実行する。</li>
+        </ul>
+      </section>
+
+      <section>
         <h2>未解決の質問</h2>
         <ul>
           <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>

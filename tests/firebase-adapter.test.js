@@ -31,6 +31,22 @@ function nestedValue(source, pathValue) {
     .reduce((value, key) => value && value[key], source);
 }
 
+function applyMultiLocationUpdates(source, updates) {
+  const next = Engine.deepClone(source || {});
+  Object.keys(updates || {}).forEach((pathValue) => {
+    const parts = String(pathValue).split("/").filter(Boolean);
+    const leaf = parts.pop();
+    let cursor = next;
+    parts.forEach((part) => {
+      cursor[part] = cursor[part] && typeof cursor[part] === "object" ? cursor[part] : {};
+      cursor = cursor[part];
+    });
+    if (updates[pathValue] === null) delete cursor[leaf];
+    else cursor[leaf] = Engine.deepClone(updates[pathValue]);
+  });
+  return next;
+}
+
 function productionLikeRestHarness(room, allResults, options = {}) {
   const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(room);
   nodes.results = Engine.deepClone(allResults || {});
@@ -330,6 +346,106 @@ run("firebase root player node is the canonical saved player record", () => {
   assert.strictEqual(node.roomId, "unit-room");
 });
 
+runAsync("firebase ticket and presence are written in one root multi-location update", async () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room.phase = Engine.PHASES.VOTING;
+  const calls = [];
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "player",
+    getUuid: () => "alice",
+  });
+  adapter.auth = { uid: "alice" };
+  adapter.firebaseDb = {};
+  adapter.readRestRoom = async () => Engine.deepClone(room);
+  adapter.serverNowIso = () => "2026-07-29T00:00:00.000Z";
+  adapter.sdk = {
+    ref: (_db, pathValue) => pathValue,
+    update: async (pathValue, updates) => calls.push({ pathValue, updates }),
+    set: async () => {
+      throw new Error("atomic Player update must not fall back to set");
+    },
+  };
+
+  const response = await adapter.postRestPlayer("/api/ticket/submit", {
+    uuid: "alice",
+    ticket: { boardFloor: 1, exitFloor: 3, predictions: {} },
+  });
+
+  assert.strictEqual(response.ok, true, response.error);
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].pathValue, "/");
+  assert.ok(calls[0].updates["rooms/unit-room/tickets/stage-001/alice"]);
+  assert.ok(calls[0].updates["rooms/unit-room/ticketPresence/stage-001/alice"]);
+});
+
+runAsync("firebase profile writes root and room nodes atomically without invalid new-player stats", async () => {
+  const makeAdapter = (room, masterPlayer, uid, calls) => {
+    const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+      config: { FIREBASE_ROOM_ID: "unit-room" },
+      engine: Engine,
+      getRole: () => "player",
+      getUuid: () => uid,
+    });
+    adapter.auth = { uid };
+    adapter.firebaseDb = {};
+    adapter.readRestRoom = async () => Engine.deepClone(room);
+    adapter.readRootPlayer = async () => masterPlayer && Engine.deepClone(masterPlayer);
+    adapter.sdk = {
+      ref: (_db, pathValue) => pathValue,
+      update: async (pathValue, updates) => calls.push({ pathValue, updates }),
+      set: async () => {
+        throw new Error("atomic Player update must not fall back to set");
+      },
+    };
+    return adapter;
+  };
+
+  let existingRoom = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  existingRoom = Engine.registerPlayer(existingRoom, "Alice", "alice").room;
+  existingRoom.players[0].skill = 42;
+  existingRoom.players[0].stageSkillHistory = [42];
+  existingRoom.players[0].appliedSkillStageIds = ["game-stage"];
+  const masterPlayer = {
+    name: "Alice",
+    currentSkill: 42,
+    stageSkillHistoryJson: "[42]",
+    appliedSkillStageIdsJson: "[\"game-stage\"]",
+    joinedAt: existingRoom.players[0].joinedAt,
+    lastSeenAt: existingRoom.players[0].lastSeenAt,
+    updatedAt: existingRoom.players[0].lastSeenAt,
+    roomId: "unit-room",
+  };
+  const existingCalls = [];
+  const existingAdapter = makeAdapter(existingRoom, masterPlayer, "alice", existingCalls);
+  const renamed = await existingAdapter.postRestPlayer("/api/player/rename", {
+    uuid: "alice",
+    name: "Alice Renamed",
+  });
+
+  assert.strictEqual(renamed.ok, true, renamed.error);
+  assert.strictEqual(existingCalls.length, 1);
+  assert.strictEqual(existingCalls[0].pathValue, "/");
+  assert.strictEqual(existingCalls[0].updates["players/alice"].name, "Alice Renamed");
+  assert.strictEqual(existingCalls[0].updates["rooms/unit-room/players/alice"].name, "Alice Renamed");
+  assert.strictEqual(existingCalls[0].updates["rooms/unit-room/playerStats/alice"].currentSkill, 42);
+
+  const newCalls = [];
+  const newAdapter = makeAdapter(Engine.createInitialRoom(Engine.DEFAULT_CONFIG), null, "new-player", newCalls);
+  const joined = await newAdapter.postRestPlayer("/api/player/join", {
+    uuid: "new-player",
+    name: "New Player",
+  });
+
+  assert.strictEqual(joined.ok, true, joined.error);
+  assert.strictEqual(newCalls.length, 1);
+  assert.strictEqual(newCalls[0].updates["players/new-player"].currentSkill, 0);
+  assert.strictEqual(newCalls[0].updates["rooms/unit-room/players/new-player"].name, "New Player");
+  assert.strictEqual(newCalls[0].updates["rooms/unit-room/playerStats/new-player"], undefined);
+});
+
 run("firebase history detail keys preserve valid Unicode game ids", () => {
   assert.strictEqual(
     EVGFirebaseAdapter.firebaseExistingKey("清新本部杯・2026初夏-20260612"),
@@ -543,6 +659,9 @@ runAsync("firebase room rewrite uses atomic update and avoids rules-closed volat
   assert.strictEqual(updateCalls.length, 1);
   assert.strictEqual(updateCalls[0][0], "/rooms/unit-room");
   const paths = Object.keys(updateCalls[0][1]);
+  assert.strictEqual(paths.includes("players"), false);
+  assert.strictEqual(paths.includes("playerStats"), false);
+  assert.strictEqual(paths.includes("scores"), false);
   assert.strictEqual(paths.includes("tickets"), false);
   assert.strictEqual(paths.includes("ticketPresence"), false);
   assert.strictEqual(paths.includes("results"), false);
@@ -689,6 +808,9 @@ runAsync("firebase next game writes only the newly archived game and profile chi
   });
 
   const paths = Object.keys(updates);
+  assert.strictEqual(paths.includes("players"), false);
+  assert.strictEqual(paths.includes("playerStats"), false);
+  assert.strictEqual(paths.includes("scores"), false);
   [
     "completedGameSummaries",
     "completedGamePublicDetails",
@@ -1373,12 +1495,107 @@ run("firebase host transition update is atomic across public results skill and p
   const updates = EVGFirebaseAdapter.hostAtomicUpdates("/api/host/commit-result", current, next, "unit-room", Engine);
   assert.strictEqual(updates["rooms/unit-room/public"].roomVersion, 5);
   assert.ok(updates["rooms/unit-room/results/stage-001"]);
-  assert.ok(updates["rooms/unit-room/scores"]);
-  assert.ok(updates["rooms/unit-room/playerStats"]);
+  assert.strictEqual(updates["rooms/unit-room/scores"], undefined);
+  assert.strictEqual(updates["rooms/unit-room/playerStats"], undefined);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(updates, "rooms/unit-room/scores/alice/total"), true);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(updates, "rooms/unit-room/playerStats/alice/currentSkill"), true);
   assert.strictEqual(updates["rooms/unit-room/historyPlayers"], undefined);
   assert.strictEqual(updates["rooms/unit-room/historyPlayers/p_historical"].currentSkill, 88);
   assert.ok(updates[`rooms/unit-room/historyPlayers/${EVGFirebaseAdapter.publicProfileId("alice")}`]);
-  assert.strictEqual(updates["players/alice"].roomId, "unit-room");
+  assert.strictEqual(updates["players/alice"], undefined);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(updates, "players/alice/currentSkill"), true);
+});
+
+run("firebase result commit preserves a player join and rename that land after the Host read", () => {
+  let current = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  current = Engine.registerPlayer(current, "Alice", "alice").room;
+  current = Engine.registerPlayer(current, "Bob", "bob").room;
+  const stage = Engine.getCurrentStage(current);
+  current.tickets[stage.stageId] = {
+    alice: { uuid: "alice", boardFloor: 1, exitFloor: 3, predictions: {} },
+    bob: { uuid: "bob", boardFloor: 1, exitFloor: 4, predictions: {} },
+  };
+  current.phase = Engine.PHASES.COUNTDOWN;
+  current.roomVersion = 4;
+  const next = Engine.tallyCurrentStage(current, "2026-07-29T00:00:00.000Z").room;
+  next.roomVersion = 5;
+  const updates = EVGFirebaseAdapter.hostAtomicUpdates(
+    "/api/host/commit-result",
+    current,
+    next,
+    "unit-room",
+    Engine
+  );
+
+  let concurrentRoom = Engine.registerPlayer(current, "Charlie", "charlie").room;
+  concurrentRoom = Engine.renamePlayer(concurrentRoom, "alice", "Alice Concurrent").room;
+  const serverState = {
+    rooms: { "unit-room": EVGFirebaseAdapter.roomToFirebaseNodes(concurrentRoom) },
+    players: {
+      alice: EVGFirebaseAdapter.rootPlayerNode(concurrentRoom.players.find((player) => player.uuid === "alice"), "unit-room"),
+      bob: EVGFirebaseAdapter.rootPlayerNode(concurrentRoom.players.find((player) => player.uuid === "bob"), "unit-room"),
+      charlie: EVGFirebaseAdapter.rootPlayerNode(concurrentRoom.players.find((player) => player.uuid === "charlie"), "unit-room"),
+    },
+  };
+  serverState.players.alice.name = "Alice Root Concurrent";
+  const committed = applyMultiLocationUpdates(serverState, updates);
+
+  assert.strictEqual(updates["rooms/unit-room/players"], undefined);
+  assert.strictEqual(updates["rooms/unit-room/playerStats"], undefined);
+  assert.strictEqual(updates["rooms/unit-room/scores"], undefined);
+  assert.strictEqual(updates["players/alice"], undefined);
+  assert.strictEqual(committed.rooms["unit-room"].players.charlie.name, "Charlie");
+  assert.strictEqual(committed.rooms["unit-room"].scores.charlie.total, 0);
+  assert.strictEqual(committed.rooms["unit-room"].playerStats.charlie.currentSkill, 0);
+  assert.strictEqual(committed.rooms["unit-room"].players.alice.pendingName, "Alice Concurrent");
+  assert.strictEqual(committed.players.alice.name, "Alice Root Concurrent");
+  assert.strictEqual(committed.rooms["unit-room"].playerStats.alice.currentSkill, next.players[0].skill);
+});
+
+run("firebase stage start changes only pending-name leaves and preserves concurrent roster writes", () => {
+  let current = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  current = Engine.registerPlayer(current, "Alice", "alice").room;
+  current = Engine.registerPlayer(current, "Bob", "bob").room;
+  current.players.find((player) => player.uuid === "alice").pendingName = "Alice Staged";
+  current.roomVersion = 9;
+  const advanced = Engine.advancePhase(
+    current,
+    "start-stage",
+    "host",
+    "2026-07-29T00:00:00.000Z"
+  );
+  assert.strictEqual(advanced.ok, true, advanced.error);
+  advanced.room.roomVersion = 10;
+  const updates = EVGFirebaseAdapter.hostAtomicUpdates(
+    "/api/host/start-stage",
+    current,
+    advanced.room,
+    "unit-room",
+    Engine
+  );
+
+  let concurrentRoom = Engine.registerPlayer(current, "Charlie", "charlie").room;
+  concurrentRoom = Engine.renamePlayer(concurrentRoom, "bob", "Bob Concurrent").room;
+  const serverState = {
+    rooms: { "unit-room": EVGFirebaseAdapter.roomToFirebaseNodes(concurrentRoom) },
+    players: {},
+  };
+  concurrentRoom.players.forEach((player) => {
+    serverState.players[player.uuid] = EVGFirebaseAdapter.rootPlayerNode(player, "unit-room");
+  });
+  const committed = applyMultiLocationUpdates(serverState, updates);
+
+  assert.strictEqual(updates["rooms/unit-room/players"], undefined);
+  assert.strictEqual(updates["rooms/unit-room/playerStats"], undefined);
+  assert.strictEqual(updates["players/alice"], undefined);
+  assert.strictEqual(updates["rooms/unit-room/players/alice/name"], "Alice Staged");
+  assert.strictEqual(updates["rooms/unit-room/players/alice/pendingName"], null);
+  assert.strictEqual(updates["players/alice/name"], "Alice Staged");
+  assert.strictEqual(committed.rooms["unit-room"].players.alice.name, "Alice Staged");
+  assert.strictEqual(committed.rooms["unit-room"].players.alice.pendingName, undefined);
+  assert.strictEqual(committed.rooms["unit-room"].players.bob.name, "Bob Concurrent");
+  assert.strictEqual(committed.players.bob.name, "Bob Concurrent");
+  assert.strictEqual(committed.rooms["unit-room"].players.charlie.name, "Charlie");
 });
 
 run("firebase final transition atomically persists completed history and queued archive", () => {

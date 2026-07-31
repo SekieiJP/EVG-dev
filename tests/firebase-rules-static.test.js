@@ -98,6 +98,15 @@ run("firebase next-game config catalog is host scoped", () => {
   assert.match(roomRules.nextGameConfigs[".write"], /roles'\)\.child\('hosts/);
 });
 
+run("operation logs are Host-only and legacy root archives are closed", () => {
+  assert.match(roomRules.operations[".read"], /roles'\)\.child\('hosts/);
+  assert.match(roomRules.operations[".write"], /roles'\)\.child\('hosts/);
+  assert.strictEqual(rules.archives.$archiveId[".read"], false);
+  assert.strictEqual(rules.archives.$archiveId[".write"], false);
+  assert.match(roomRules.archive[".read"], /roles'\)\.child\('hosts/);
+  assert.match(roomRules.archive[".write"], /roles'\)\.child\('hosts/);
+});
+
 run("room settings validate countdown and separated audio controls", () => {
   const settings = roomRules.roomSettings;
   assert.match(settings.countdownSeconds[".validate"], /newData\.isNumber/);

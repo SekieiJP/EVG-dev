@@ -167,7 +167,7 @@
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true"
         },
         "operations": {
-          ".read": "auth != null",
+          ".read": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
           "$operationId": {
             ".validate": "newData.hasChildren(['at', 'action']) && (newData.child('actor').isString() || newData.child('actorUid').isString())"
@@ -213,7 +213,7 @@
     },
     "archives": {
       "$archiveId": {
-        ".read": "auth != null",
+        ".read": false,
         ".write": false
       }
     }

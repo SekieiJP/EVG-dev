@@ -576,13 +576,14 @@
       }
       const playerPayload = Object.assign({}, payload, { uuid: this.auth.uid });
       let result = null;
+      let masterPlayer = null;
       if (path === "/api/player/restore") {
-        const masterPlayer = await this.readRootPlayer(this.auth.uid);
+        masterPlayer = await this.readRootPlayer(this.auth.uid);
         result = restorePlayerFromMaster(this.engine, room, this.auth.uid, masterPlayer);
       } else {
         result = this.applyMutation(path, playerPayload, room);
-        if (result.ok && path === "/api/player/join") {
-          const masterPlayer = await this.readRootPlayer(this.auth.uid);
+        if (result.ok && ["/api/player/join", "/api/player/rename"].includes(path)) {
+          masterPlayer = await this.readRootPlayer(this.auth.uid);
           if (masterPlayer) {
             result = mergeMasterStatsIntoResult(this.engine, result, this.auth.uid, masterPlayer);
           }
@@ -591,10 +592,14 @@
       if (!result.ok) return result;
       const updates = playerUpdates(path, result.room, this.auth.uid);
       if (!Object.keys(updates).length) return { ok: false, code: "not_supported", error: "この操作はFirebase Player更新に未対応です。" };
-      if (["/api/player/join", "/api/player/restore", "/api/player/rename"].includes(path) && result.player) {
-        await this.writeRootPlayer(result.player);
+      const writesProfile = ["/api/player/join", "/api/player/restore", "/api/player/rename"].includes(path) && result.player;
+      if (writesProfile && !masterPlayer) {
+        // playerStats self-write Rules refer to the pre-update root player, so a new
+        // player cannot create that redundant mirror in this same atomic update. The
+        // canonical root record and public room profile are still created together.
+        delete updates[`playerStats/${this.auth.uid}`];
       }
-      await this.writeRestChildUpdates(updates);
+      await this.writeRestPlayerAtomicUpdates(updates, writesProfile ? result.player : null);
       return Object.assign({}, result, { room: this.publicRoom(result.room, playerPayload) });
     }
 
@@ -1073,10 +1078,17 @@
     async writeRestRoomChildren(room, options = {}) {
       room.roomId = this.roomId;
       const nodes = roomToFirebaseNodes(room);
+      const previousNodes = options.previousRoom ? roomToFirebaseNodes(options.previousRoom) : null;
       delete nodes.roles;
       const writes = [];
       const publicNode = nodes.public;
+      const playerNodes = nodes.players;
+      const playerStatsNodes = nodes.playerStats;
+      const scoreNodes = nodes.scores;
       delete nodes.public;
+      delete nodes.players;
+      delete nodes.playerStats;
+      delete nodes.scores;
       delete nodes.tickets;
       delete nodes.ticketPresence;
       delete nodes.results;
@@ -1090,6 +1102,18 @@
       }
       Object.keys(nodes).forEach((key) => {
         writes.push([key, emptyObjectToNull(nodes[key])]);
+      });
+      appendCollectionChildDiff(writes, "players", previousNodes && previousNodes.players, playerNodes, {
+        removeMissing: Boolean(previousNodes),
+        leafKeys: ["name", "connected", "joinedAt", "lastSeenAt", "pendingName"],
+      });
+      appendCollectionChildDiff(writes, "playerStats", previousNodes && previousNodes.playerStats, playerStatsNodes, {
+        removeMissing: Boolean(previousNodes),
+        leafKeys: ["currentSkill", "stageSkillHistoryJson", "appliedSkillStageIdsJson", "updatedAt"],
+      });
+      appendCollectionChildDiff(writes, "scores", previousNodes && previousNodes.scores, scoreNodes, {
+        removeMissing: Boolean(previousNodes),
+        leafKeys: ["total", "updatedAt"],
       });
       const historyUpdates = historyChildUpdates(room, {
         gameIds: options.historyGameIds || [],
@@ -1106,9 +1130,13 @@
           return acc;
         }, {});
         if (rootUpdate) {
-          (room.players || []).filter((player) => player && player.uuid).forEach((player) => {
-            updates[`players/${player.uuid}`] = rootPlayerNode(player, this.roomId);
-          });
+          appendRootPlayerDiff(
+            updates,
+            options.previousRoom && options.previousRoom.players,
+            room.players,
+            this.roomId,
+            room.updatedAt
+          );
         }
         await this.sdk.update(this.sdk.ref(this.firebaseDb, rootUpdate ? "/" : `/rooms/${this.roomId}`), updates);
         return { ok: true };
@@ -1123,6 +1151,22 @@
       await Promise.all(Object.keys(updates).map((path) => {
         return this.sdk.set(this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/${path}`), emptyObjectToNull(updates[path]));
       }));
+    }
+
+    async writeRestPlayerAtomicUpdates(updates, player) {
+      if (this.sdk.update) {
+        const rootUpdates = Object.keys(updates || {}).reduce((acc, path) => {
+          acc[`rooms/${this.roomId}/${path}`] = emptyObjectToNull(updates[path]);
+          return acc;
+        }, {});
+        if (player && player.uuid) {
+          rootUpdates[`players/${player.uuid}`] = rootPlayerNode(player, this.roomId);
+        }
+        await this.sdk.update(this.sdk.ref(this.firebaseDb, "/"), rootUpdates);
+        return;
+      }
+      if (player && player.uuid) await this.writeRootPlayer(player);
+      await this.writeRestChildUpdates(updates || {});
     }
 
     async readRootPlayer(uid) {
@@ -1643,6 +1687,7 @@
 
   function hostAtomicUpdates(path, currentRoom, nextRoom, roomId, engine) {
     const updates = {};
+    const currentNodes = roomToFirebaseNodes(currentRoom);
     const nodes = roomToFirebaseNodes(nextRoom);
     const roomPath = (childPath) => `rooms/${roomId}/${childPath}`;
     updates[roomPath("public")] = nodes.public;
@@ -1653,13 +1698,38 @@
       const stage = engine.getCurrentStage(currentRoom);
       const stageId = stage && stage.stageId;
       if (stageId) updates[roomPath(`results/${stageId}`)] = nodes.results && nodes.results[stageId] || null;
-      updates[roomPath("scores")] = emptyObjectToNull(nodes.scores);
-      updates[roomPath("playerStats")] = emptyObjectToNull(nodes.playerStats);
+      const childDiffs = [];
+      appendCollectionChildDiff(childDiffs, "scores", currentNodes.scores, nodes.scores, {
+        removeMissing: false,
+        leafKeys: ["total"],
+      });
+      appendCollectionChildDiff(childDiffs, "playerStats", currentNodes.playerStats, nodes.playerStats, {
+        removeMissing: false,
+        leafKeys: ["currentSkill", "stageSkillHistoryJson", "appliedSkillStageIdsJson"],
+      });
+      childDiffs.forEach(([childPath, value]) => {
+        updates[roomPath(childPath)] = value;
+      });
+      appendRootPlayerDiff(updates, currentRoom.players, nextRoom.players, roomId, nextRoom.updatedAt, {
+        onlyExisting: true,
+        leafKeys: ["currentSkill", "stageSkillHistoryJson", "appliedSkillStageIdsJson"],
+      });
     }
 
     if (path === "/api/host/start-stage" || path === "/api/host/advance") {
-      updates[roomPath("players")] = emptyObjectToNull(nodes.players);
-      updates[roomPath("playerStats")] = emptyObjectToNull(nodes.playerStats);
+      const playerDiffs = [];
+      appendCollectionChildDiff(playerDiffs, "players", currentNodes.players, nodes.players, {
+        addMissing: false,
+        removeMissing: false,
+        leafKeys: ["name", "pendingName"],
+      });
+      playerDiffs.forEach(([childPath, value]) => {
+        updates[roomPath(childPath)] = value;
+      });
+      appendRootPlayerDiff(updates, currentRoom.players, nextRoom.players, roomId, nextRoom.updatedAt, {
+        onlyExisting: true,
+        leafKeys: ["name"],
+      });
     }
 
     if (path === "/api/host/update-room-settings") {
@@ -1704,11 +1774,6 @@
       });
     }
 
-    if (["/api/host/commit-result", "/api/host/start-stage", "/api/host/advance"].includes(path)) {
-      (nextRoom.players || []).filter((player) => player && player.uuid).forEach((player) => {
-        updates[`players/${player.uuid}`] = rootPlayerNode(player, roomId);
-      });
-    }
     return updates;
   }
 
@@ -2369,6 +2434,69 @@
   function emptyObjectToNull(value) {
     if (value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) return null;
     return value;
+  }
+
+  function firebaseValuesEqual(left, right) {
+    if (left === right) return true;
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function appendCollectionChildDiff(target, prefix, currentCollection, nextCollection, options = {}) {
+    const current = currentCollection || {};
+    const next = nextCollection || {};
+    const ids = new Set(Object.keys(next));
+    if (options.removeMissing) Object.keys(current).forEach((id) => ids.add(id));
+    ids.forEach((id) => {
+      const hadCurrent = Object.prototype.hasOwnProperty.call(current, id);
+      const hasNext = Object.prototype.hasOwnProperty.call(next, id);
+      if (!hasNext) {
+        if (hadCurrent && options.removeMissing) target.push([`${prefix}/${id}`, null]);
+        return;
+      }
+      if (!hadCurrent && options.addMissing === false) return;
+      if (!hadCurrent || !options.leafKeys || !current[id] || !next[id]) {
+        if (!hadCurrent || !firebaseValuesEqual(current[id], next[id])) {
+          target.push([`${prefix}/${id}`, emptyObjectToNull(next[id])]);
+        }
+        return;
+      }
+      options.leafKeys.forEach((leaf) => {
+        const currentValue = current[id][leaf];
+        const nextValue = next[id][leaf];
+        if (!firebaseValuesEqual(currentValue, nextValue)) {
+          target.push([`${prefix}/${id}/${leaf}`, nextValue === undefined ? null : nextValue]);
+        }
+      });
+    });
+  }
+
+  function appendRootPlayerDiff(updates, currentPlayers, nextPlayers, roomId, updatedAt, options = {}) {
+    const currentByUid = keyBy(currentPlayers || [], "uuid", (player) => player);
+    const nextByUid = keyBy(nextPlayers || [], "uuid", (player) => player);
+    const leafKeys = options.leafKeys || [
+      "name",
+      "currentSkill",
+      "stageSkillHistoryJson",
+      "appliedSkillStageIdsJson",
+      "joinedAt",
+      "lastSeenAt",
+      "roomId",
+    ];
+    Object.keys(nextByUid).forEach((uid) => {
+      const nextNode = rootPlayerNode(nextByUid[uid], roomId);
+      if (!currentByUid[uid]) {
+        if (!options.onlyExisting) updates[`players/${uid}`] = nextNode;
+        return;
+      }
+      const currentNode = rootPlayerNode(currentByUid[uid], roomId);
+      let changed = false;
+      leafKeys.forEach((leaf) => {
+        if (firebaseValuesEqual(currentNode[leaf], nextNode[leaf])) return;
+        updates[`players/${uid}/${leaf}`] = nextNode[leaf];
+        changed = true;
+      });
+      if (changed) updates[`players/${uid}/updatedAt`] = updatedAt || nextNode.updatedAt;
+    });
   }
 
   function firstHostUid(roles) {

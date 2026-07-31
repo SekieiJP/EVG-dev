@@ -77,6 +77,12 @@ async function main() {
             roles: { hosts: { host: true } },
           },
         },
+        archives: {
+          "legacy-archive": {
+            archiveId: "legacy-archive",
+            status: "exported",
+          },
+        },
       });
     });
 
@@ -84,6 +90,35 @@ async function main() {
     const productionHost = env.authenticatedContext("production-host").database();
     const alice = env.authenticatedContext("alice").database();
     const stranger = env.authenticatedContext("stranger").database();
+
+    await assertSucceeds(host.ref(`rooms/${roomId}/operations/rules-boundary`).set({
+      at: "2026-07-29T00:00:00.000Z",
+      actor: "host",
+      action: "rules-boundary",
+    }));
+    const hostOperation = await assertSucceeds(
+      host.ref(`rooms/${roomId}/operations/rules-boundary`).once("value")
+    );
+    if (hostOperation.child("action").val() !== "rules-boundary") {
+      throw new Error("Host could not read the operation it wrote");
+    }
+    await assertFails(alice.ref(`rooms/${roomId}/operations`).once("value"));
+    await assertFails(stranger.ref(`rooms/${roomId}/operations/rules-boundary`).once("value"));
+
+    await assertSucceeds(host.ref(`rooms/${roomId}/archive`).set({
+      status: "queued",
+      gameId: "game-1",
+      archiveId: "room-archive",
+    }));
+    const roomArchive = await assertSucceeds(
+      host.ref(`rooms/${roomId}/archive`).once("value")
+    );
+    if (roomArchive.child("archiveId").val() !== "room-archive") {
+      throw new Error("Host room archive access regressed");
+    }
+    await assertFails(stranger.ref(`rooms/${roomId}/archive`).once("value"));
+    await assertFails(host.ref("archives/legacy-archive").once("value"));
+    await assertFails(stranger.ref("archives/legacy-archive").once("value"));
 
     await assertSucceeds(host.ref(`rooms/${versionRoomId}/public`).set(publicNode({
       gameId: "version-game-1",
