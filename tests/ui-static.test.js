@@ -80,14 +80,15 @@ run("player view has no manual next button or ranking hold state", () => {
   assert.strictEqual(appSource.includes("restorePlayerRankingHoldIfNeeded"), false);
 });
 
-run("client runtime contains no GAS or local fallback transport", () => {
+run("client runtime contains no legacy GAS progression or local fallback transport", () => {
   assert.strictEqual(appSource.includes("GAS_API_BASE_URL"), false);
   assert.strictEqual(appSource.includes("GAS_API_KEY"), false);
   assert.strictEqual(appSource.includes("USE_GAS_API"), false);
   assert.strictEqual(appSource.includes("fetchJsonWithRetry"), false);
   assert.strictEqual(appSource.includes("screenLocalSync"), false);
-  assert.strictEqual(configSource.includes("script.google.com/macros"), false);
   assert.strictEqual(configSource.includes("GAS_API"), false);
+  assert.strictEqual(configSource.includes("FIREBASE_ARCHIVE_GAS_URL"), true);
+  assert.strictEqual(configSource.includes("FIREBASE_ARCHIVE_API_KEY"), true);
 });
 
 run("firebase client history uses subscribed data instead of REST fallbacks", () => {

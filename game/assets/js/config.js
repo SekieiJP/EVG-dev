@@ -8,8 +8,8 @@
     FIREBASE_ROOM_ID: "elevator-game-live",
     FIREBASE_HOST_PASSWORD: "host",
     FIREBASE_SDK_VERSION: "10.12.5",
-    FIREBASE_ARCHIVE_GAS_URL: "",
-    FIREBASE_ARCHIVE_API_KEY: "",
+    FIREBASE_ARCHIVE_GAS_URL: "https://script.google.com/macros/s/AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO/exec",
+    FIREBASE_ARCHIVE_API_KEY: "AKfycbyDZPVfLF2c3fswxmq3pVVmmTanMB-m7p3kwA3vuWJdX8gm7BtnunKqj-Z6g7HsAygO",
     POLL_INTERVAL_MS: 10000,
   };
 })(typeof self !== "undefined" ? self : this);
