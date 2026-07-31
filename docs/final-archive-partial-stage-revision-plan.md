@@ -50,6 +50,16 @@
 - Firebase Rules: r10から本文変更なし。今回のreleaseでは再deployしていない
 - 残作業: allowlist済みHostによる現在ゲーム再保存、RTDB 4ステージ確認、Spreadsheetの同一gameId/archiveId 4ステージ・重複なし確認、recalculate。その完了までは次ゲーム操作を停止する
 
+## 2026-08-01 読取り専用再監査
+
+- 本番roomをFirebase CLIで再取得した。ファイル全体のSHA-256はr11公開前の退避と同じ `7f46ef0064a3f770aa5493adfcdaf83bf16c3e87d79c597e41517aac870b5bcf` である。
+- `schemaVersion=v3`、`phase=final`、`roomVersion=21`、現在参加者6人、`results` 4ステージ・24人分は維持されている。
+- 現gameの完了詳細は1ステージのままで、archiveのrequested/exported/completed時刻、履歴5系統、`results`の内容hashも前回監査から不変である。したがってr11公開後の「現在ゲームを保存」は未実行である。
+- GAS endpointを副作用なしで再probeし、キーなしの拒否、設定済みapiKeyの受理、無効Firebase tokenの拒否を確認した。
+- 運用者から指定された本番Spreadsheet `EVG2026` をGoogle Sheets APIで読取り専用監査した。archive用7シートとヘッダは `gas/src/Code.gs` の定義に一致し、互換用の空の `current_game` を含む8タブ構成だった。
+- 現gameは同一gameId/archiveIdについて `archive_log=exported` 1件、`save_data` 6件、`players` 6件、`stage_settings` 4件、`game_history` 1件を保持する一方、`stage_results` は最終ステージ6件だけである。`game_history` と6人の `save_data` も `stageCount=1` であり、現行の複合キーに重複はない。RTDBとSpreadsheetの双方が同じ部分保存状態であることを確認した。
+- 修復前RTDBは `/private/tmp/evg-p0p1-current-room-reaudit.json`、root playerは `/private/tmp/evg-p0p1-root-players-reaudit.json` に一時退避した。機微データを含むためGitへ追加せず、運用者がアクセス制御された長期保管先へ移す。
+
 ## 本番修復手順
 
 詳細な画面操作は `docs/operator-action-required-p0-p1.html` を正とする。

@@ -78,7 +78,7 @@ GASアーカイブの仕様ではなく、次ゲームJSON Importの実装不具
 - 既存gameId/profileIdが減る更新は `history_preservation_failed` として、RTDB updateとGAS archiveより前に拒否する。
 - 次ゲームでもroomVersionを旧値+1とし、画面のbaseVersion、待機overlay、Rules CASで同一タブと別Hostの競合を防ぐ。
 - Rulesは5履歴親と子削除を拒否し、新規ID作成・同一ID修復だけを許可する。親縮小、ID不一致、削除混在updateの原子的拒否テストを追加した。
-- UnitとFirebase mock Browser E2Eは成功した。Rules emulatorテストは追加済みだが、実行端末にJava RuntimeがないためDatabase emulator本体は未実行である。
+- UnitとFirebase mock Browser E2Eは成功した。ローカルMacにはJava Runtimeがないが、2026-07-31にNode 22・Java 21のGitHub Actions Verify workflowを追加し、Database Rules emulatorを含む全ステップの成功を確認した。
 - 通常クライアントに完全Reset API/画面は追加していない。履歴削除が必要な管理Resetは別権限・別承認で設計する。
 - 予防リリース前の本番RTDB全体は読取り専用で一時退避した。GAS/Spreadsheetの所有者バックアップは未実施のため、本番履歴復旧には着手していない。
 - コミット `3f82740` をpushし、GitHub Pagesのアセット版 `260731-p0p1r10` と公開adapter本文の完全一致を確認してから本番Rulesをreleaseした。release後Rulesはリポジトリ版と正規化SHA-256 `7e56508a0772ec8b06ecfd3582409cd315a3e3cf4c021d1b2fd2192da1662685` で一致した。

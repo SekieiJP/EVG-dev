@@ -490,6 +490,19 @@
       </section>
 
       <section>
+        <h2>2026-08-01 P0/P1 本番再監査</h2>
+        <ul>
+          <li><strong>現在状態:</strong> Firebase CLIで本番roomを読取り専用取得した。r11公開前の退避とファイル全体のSHA-256 <code>7f46ef0064a3f770aa5493adfcdaf83bf16c3e87d79c597e41517aac870b5bcf</code>が一致し、<code>roomVersion=21</code>、<code>phase=final</code>、現在参加者6人、<code>results</code> 4ステージ・24結果、現game完了詳細1ステージのままだった。</li>
+          <li><strong>判定:</strong> archiveのrequested/exported/completed時刻、完了履歴5系統、公開Skill profile、<code>results</code>の内容hashも前回監査から不変である。r11公開後の「現在ゲームを保存」はまだ実行されていない。</li>
+          <li><strong>GAS再確認:</strong> 公開endpointへ副作用なしのsanitized probeを行い、キーなしは<code>auth</code>拒否、設定済みapiKeyは認証通過、無効なFirebase ID tokenは<code>auth</code>拒否となった。指定された本番Spreadsheet <a href="https://docs.google.com/spreadsheets/d/16kf06ecVSOPsG3bXkKyF2D4mPRpMWPiURDgDTscTDiQ/edit">EVG2026</a>を読取り専用監査し、archive用7シートと実ヘッダがコード定義に一致することを確認した。互換用の空の<code>current_game</code>を含む8タブ構成である。</li>
+          <li><strong>Spreadsheet修復前状態:</strong> 現gameの同一gameId/archiveIdに対し、<code>archive_log=exported</code> 1件、<code>save_data</code> 6件、<code>players</code> 6件、<code>stage_settings</code> 4件、<code>game_history</code> 1件がある一方、<code>stage_results</code>は最終1ステージ×6人の6件だけだった。<code>game_history</code>と6人の<code>save_data</code>も<code>stageCount=1</code>で、現行複合キーの重複はない。RTDBとSpreadsheetの双方が同じ部分保存状態である。</li>
+          <li><strong>一時バックアップ:</strong> 最新roomを<code>/private/tmp/evg-p0p1-current-room-reaudit.json</code>、root playerを<code>/private/tmp/evg-p0p1-root-players-reaudit.json</code>へ退避した。機微データを含むためGitへ追加せず、運用者がアクセス制御された長期保管先へ移す。</li>
+          <li><strong>権限境界:</strong> 自動実施できる実装・公開・読取り検証は完了した。残る現ゲーム修復はallowlist済みHostのFirebase ID tokenとSpreadsheet所有者の確認を要するため、管理者権限で認可を迂回せず、<code>operator-action-required-p0-p1.html</code>の手順5-1を依頼する。</li>
+          <li><strong>完了条件:</strong> RTDB完了詳細4ステージ、同一gameId/archiveIdのSpreadsheet 4ステージ・24結果・重複なし、<code>game_history</code>/<code>save_data</code>の<code>stageCount=4</code>、recalculate成功を確認するまで次ゲーム操作を停止する。その後、非イベントの小規模ゲームで同日継続、前日以前の退室、StageSkill/現在Skill、archive retryを実証する。</li>
+        </ul>
+      </section>
+
+      <section>
         <h2>未解決の質問</h2>
         <ul>
           <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>
