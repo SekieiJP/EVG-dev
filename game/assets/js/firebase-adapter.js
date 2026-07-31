@@ -25,6 +25,7 @@
       this.engine = options.engine;
       this.getRole = options.getRole || (() => "player");
       this.getUuid = options.getUuid || (() => "");
+      this.isHostSessionActive = options.isHostSessionActive || (() => false);
       this.log = options.log || (() => {});
       this.onServerTimeOffset = options.onServerTimeOffset || (() => {});
       this.channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel(CHANNEL_NAME) : null;
@@ -97,6 +98,10 @@
       );
       if (this.getRole() === "host") {
         this.debug.isHostAllowed = await this.isHostAllowed();
+        if (this.debug.isHostAllowed && this.isHostSessionActive()) {
+          const existingRoom = await this.backfillHistoryIndexes();
+          if (existingRoom) await this.ensureCountdownRoomSetting();
+        }
       }
       return { ok: true, uid: this.auth.uid };
     }

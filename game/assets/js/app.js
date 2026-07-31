@@ -123,6 +123,11 @@
         engine: Engine,
         getRole: () => state.role,
         getUuid: () => state.playerUuid,
+        isHostSessionActive: () => {
+          if (state.role !== "host" || !state.hostAuthed || !state.hostToken) return false;
+          const expiresAt = new Date(state.hostTokenExpiresAt).getTime();
+          return !Number.isFinite(expiresAt) || serverNow() < expiresAt;
+        },
         log: logClient,
         onServerTimeOffset: (offsetMs) => {
           state.serverTimeOffsetMs = Number(offsetMs || 0);
@@ -916,6 +921,7 @@
       ["currentStageIndex", state.room.currentStageIndex],
       ["currentStageId", stage ? stage.stageId : ""],
       ["roomVersion", state.room.roomVersion || 0],
+      ["schemaVersion", state.room.firebaseSchemaVersion || ""],
       ["countdownSeconds", state.room.countdownSeconds],
       ["players", state.room.players.length],
       ["currentStageTickets", ticketCount],

@@ -2,7 +2,8 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const Engine = require("../game/assets/js/engine");
-const { EVGFirebaseAdapter } = require("../game/assets/js/firebase-adapter");
+const FirebaseAdapterModule = require("../game/assets/js/firebase-adapter");
+const { EVGFirebaseAdapter } = FirebaseAdapterModule;
 
 function run(name, fn) {
   try {
@@ -275,6 +276,87 @@ runAsync("firebase Host auth backfills a missing countdown room setting with 10 
     "/rooms/unit-room/roomSettings/countdownSeconds",
     10,
   ]]);
+});
+
+runAsync("firebase restored Host session backfills an existing room before subscriptions without creating an empty room setting", async () => {
+  global.BroadcastChannel = undefined;
+  global.localStorage = global.localStorage || {
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
+  };
+  FirebaseAdapterModule.__evgFirebaseSdk = {
+    initializeApp: () => ({}),
+    getAuth: () => ({
+      currentUser: {
+        uid: "host-uid",
+        getIdToken: async () => "id-token",
+      },
+    }),
+    getDatabase: () => ({}),
+    ref: (_db, path) => path,
+    onValue: () => () => {},
+  };
+
+  const calls = [];
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+    getUuid: () => "host-uid",
+    isHostSessionActive: () => {
+      calls.push("session");
+      return true;
+    },
+  });
+  adapter.isHostAllowed = async () => {
+    calls.push("allowlist");
+    adapter.debug.isHostAllowed = true;
+    return true;
+  };
+  adapter.backfillHistoryIndexes = async () => {
+    calls.push("backfill");
+    return { roomId: "unit-room" };
+  };
+  adapter.ensureCountdownRoomSetting = async () => {
+    calls.push("countdown-setting");
+    return 10;
+  };
+
+  await adapter.initRest();
+
+  assert.deepStrictEqual(calls, [
+    "allowlist",
+    "session",
+    "backfill",
+    "countdown-setting",
+  ]);
+
+  const emptyRoomCalls = [];
+  const emptyRoomAdapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+    getUuid: () => "host-uid",
+    isHostSessionActive: () => true,
+  });
+  emptyRoomAdapter.isHostAllowed = async () => {
+    emptyRoomAdapter.debug.isHostAllowed = true;
+    return true;
+  };
+  emptyRoomAdapter.backfillHistoryIndexes = async () => {
+    emptyRoomCalls.push("backfill");
+    return null;
+  };
+  emptyRoomAdapter.ensureCountdownRoomSetting = async () => {
+    emptyRoomCalls.push("countdown-setting");
+    return 10;
+  };
+
+  await emptyRoomAdapter.initRest();
+
+  assert.deepStrictEqual(emptyRoomCalls, ["backfill"]);
+  delete FirebaseAdapterModule.__evgFirebaseSdk;
 });
 
 runAsync("firebase read errors include the rejected path", async () => {

@@ -554,6 +554,18 @@
       </section>
 
       <section>
+        <h2>2026-08-01 P0公開投影の本番段階移行 r13–r14</h2>
+        <ul>
+          <li><strong>CI検証:</strong> コミット<code>324947e</code>のVerify run <code>30649754786</code>でUnit/static、50人×20ステージ負荷モデル、Java 21 Realtime Database Rules emulator、Browser E2Eがすべて成功した。</li>
+          <li><strong>段階移行:</strong> 自動Pages workflowにより新client r13が先に公開されたため、private読取り7箇所だけを一時的に維持する<code>database.rules.compat-v4.json</code>をFirebase Consoleから先に公開した。変更前本番Rulesは<code>/private/tmp/evg-r13-pre-compat-production-rules-20260801.json</code>へ保存し、SHA-256 <code>62927ec6d19b7c0a41aca063fa3f2887c3c55fae24f4b283976e8d3ea13a9959</code>、公開後compat Rulesはリポジトリ版と完全一致するSHA-256 <code>97657a85650603fd7577feac3da3d36aab23932e3d0f9c4c5300abf807912e55</code>を確認した。</li>
+          <li><strong>実機で判明した移行穴:</strong> Hostの保存済みトークンが有効な状態では、強制再読み込みしても<code>authHost()</code>を再送せず、schema v3のまま公開投影backfillが走らなかった。Host private画面は正常でもScreen r13はタイトルと最終結果だけで参加者・得点が空になることをChrome実機で確認した。</li>
+          <li><strong>デザインの決定:</strong> Host role、保存済みHost認証、トークン存在、有効期限内、Firebase uid allowlistの全条件を満たす場合、購読開始前に冪等な<code>backfillHistoryIndexes()</code>を実行する。既存roomを読めた場合だけroomSettingsの既定値を補完し、空roomを暗黙に初期化しない。</li>
+          <li><strong>検証:</strong> 既存Hostセッションではallowlist確認→セッション判定→backfill→roomSettings補完の順になること、空roomではbackfillだけで設定ノードを作らないことをUnitへ追加した。r14公開、schema v4/公開投影件数の実データ確認、private親を閉じる最終Rules公開はこの後に実施する。</li>
+          <li><strong>GAS境界:</strong> <code>gas/src/Code.gs</code>は変更していない。Spreadsheetの都度バックアップおよびGASの運用者作業は不要である。</li>
+        </ul>
+      </section>
+
+      <section>
         <h2>未解決の質問</h2>
         <ul>
           <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>
