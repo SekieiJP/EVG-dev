@@ -48,7 +48,49 @@
         "public": {
           ".read": "auth != null",
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
-          ".validate": "newData.hasChildren(['gameId', 'phase', 'roomVersion', 'currentStageIndex', 'currentStageId']) && newData.child('gameId').isString() && newData.child('phase').isString() && newData.child('phase').val().matches(/^(lobby|stage_intro|voting|countdown|tallying|reveal|ranking|final)$/) && newData.child('roomVersion').isNumber() && newData.child('currentStageIndex').isNumber() && newData.child('currentStageId').isString() && (!data.exists() || newData.child('roomVersion').val() === data.child('roomVersion').val() + 1) && (!data.exists() || newData.child('gameId').val() !== data.child('gameId').val() || newData.child('phase').val() === data.child('phase').val() || (data.child('phase').val() === 'lobby' && newData.child('phase').val() === 'stage_intro') || (data.child('phase').val() === 'stage_intro' && newData.child('phase').val() === 'voting') || (data.child('phase').val() === 'voting' && newData.child('phase').val() === 'countdown') || (data.child('phase').val() === 'countdown' && newData.child('phase').val() === 'reveal') || (data.child('phase').val() === 'tallying' && newData.child('phase').val() === 'reveal') || (data.child('phase').val() === 'reveal' && newData.child('phase').val() === 'ranking') || (data.child('phase').val() === 'ranking' && (newData.child('phase').val() === 'stage_intro' || newData.child('phase').val() === 'final')))"
+          ".validate": "newData.hasChildren(['gameId', 'phase', 'roomVersion', 'currentStageIndex', 'currentStageId', 'playerCount', 'submittedCount', 'abstainedCount']) && (!data.exists() || newData.child('roomVersion').val() === data.child('roomVersion').val() + 1) && (!data.exists() || newData.child('gameId').val() !== data.child('gameId').val() || newData.child('phase').val() === data.child('phase').val() || (data.child('phase').val() === 'lobby' && newData.child('phase').val() === 'stage_intro') || (data.child('phase').val() === 'stage_intro' && newData.child('phase').val() === 'voting') || (data.child('phase').val() === 'voting' && newData.child('phase').val() === 'countdown') || (data.child('phase').val() === 'countdown' && newData.child('phase').val() === 'reveal') || (data.child('phase').val() === 'tallying' && newData.child('phase').val() === 'reveal') || (data.child('phase').val() === 'reveal' && newData.child('phase').val() === 'ranking') || (data.child('phase').val() === 'ranking' && (newData.child('phase').val() === 'stage_intro' || newData.child('phase').val() === 'final')))",
+          "gameId": {
+            ".validate": "newData.isString() && newData.val().length <= 160"
+          },
+          "phase": {
+            ".validate": "newData.isString() && newData.val().matches(/^(lobby|stage_intro|voting|countdown|tallying|reveal|ranking|final)$/)"
+          },
+          "roomVersion": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+          },
+          "currentStageIndex": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+          },
+          "currentStageId": {
+            ".validate": "newData.isString() && newData.val().length <= 120"
+          },
+          "playerCount": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+          },
+          "submittedCount": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+          },
+          "abstainedCount": {
+            ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+          },
+          "countdownEndsAt": {
+            ".validate": "newData.isString() && newData.val().length <= 64"
+          },
+          "tallyingEndsAt": {
+            ".validate": "newData.isString() && newData.val().length <= 64"
+          },
+          "animationStartedAt": {
+            ".validate": "newData.isString() && newData.val().length <= 64"
+          },
+          "animationSkippedAt": {
+            ".validate": "newData.isString() && newData.val().length <= 64"
+          },
+          "revealEndsAt": {
+            ".validate": "newData.isString() && newData.val().length <= 64"
+          },
+          "$other": {
+            ".validate": false
+          }
         },
         "publicConfig": {
           ".read": "auth != null",
@@ -627,7 +669,67 @@
           ".write": false,
           "$gameId": {
             ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true && newData.exists()",
-            ".validate": "newData.hasChildren(['gameId']) && newData.child('gameId').isString() && newData.child('gameId').val() === $gameId"
+            ".validate": "newData.hasChildren(['gameId', 'title', 'finishedAt', 'interrupted', 'finalPhase', 'playerCount', 'stageCount']) && newData.child('gameId').val() === $gameId",
+            "gameId": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 160"
+            },
+            "title": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+            },
+            "finishedAt": {
+              ".validate": "newData.isString() && newData.val().length <= 64"
+            },
+            "interrupted": {
+              ".validate": "newData.isBoolean()"
+            },
+            "finalPhase": {
+              ".validate": "newData.isString() && newData.val().matches(/^(|lobby|stage_intro|voting|countdown|tallying|reveal|ranking|final)$/)"
+            },
+            "rankings": {
+              ".validate": "newData.hasChildren()",
+              "$index": {
+                ".validate": "$index.matches(/^(0|[1-9][0-9]*)$/) && newData.hasChildren(['profileId', 'name', 'rank', 'score'])",
+                "profileId": {
+                  ".validate": "newData.isString() && newData.val().matches(/^p_[a-z0-9]+$/)"
+                },
+                "name": {
+                  ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24"
+                },
+                "rank": {
+                  ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+                },
+                "score": {
+                  ".validate": "newData.isNumber()"
+                },
+                "$other": {
+                  ".validate": false
+                }
+              }
+            },
+            "playerCount": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+            },
+            "stageCount": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+            },
+            "stages": {
+              ".validate": "newData.hasChildren()",
+              "$index": {
+                ".validate": "$index.matches(/^(0|[1-9][0-9]*)$/) && newData.hasChildren(['stageId', 'name'])",
+                "stageId": {
+                  ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120"
+                },
+                "name": {
+                  ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+                },
+                "$other": {
+                  ".validate": false
+                }
+              }
+            },
+            "$other": {
+              ".validate": false
+            }
           }
         },
         "completedGamePublicDetails": {
@@ -635,7 +737,88 @@
           ".write": false,
           "$gameId": {
             ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true && newData.exists()",
-            ".validate": "newData.hasChildren(['gameId']) && newData.child('gameId').isString() && newData.child('gameId').val() === $gameId"
+            ".validate": "newData.hasChildren(['gameId', 'title', 'finishedAt', 'interrupted', 'finalPhase']) && newData.child('gameId').val() === $gameId",
+            "gameId": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 160"
+            },
+            "title": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+            },
+            "finishedAt": {
+              ".validate": "newData.isString() && newData.val().length <= 64"
+            },
+            "interrupted": {
+              ".validate": "newData.isBoolean()"
+            },
+            "finalPhase": {
+              ".validate": "newData.isString() && newData.val().matches(/^(|lobby|stage_intro|voting|countdown|tallying|reveal|ranking|final)$/)"
+            },
+            "rankings": {
+              ".validate": "newData.hasChildren()",
+              "$index": {
+                ".validate": "$index.matches(/^(0|[1-9][0-9]*)$/) && newData.hasChildren(['profileId', 'name', 'rank', 'score'])",
+                "profileId": {
+                  ".validate": "newData.isString() && newData.val().matches(/^p_[a-z0-9]+$/)"
+                },
+                "name": {
+                  ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24"
+                },
+                "rank": {
+                  ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+                },
+                "score": {
+                  ".validate": "newData.isNumber()"
+                },
+                "$other": {
+                  ".validate": false
+                }
+              }
+            },
+            "stageResults": {
+              ".validate": "newData.hasChildren()",
+              "$stageId": {
+                ".validate": "newData.hasChildren(['stageId', 'stageName', 'calculatedAt', 'participantCount']) && newData.child('stageId').val() === $stageId",
+                "stageId": {
+                  ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 120"
+                },
+                "stageName": {
+                  ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80"
+                },
+                "calculatedAt": {
+                  ".validate": "newData.isString() && newData.val().length <= 64"
+                },
+                "participantCount": {
+                  ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+                },
+                "rankings": {
+                  ".validate": "newData.hasChildren()",
+                  "$index": {
+                    ".validate": "$index.matches(/^(0|[1-9][0-9]*)$/) && newData.hasChildren(['profileId', 'name', 'rank', 'score'])",
+                    "profileId": {
+                      ".validate": "newData.isString() && newData.val().matches(/^p_[a-z0-9]+$/)"
+                    },
+                    "name": {
+                      ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24"
+                    },
+                    "rank": {
+                      ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0"
+                    },
+                    "score": {
+                      ".validate": "newData.isNumber()"
+                    },
+                    "$other": {
+                      ".validate": false
+                    }
+                  }
+                },
+                "$other": {
+                  ".validate": false
+                }
+              }
+            },
+            "$other": {
+              ".validate": false
+            }
           }
         },
         "completedGameDetails": {

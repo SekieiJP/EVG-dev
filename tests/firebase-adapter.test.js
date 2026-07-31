@@ -1462,12 +1462,207 @@ runAsync("firebase Host backfill reads every current result and atomically write
 
   const migrated = Engine.deepClone(room);
   migrated.firebaseSchemaVersion = "firebase-rtdb-v4-public-projection";
+  migrated.stageResults = Engine.deepClone(allResults);
+  const migratedNodes = EVGFirebaseAdapter.roomToFirebaseNodes(migrated);
   adapter.readRestRoom = async () => migrated;
+  adapter.sdk.get = async (path) => {
+    reads.push(path);
+    assert.strictEqual(path.startsWith("/players/"), false);
+    const relative = path.replace("/rooms/unit-room/", "");
+    const value = nestedValue(migratedNodes, relative);
+    return {
+      exists: () => value !== undefined && value !== null,
+      val: () => value === undefined ? null : Engine.deepClone(value),
+    };
+  };
   reads.length = 0;
   rootUpdate = null;
   await adapter.backfillHistoryIndexes();
-  assert.deepStrictEqual(reads, []);
+  assert.strictEqual(reads.includes("/rooms/unit-room/results"), true);
+  assert.strictEqual(reads.some((path) => path.startsWith("/players/")), false);
   assert.strictEqual(rootUpdate, null);
+});
+
+runAsync("firebase v4 Host repair restores incomplete public projections and only the damaged History detail", async () => {
+  let room = Engine.createInitialRoom(productionFourStageConfig());
+  room.roomId = "unit-room";
+  room.gameId = "current-four-stage-game";
+  room.firebaseSchemaVersion = "firebase-rtdb-v4-public-projection";
+  room = Engine.registerPlayer(room, "Alice", "alice").room;
+  room.players[0].skill = 321;
+  room.players[0].stageSkillHistory = [11, 22, 33, 44, 55];
+  room.players[0].appliedSkillStageIds = ["old-1", "old-2", "old-3", "old-4", "old-5"];
+  room.scores = { alice: 100 };
+  room.currentStageIndex = 3;
+  room.phase = Engine.PHASES.FINAL;
+  room.tickets = {
+    "stage-004": {
+      alice: {
+        uuid: "alice",
+        boardFloor: 1,
+        exitFloor: 2,
+        predictions: {},
+        submittedAt: "2026-08-01T00:03:00.000Z",
+      },
+    },
+  };
+  const currentResults = {
+    "stage-001": productionStageResult("stage-001", "2026-08-01T00:00:00.000Z", [
+      { uuid: "alice", name: "Alice", score: 10, stageSkill: 11 },
+    ]),
+    "stage-002": productionStageResult("stage-002", "2026-08-01T00:01:00.000Z", [
+      { uuid: "alice", name: "Alice", score: 20, stageSkill: 22 },
+    ]),
+    "stage-003": productionStageResult("stage-003", "2026-08-01T00:02:00.000Z", [
+      { uuid: "alice", name: "Alice", score: 30, stageSkill: 33 },
+    ]),
+    "stage-004": productionStageResult("stage-004", "2026-08-01T00:03:00.000Z", [
+      { uuid: "alice", name: "Alice", score: 40, stageSkill: 44 },
+    ]),
+  };
+  room.stageResults = Engine.deepClone(currentResults);
+  const oldResult = productionStageResult("stage-001", "2026-07-31T00:00:00.000Z", [
+    { uuid: "alice", name: "Alice", score: 50, stageSkill: 55 },
+  ]);
+  const oldGame = {
+    gameId: "old-five-stage-game",
+    title: "Old game",
+    finishedAt: "2026-07-31T00:10:00.000Z",
+    interrupted: false,
+    finalPhase: Engine.PHASES.FINAL,
+    scores: { alice: 50 },
+    rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 50, currentSkill: 321 }],
+    stageResults: { "stage-001": oldResult },
+  };
+  const currentGame = {
+    gameId: room.gameId,
+    title: "Current game",
+    finishedAt: "2026-08-01T00:10:00.000Z",
+    interrupted: false,
+    finalPhase: Engine.PHASES.FINAL,
+    scores: { alice: 100 },
+    rankings: [{ uuid: "alice", name: "Alice", rank: 1, score: 100, currentSkill: 321 }],
+    stageResults: Engine.deepClone(currentResults),
+  };
+  room.completedGames = [oldGame, currentGame];
+
+  const canonicalNodes = EVGFirebaseAdapter.roomToFirebaseNodes(room);
+  let serverState = {
+    rooms: {
+      "unit-room": Engine.deepClone(canonicalNodes),
+    },
+    players: {
+      alice: {
+        name: "Canonical Alice",
+        currentSkill: 987,
+        stageSkillHistoryJson: "[900,901,902,903,904]",
+        appliedSkillStageIdsJson: "[\"canonical-1\",\"canonical-2\",\"canonical-3\",\"canonical-4\",\"canonical-5\"]",
+        roomId: "unit-room",
+      },
+    },
+  };
+  const canonicalRootPlayer = Engine.deepClone(serverState.players.alice);
+  const damaged = serverState.rooms["unit-room"];
+  damaged.publicConfig = null;
+  damaged.publicPlayers = null;
+  damaged.publicTicketPresence = null;
+  damaged.publicResults = {
+    "stage-004": Engine.deepClone(canonicalNodes.publicResults["stage-004"]),
+  };
+  damaged.publicResults["stage-004"].rankings = [];
+  damaged.publicResults["stage-004"].scoreCheckpoints = [];
+  damaged.publicScores = null;
+  damaged.publicProfileOwners = null;
+  damaged.completedGamePublicDetails[room.gameId].stageResults["stage-001"].participantCount = 0;
+  damaged.completedGamePublicDetails[room.gameId].stageResults["stage-001"].rankings = [];
+
+  const reads = [];
+  const updateCalls = [];
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  const roomRead = Engine.deepClone(room);
+  roomRead.stageResults = { "stage-004": Engine.deepClone(currentResults["stage-004"]) };
+  adapter.readRestRoom = async () => Engine.deepClone(roomRead);
+  adapter.sdk = {
+    ref: (_db, pathValue) => pathValue,
+    get: async (pathValue) => {
+      reads.push(pathValue);
+      assert.strictEqual(pathValue.startsWith("/players/"), false);
+      const value = nestedValue(serverState, pathValue);
+      return {
+        exists: () => value !== undefined && value !== null,
+        val: () => value === undefined ? null : Engine.deepClone(value),
+      };
+    },
+    update: async (pathValue, updates) => {
+      assert.strictEqual(pathValue, "/");
+      updateCalls.push(Engine.deepClone(updates));
+      serverState = applyMultiLocationUpdates(serverState, updates);
+    },
+  };
+  adapter.firebaseDb = {};
+
+  await adapter.backfillHistoryIndexes();
+  assert.strictEqual(updateCalls.length, 1);
+  const repaired = updateCalls[0];
+  ["stage-001", "stage-002", "stage-003", "stage-004"].forEach((stageId) => {
+    assert.ok(repaired[`rooms/unit-room/publicResults/${stageId}`], stageId);
+  });
+  assert.ok(repaired["rooms/unit-room/publicConfig"]);
+  const profileId = EVGFirebaseAdapter.publicProfileId("alice");
+  assert.ok(repaired[`rooms/unit-room/publicPlayers/${profileId}`]);
+  assert.ok(repaired[`rooms/unit-room/publicTicketPresence/stage-004/${profileId}`]);
+  assert.ok(repaired[`rooms/unit-room/publicScores/${profileId}`]);
+  assert.strictEqual(repaired[`rooms/unit-room/publicProfileOwners/${profileId}`], "alice");
+  const currentDetailPath = `rooms/unit-room/completedGamePublicDetails/${room.gameId}`;
+  const oldDetailPath = "rooms/unit-room/completedGamePublicDetails/old-five-stage-game";
+  assert.strictEqual(repaired[currentDetailPath].stageResults["stage-001"].participantCount, 1);
+  assert.strictEqual(repaired[currentDetailPath].stageResults["stage-001"].rankings.length, 1);
+  assert.strictEqual(repaired[oldDetailPath], undefined);
+  assert.strictEqual(repaired["rooms/unit-room/meta"], undefined);
+  assert.strictEqual(repaired["rooms/unit-room/public"], undefined);
+  assert.strictEqual(Object.keys(repaired).some((key) => key.startsWith("players/")), false);
+  assert.strictEqual(Object.keys(repaired).some((key) => key.includes("/playerStats/")), false);
+  assert.strictEqual(Object.keys(repaired).some((key) => key.includes("/historyPlayers/")), false);
+  assert.deepStrictEqual(serverState.players.alice, canonicalRootPlayer);
+  assert.strictEqual(serverState.rooms["unit-room"].playerStats.alice.currentSkill, 321);
+  assert.deepStrictEqual(
+    JSON.parse(serverState.rooms["unit-room"].playerStats.alice.stageSkillHistoryJson),
+    [11, 22, 33, 44, 55]
+  );
+
+  await adapter.backfillHistoryIndexes();
+  assert.strictEqual(updateCalls.length, 1);
+  assert.strictEqual(reads.some((path) => path.startsWith("/players/")), false);
+});
+
+runAsync("firebase v4 Host repair leaves an empty uninitialized room untouched", async () => {
+  let sdkCalls = 0;
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.readRestRoom = async () => null;
+  adapter.sdk = {
+    ref: (_db, pathValue) => pathValue,
+    get: async () => {
+      sdkCalls += 1;
+      throw new Error("empty room must not be read further");
+    },
+    update: async () => {
+      sdkCalls += 1;
+      throw new Error("empty room must not be initialized");
+    },
+  };
+  adapter.firebaseDb = {};
+
+  const result = await adapter.backfillHistoryIndexes();
+  assert.strictEqual(result, undefined);
+  assert.strictEqual(sdkCalls, 0);
 });
 
 runAsync("firebase Host backfill mirrors a nonempty canonical root without overwriting it", async () => {

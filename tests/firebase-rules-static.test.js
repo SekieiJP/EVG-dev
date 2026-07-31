@@ -56,7 +56,30 @@ run("public writes require version increment and allowed phases", () => {
   assert.match(validation, /roomVersion/);
   assert.match(validation, /\(!data\.exists\(\) \|\| newData\.child\('roomVersion'\)\.val\(\) === data\.child\('roomVersion'\)\.val\(\) \+ 1\)/);
   assert.doesNotMatch(validation, /gameId'\)\.val\(\) !== data\.child\('gameId'\)\.val\(\) \|\| newData\.child\('roomVersion/);
-  assert.match(validation, /lobby\|stage_intro\|voting\|countdown\|tallying\|reveal\|ranking\|final/);
+  assert.match(roomRules.public.phase[".validate"], /lobby\|stage_intro\|voting\|countdown\|tallying\|reveal\|ranking\|final/);
+  assert.strictEqual(roomRules.public.$other[".validate"], false);
+  assert.deepStrictEqual(
+    Object.keys(roomRules.public).filter((key) => !key.startsWith(".")).sort(),
+    [
+      "$other",
+      "abstainedCount",
+      "animationSkippedAt",
+      "animationStartedAt",
+      "countdownEndsAt",
+      "currentStageId",
+      "currentStageIndex",
+      "gameId",
+      "phase",
+      "playerCount",
+      "revealEndsAt",
+      "roomVersion",
+      "submittedCount",
+      "tallyingEndsAt",
+    ].sort()
+  );
+  ["roomVersion", "currentStageIndex", "playerCount", "submittedCount", "abstainedCount"].forEach((key) => {
+    assert.match(roomRules.public[key][".validate"], /newData\.isNumber/);
+  });
 });
 
 run("stage results allow create or delete but never overwrite", () => {
@@ -158,6 +181,30 @@ run("completed game history is split into public summaries and scoped details", 
   assert.match(roomRules.historyPlayers.$profileId[".write"], /newData\.exists\(\)/);
   assert.match(roomRules.historyPlayers.$profileId[".validate"], /currentSkill/);
   assert.doesNotMatch(roomRules.historyPlayers.$profileId[".validate"], /uuid|uid/);
+
+  const summaryRules = roomRules.completedGameSummaries.$gameId;
+  const publicDetailRules = roomRules.completedGamePublicDetails.$gameId;
+  assert.strictEqual(summaryRules.$other[".validate"], false);
+  assert.strictEqual(summaryRules.rankings[".validate"], "newData.hasChildren()");
+  assert.strictEqual(summaryRules.stages[".validate"], "newData.hasChildren()");
+  assert.strictEqual(summaryRules.rankings.$index.$other[".validate"], false);
+  assert.strictEqual(summaryRules.stages.$index.$other[".validate"], false);
+  assert.match(summaryRules.gameId[".validate"], /newData\.isString/);
+  assert.match(summaryRules.rankings.$index.profileId[".validate"], /p_/);
+
+  assert.strictEqual(publicDetailRules.$other[".validate"], false);
+  assert.strictEqual(publicDetailRules.rankings[".validate"], "newData.hasChildren()");
+  assert.strictEqual(publicDetailRules.stageResults[".validate"], "newData.hasChildren()");
+  assert.strictEqual(publicDetailRules.rankings.$index.$other[".validate"], false);
+  assert.strictEqual(publicDetailRules.stageResults.$stageId.$other[".validate"], false);
+  assert.strictEqual(publicDetailRules.stageResults.$stageId.rankings[".validate"], "newData.hasChildren()");
+  assert.strictEqual(publicDetailRules.stageResults.$stageId.rankings.$index.$other[".validate"], false);
+  assert.match(publicDetailRules.stageResults.$stageId[".validate"], /child\('stageId'\)\.val\(\) === \$stageId/);
+  assert.match(publicDetailRules.rankings.$index.profileId[".validate"], /p_/);
+  assert.doesNotMatch(
+    JSON.stringify({ summaryRules, publicDetailRules }),
+    /uuid|ticket|prediction|breakdown|stageSkill|stageSkillHistory/
+  );
 });
 
 run("firebase next-game config catalog is host scoped", () => {

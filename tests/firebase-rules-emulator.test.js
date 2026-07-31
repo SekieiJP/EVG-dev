@@ -158,11 +158,57 @@ function publicNode(overrides = {}) {
     roomVersion: 4,
     currentStageIndex: 0,
     currentStageId: "stage-001",
+    playerCount: 0,
+    submittedCount: 0,
+    abstainedCount: 0,
     countdownEndsAt: "2026-07-29T00:00:00.000Z",
     tallyingEndsAt: "2026-07-29T00:00:03.000Z",
     animationStartedAt: null,
     animationSkippedAt: null,
     revealEndsAt: null,
+  }, overrides);
+}
+
+function publicHistoryRanking(overrides = {}) {
+  return Object.assign({
+    profileId: aliceProfileId,
+    name: "Alice",
+    rank: 1,
+    score: 20,
+  }, overrides);
+}
+
+function completedGameSummary(gameId, overrides = {}) {
+  return Object.assign({
+    gameId,
+    title: "Rules history",
+    finishedAt: "2026-07-29T00:00:05.000Z",
+    interrupted: false,
+    finalPhase: "final",
+    rankings: [publicHistoryRanking()],
+    playerCount: 1,
+    stageCount: 1,
+    stages: [{ stageId: "stage-001", name: "Stage 1" }],
+  }, overrides);
+}
+
+function completedGamePublicDetail(gameId, overrides = {}) {
+  return Object.assign({
+    gameId,
+    title: "Rules history",
+    finishedAt: "2026-07-29T00:00:05.000Z",
+    interrupted: false,
+    finalPhase: "final",
+    rankings: [publicHistoryRanking()],
+    stageResults: {
+      "stage-001": {
+        stageId: "stage-001",
+        stageName: "Stage 1",
+        calculatedAt: "2026-07-29T00:00:04.000Z",
+        participantCount: 1,
+        rankings: [publicHistoryRanking()],
+      },
+    },
   }, overrides);
 }
 
@@ -329,6 +375,73 @@ async function main() {
     await assertSucceeds(privacyHost.ref(`rooms/${privacyRoomId}/publicScores/${aliceProfileId}`).update({
       total: 11,
     }));
+
+    const forbiddenPublicFields = {
+      uuid: "alice",
+      ticket: { boardFloor: 1 },
+      prediction: "bob",
+      predictions: ["bob"],
+      breakdown: [{ score: 1 }],
+      predictionBreakdown: [{ score: 1 }],
+      eventBreakdown: [{ score: 1 }],
+      stageSkill: 40,
+      stageSkillHistory: [40],
+      history: [40],
+      unknownField: true,
+    };
+    for (const [field, value] of Object.entries(forbiddenPublicFields)) {
+      await assertFails(privacyHost.ref(`rooms/${privacyRoomId}/public`).set(Object.assign(publicNode({
+        gameId: "privacy-game",
+        phase: "countdown",
+        roomVersion: 5,
+        currentStageId: "privacy-stage",
+        playerCount: 2,
+        submittedCount: 1,
+      }), { [field]: value })));
+
+      const summaryId = `leak-summary-${field}`;
+      await assertFails(privacyHost.ref(`rooms/${privacyRoomId}/completedGameSummaries/${summaryId}`).set(
+        Object.assign(completedGameSummary(summaryId), { [field]: value })
+      ));
+
+      const detailId = `leak-detail-${field}`;
+      const detail = completedGamePublicDetail(detailId);
+      detail.stageResults["stage-001"] = Object.assign({}, detail.stageResults["stage-001"], {
+        [field]: value,
+      });
+      await assertFails(privacyHost.ref(`rooms/${privacyRoomId}/completedGamePublicDetails/${detailId}`).set(detail));
+    }
+    await assertFails(privacyHost.ref(`rooms/${privacyRoomId}/public`).set(publicNode({
+      gameId: "privacy-game",
+      phase: "countdown",
+      roomVersion: 5,
+      currentStageId: "privacy-stage",
+      playerCount: "2",
+    })));
+    await assertFails(privacyHost.ref(`rooms/${privacyRoomId}/completedGameSummaries/raw-ranking`).set(
+      completedGameSummary("raw-ranking", {
+        rankings: [Object.assign(publicHistoryRanking(), { uuid: "alice" })],
+      })
+    ));
+    await assertFails(privacyHost.ref(`rooms/${privacyRoomId}/completedGameSummaries/scalar-ranking`).set(
+      completedGameSummary("scalar-ranking", { rankings: "uuid=alice" })
+    ));
+    await assertFails(privacyHost.ref(`rooms/${privacyRoomId}/completedGamePublicDetails/scalar-stages`).set(
+      completedGamePublicDetail("scalar-stages", { stageResults: "ticket=secret" })
+    ));
+    await assertFails(privacyHost.ref(`rooms/${privacyRoomId}/completedGamePublicDetails/wrong-stage-key`).set(
+      completedGamePublicDetail("wrong-stage-key", {
+        stageResults: {
+          "stage-001": {
+            stageId: "different-stage",
+            stageName: "Stage 1",
+            calculatedAt: "2026-07-29T00:00:04.000Z",
+            participantCount: 1,
+            rankings: [publicHistoryRanking()],
+          },
+        },
+      })
+    ));
 
     await assertSucceeds(host.ref(`rooms/${roomId}/operations/rules-boundary`).set({
       at: "2026-07-29T00:00:00.000Z",
@@ -575,11 +688,10 @@ async function main() {
         currentSkill: 90,
         updatedAt: "2026-07-29T00:00:05.000Z",
       },
-      [`rooms/${roomId}/completedGameSummaries/game-1`]: {
-        gameId: "game-1",
+      [`rooms/${roomId}/completedGameSummaries/game-1`]: completedGameSummary("game-1", {
         title: "Rules test",
         finishedAt: "2026-07-29T00:00:05.000Z",
-      },
+      }),
       [`rooms/${roomId}/completedGameDetails/game-1`]: {
         gameId: "game-1",
         title: "Rules test",
@@ -602,20 +714,34 @@ async function main() {
         roomVersion: 7,
         animationStartedAt: "2026-07-29T00:00:04.000Z",
       }),
-      [`rooms/${roomId}/completedGameSummaries/game-1`]: {
-        gameId: "game-1",
+      [`rooms/${roomId}/completedGameSummaries/game-1`]: completedGameSummary("game-1", {
         title: "Rules test repaired",
         finishedAt: "2026-07-29T00:00:05.000Z",
         stageCount: 2,
-      },
-      [`rooms/${roomId}/completedGamePublicDetails/game-1`]: {
-        gameId: "game-1",
+        stages: [
+          { stageId: "stage-001", name: "Stage 1" },
+          { stageId: "stage-002", name: "Stage 2" },
+        ],
+      }),
+      [`rooms/${roomId}/completedGamePublicDetails/game-1`]: completedGamePublicDetail("game-1", {
         title: "Rules test repaired",
         stageResults: {
-          "stage-001": { stageId: "stage-001", rankings: [] },
-          "stage-002": { stageId: "stage-002", rankings: [] },
+          "stage-001": {
+            stageId: "stage-001",
+            stageName: "Stage 1",
+            calculatedAt: "2026-07-29T00:00:04.000Z",
+            participantCount: 0,
+            rankings: [],
+          },
+          "stage-002": {
+            stageId: "stage-002",
+            stageName: "Stage 2",
+            calculatedAt: "2026-07-29T00:00:05.000Z",
+            participantCount: 0,
+            rankings: [],
+          },
         },
-      },
+      }),
       [`rooms/${roomId}/completedGameDetails/game-1`]: {
         gameId: "game-1",
         title: "Rules test repaired",
@@ -663,18 +789,23 @@ async function main() {
     }));
 
     const gameTwo = {
-      summary: {
-        gameId: "game-2",
+      summary: completedGameSummary("game-2", {
         title: "Rules second game",
         finishedAt: "2026-07-29T00:00:07.000Z",
-      },
-      publicDetail: {
-        gameId: "game-2",
+      }),
+      publicDetail: completedGamePublicDetail("game-2", {
         title: "Rules second game",
+        finishedAt: "2026-07-29T00:00:07.000Z",
         stageResults: {
-          "stage-001": { stageId: "stage-001", rankings: [] },
+          "stage-001": {
+            stageId: "stage-001",
+            stageName: "Stage 1",
+            calculatedAt: "2026-07-29T00:00:06.000Z",
+            participantCount: 0,
+            rankings: [],
+          },
         },
-      },
+      }),
       detail: {
         gameId: "game-2",
         title: "Rules second game",
@@ -857,16 +988,18 @@ async function main() {
     await assertFails(host.ref(`rooms/${roomId}/roomSettings/countdownSeconds`).set(61));
     await assertFails(alice.ref(`rooms/${roomId}/roomSettings/countdownSeconds`).set(20));
 
-    await assertSucceeds(host.ref(`rooms/${roomId}/completedGamePublicDetails/game-0`).set({
-      gameId: "game-0",
+    await assertSucceeds(host.ref(`rooms/${roomId}/completedGamePublicDetails/game-0`).set(completedGamePublicDetail("game-0", {
       rankings: [{ profileId: "p_alice", name: "Alice", rank: 1, score: 20 }],
       stageResults: {
         "stage-001": {
           stageId: "stage-001",
+          stageName: "Stage 1",
+          calculatedAt: "2026-07-29T00:00:04.000Z",
+          participantCount: 1,
           rankings: [{ profileId: "p_alice", name: "Alice", rank: 1, score: 20 }],
         },
       },
-    }));
+    })));
     const publicHistory = await assertSucceeds(alice.ref(`rooms/${roomId}/completedGamePublicDetails/game-0`).once("value"));
     if (JSON.stringify(publicHistory.val()).includes('"uuid"')) throw new Error("public history exposed an internal uuid");
     await assertFails(alice.ref(`rooms/${roomId}/completedGameDetails/game-0`).once("value"));

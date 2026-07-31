@@ -1245,7 +1245,15 @@
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const room = await this.readRestRoom({ purpose: "mutation", includeCompletedGames: true });
         if (!room) return;
-        if (room.firebaseSchemaVersion === FIREBASE_SCHEMA_VERSION) return room;
+        if (room.firebaseSchemaVersion === FIREBASE_SCHEMA_VERSION) {
+          try {
+            return await this.repairPublicProjection(room);
+          } catch (error) {
+            this.debug.lastRulesError = error && error.message ? error.message : String(error);
+            if (attempt === 2) throw error;
+            continue;
+          }
+        }
         const resultsSnapshot = await this.sdk.get(
           this.sdk.ref(this.firebaseDb, `/rooms/${this.roomId}/results`)
         );
@@ -1302,6 +1310,34 @@
         }
       }
       return null;
+    }
+
+    async repairPublicProjection(room) {
+      const currentNodes = await this.readRestNodes([
+        "results",
+        ...PUBLIC_PROJECTION_KEYS,
+        "completedGamePublicDetails",
+      ]);
+      const canonicalRoom = this.engine.deepClone(room);
+      canonicalRoom.stageResults = normalizeStageResults(currentNodes.results || {});
+      const canonicalNodes = roomToFirebaseNodes(canonicalRoom);
+      const writes = publicProjectionChildDiffs(currentNodes, canonicalNodes, {
+        removeMissing: false,
+      });
+      appendCollectionChildDiff(
+        writes,
+        "completedGamePublicDetails",
+        currentNodes.completedGamePublicDetails,
+        canonicalNodes.completedGamePublicDetails,
+        { removeMissing: false }
+      );
+      if (!writes.length) return canonicalRoom;
+      const updates = writes.reduce((acc, [childPath, value]) => {
+        acc[`rooms/${this.roomId}/${childPath}`] = value;
+        return acc;
+      }, {});
+      await this.sdk.update(this.sdk.ref(this.firebaseDb, "/"), updates);
+      return canonicalRoom;
     }
 
     async isHostAllowed() {
