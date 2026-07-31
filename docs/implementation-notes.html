@@ -447,7 +447,8 @@
           <li><strong>トレードオフ:</strong> 誤入力による極端な待ち時間を避けるため自由入力を1〜60秒の整数へ制限した。締切後の遅延受信に使う移動待ち3秒は別の役割なので変更していない。</li>
           <li><strong>逸脱:</strong> <code>gas/src/Code.gs</code>に残る旧進行用15秒処理はarchive専用の現行routingから到達不能であり、本番正系ではないため変更していない。進行時間はFirebase/ブラウザエンジンだけを正とする。</li>
           <li><strong>検証:</strong> 既定10秒、範囲拒否、設定時間による終了時刻、次ゲーム引継ぎ、RTDB serializer/deserializer、Host原子的更新、既存room補完、Host UI保存をUnitとPlaywright E2Eへ追加した。Unit、50人×20ステージ負荷モデル、E2Eは成功し、Firebase CLIの本番project向けdry-runでもRules構文を検証した。Rules emulatorは実装ではなくローカル環境にJava Runtimeがないため起動できなかった。</li>
-          <li><strong>未完了:</strong> 新しい<code>roomSettings/countdownSeconds</code>のRulesを本番へreleaseし、r9をPages公開した後、Host認証で本番roomに10が補完されることを確認する必要がある。</li>
+          <li><strong>公開・本番反映:</strong> コミット<code>700c68d</code>を基準に、本番<code>elevator-game-live-default-rtdb</code>へ新Rulesをreleaseして成功した。ローカルRulesの正規化JSON SHA-256は<code>37379e78bb868e80a888ebcea5b6c7e0dbba2ca0e2f62c9c5737c8e700df6df0</code>。続いてPages workflow成功と公開アセット版<code>260731-p0p1r9</code>、Host設定フォーム、既定10秒、1〜60秒範囲、専用保存APIを確認した。</li>
+          <li><strong>本番初期値:</strong> release後の<code>rooms/elevator-game-live/roomSettings/countdownSeconds</code>は<code>null</code>だったため、既存値がないことを確認してから10で初期化した。Firebase CLIで再読取りし10を確認した。以後はHost設定commandと次ゲーム引継ぎがこの値を保持する。</li>
         </ul>
       </section>
 

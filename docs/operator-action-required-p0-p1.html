@@ -42,6 +42,12 @@
       で一致することを確認しました。
     </div>
 
+    <div class="success">
+      <strong>2026-07-31、締切カウントダウンroom settings対応も本番へ反映済みです。</strong>
+      コミット<code>700c68d</code>のRules releaseとアセット版<code>260731-p0p1r9</code>のPages公開に成功し、
+      本番<code>roomSettings/countdownSeconds</code>を既定値10で初期化・再読取りしました。
+    </div>
+
     <div class="warning">
       <strong>Firebase Skill移行と戦績表示確認は完了しましたが、P1全体の本番作業はまだ完了していません。</strong>
       GAS archive URL/API keyのクライアント公開は完了しました。残りはSpreadsheet/GAS側の設定確認、現在ゲームのarchive/recalculate、
@@ -53,12 +59,13 @@
     <table>
       <thead><tr><th>確認項目</th><th>結果</th></tr></thead>
       <tbody>
-        <tr><td>GitHub Pages</td><td>コミット<code>09d13c1</code>、アセットversion <code>260731-p0p1r8</code>を公開済み。History修正版に加え、GAS archiveクライアント設定の配信を確認済み。</td></tr>
+        <tr><td>GitHub Pages</td><td>コミット<code>700c68d</code>、アセットversion <code>260731-p0p1r9</code>を公開済み。History/GAS archive設定に加え、Hostの締切カウントダウン設定フォームを確認済み。</td></tr>
         <tr><td>現在room</td><td><code>final</code>。backfillでroomVersionは26→27。次ゲーム作成やステージ操作は行っていない。</td></tr>
-        <tr><td>現行Rules</td><td>2026-07-31に欠損root player対応版を再デプロイ済み。本番取得版と正規化JSON SHA-256一致。</td></tr>
+        <tr><td>現行Rules</td><td>2026-07-31に欠損root player対応版を再デプロイ後、<code>roomSettings/countdownSeconds</code>のHost書込み・1〜60整数検証を追加release済み。</td></tr>
         <tr><td>Skill復旧結果</td><td><code>schemaVersion=firebase-rtdb-v3-skill-history</code>、有限StageSkill 29件、root欠損0人、root/roomとも非ゼロSkill 6人。</td></tr>
         <tr><td>履歴・完了詳細</td><td>履歴長とmarker長 <code>[4,5,5,5,5,5]</code>、公開履歴6人、完了詳細5ステージ・6人。History画面も6人だけを非ゼロSkillで表示し、各ステージ6人のスコア詳細を取得済み。</td></tr>
         <tr><td>Host allowlist</td><td>今回使用したHost uidで<code>isHostAllowed=true</code>と認証成功、Rules errorなしを確認済み。開催に使う他端末は個別確認が必要。</td></tr>
+        <tr><td>締切カウントダウン</td><td>既定10秒。Hostが1〜60秒の整数へ変更でき、本番<code>roomSettings/countdownSeconds</code>は10で初期化・再読取り済み。</td></tr>
         <tr><td>GAS archive</td><td>公開設定のHTTPS <code>/exec</code> URLとapiKeyは配信済み。値は本文へ転記しない。Spreadsheet初期化、Webアプリ権限、archive/recalculateの実疎通は未確認。</td></tr>
       </tbody>
     </table>
