@@ -464,6 +464,8 @@
           <li><strong>検証:</strong> 空ロビーImport、前日参加者の退室、同日Skill履歴保持とscore 0、履歴親非書込み、新規game子だけの追記、guard時のRTDB/GAS副作用0、baseVersion競合、欠損public安全停止、final/手動archive/backfill子書込みをUnitへ固定した。Browser E2Eではmock接続を明示し、空ロビーImport後のreload/fresh Historyと同期2click抑止を確認した。Rules emulatorには親null/縮小、子null、ID不一致、混在atomic rollback、作成/修復成功を追加した。</li>
           <li><strong>テスト環境の制約:</strong> Unit、負荷モデル、Playwrightはローカル実行する。Rules emulator用テストは追加済みだが、このMacにはJava RuntimeがないためDatabase emulator本体は起動できない。Firebase CLIのRules dry-runと本番反映前後のRules本文一致で補完し、この制約をemulator成功とは記録しない。</li>
           <li><strong>リリース前バックアップ:</strong> 本番RTDB全体を読取り専用で<code>/private/tmp/evg-r10-predeploy-rtdb-20260731.json</code>へ退避し、JSON parse成功、155,437 bytes、SHA-256 <code>a97916a5d3e281cc9ec0f80caef527dcdcad18b67e14bf096897146b08a95a79</code>を確認した。退避時点はschema v3、完了ゲーム1件、公開Skillプロフィール6件である。一時領域は長期保管先ではない。</li>
+          <li><strong>公開・Rules反映:</strong> 修正コミット<code>3f82740</code>を<code>origin/master</code>へpushし、Pages workflow成功、公開HTMLのアセット版<code>260731-p0p1r10</code>、公開adapter SHA-256 <code>8ed26eafbdf4019e0a2ee3c7b33cba3c411472e258392d6feadc73c33ddef3fd</code>とローカル本文の完全一致を確認した。その後、本番<code>elevator-game-live-default-rtdb</code>へ削除防止Rulesをreleaseした。</li>
+          <li><strong>本番検証:</strong> release後Rulesを読取り取得し、リポジトリ版と正規化JSON SHA-256 <code>7e56508a0772ec8b06ecfd3582409cd315a3e3cf4c021d1b2fd2192da1662685</code>で完全一致した。本番roomの5履歴ノードを再読取りし、完了ゲーム各1件、本人詳細6プロフィール、公開Skill 6プロフィールの件数と内容hashが事前バックアップから全て不変であることを確認した。データ変更を伴う実Importは行っていない。</li>
           <li><strong>データ復旧境界:</strong> このr10は今後の削除防止であり、すでに消失した本番履歴を推測復元しない。Spreadsheet所有者によるGAS/Spreadsheetバックアップは今回まだ実施されていないため、GAS archive、保存済みRTDB export、root playerを照合する本番履歴復旧は、そのバックアップ後の別payload・別承認として扱う。</li>
         </ul>
       </section>
@@ -486,7 +488,7 @@
           <li>GAS archive APIの冪等キーは<code>archiveId</code>、ゲームの論理識別は<code>gameId</code>に確定した。実Spreadsheetで同一archiveId再送が重複しないことは運用者smokeで確認する。</li>
           <li>本番Host端末のFirebase uidをallowlistへ登録する運用手順を確定し、GitHub Pagesで使うroomIdごとに登録漏れがないか確認する必要がある。</li>
           <li>2026-06-02にallowlist版Firebase Rulesをdeployした記録はあるが、2026-07-29監査では今回のP0/P1用Rules（<code>historyPlayers</code>、<code>nextGameConfigs</code>、完了履歴境界）は未反映だった。2026-07-30にP0/P1用Rulesを改めてreleaseし、リポジトリ版との完全一致を確認した。</li>
-          <li>2026-07-31に欠損root player対応版Rulesを再releaseし、Host backfill、戦績表示、GAS archiveクライアント設定の公開まで完了した。P1全体の残りはGAS/Spreadsheet側の設定確認、現在ゲームarchive/recalculate、同日次ゲーム継続とarchive retryの実環境smokeである。</li>
+          <li>2026-07-31に欠損root player対応版と履歴消失防止r10 Rulesをreleaseし、Host backfill、戦績表示、GAS archiveクライアント設定、次ゲーム履歴保護の本番公開まで完了した。P1全体の残りは全Hostタブのr10強制再読み込み、GAS/Spreadsheet側の設定確認、現在ゲームarchive/recalculate、同日次ゲーム継続とarchive retryの実環境smokeである。</li>
         </ul>
       </section>
     </main>

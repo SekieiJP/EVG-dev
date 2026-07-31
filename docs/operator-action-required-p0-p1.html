@@ -48,6 +48,17 @@
       本番<code>roomSettings/countdownSeconds</code>を既定値10で初期化・再読取りしました。
     </div>
 
+    <div class="success">
+      <strong>2026-07-31、次ゲーム開始時の履歴消失防止r10も本番へ反映済みです。</strong>
+      コミット<code>3f82740</code>、アセット版<code>260731-p0p1r10</code>をRulesより先に公開し、その後5履歴親の書込み・子削除を拒否するRulesをreleaseしました。
+      release後Rulesはリポジトリ版と正規化SHA-256 <code>7e56508a0772ec8b06ecfd3582409cd315a3e3cf4c021d1b2fd2192da1662685</code>で一致し、5種類の本番履歴も事前バックアップから不変でした。
+    </div>
+
+    <div class="warning">
+      <strong>次のHost操作前に、開いたままのHostタブをすべて強制再読み込みしてください。</strong>
+      旧r9タブは新Rulesと非互換で、次ゲーム・結果保存・backfill等が拒否されます。履歴削除はRulesで防止されますが、正常運用にはr10の読み込みが必要です。複数Host端末がある場合は全端末で確認してください。
+    </div>
+
     <div class="warning">
       <strong>Firebase Skill移行と戦績表示確認は完了しましたが、P1全体の本番作業はまだ完了していません。</strong>
       GAS archive URL/API keyのクライアント公開は完了しました。残りはSpreadsheet/GAS側の設定確認、現在ゲームのarchive/recalculate、
@@ -59,9 +70,9 @@
     <table>
       <thead><tr><th>確認項目</th><th>結果</th></tr></thead>
       <tbody>
-        <tr><td>GitHub Pages</td><td>コミット<code>700c68d</code>、アセットversion <code>260731-p0p1r9</code>を公開済み。History/GAS archive設定に加え、Hostの締切カウントダウン設定フォームを確認済み。</td></tr>
+        <tr><td>GitHub Pages</td><td>コミット<code>3f82740</code>、アセットversion <code>260731-p0p1r10</code>を公開済み。公開adapter本文もローカル版と完全一致を確認済み。</td></tr>
         <tr><td>現在room</td><td><code>final</code>。backfillでroomVersionは26→27。次ゲーム作成やステージ操作は行っていない。</td></tr>
-        <tr><td>現行Rules</td><td>2026-07-31に欠損root player対応版を再デプロイ後、<code>roomSettings/countdownSeconds</code>のHost書込み・1〜60整数検証を追加release済み。</td></tr>
+        <tr><td>現行Rules</td><td>2026-07-31にr10削除防止版をrelease済み。5履歴親の書込みと既存子削除を拒否し、gameId変更時もroomVersion + 1を必須化。release後本文一致を確認済み。</td></tr>
         <tr><td>Skill復旧結果</td><td><code>schemaVersion=firebase-rtdb-v3-skill-history</code>、有限StageSkill 29件、root欠損0人、root/roomとも非ゼロSkill 6人。</td></tr>
         <tr><td>履歴・完了詳細</td><td>履歴長とmarker長 <code>[4,5,5,5,5,5]</code>、公開履歴6人、完了詳細5ステージ・6人。History画面も6人だけを非ゼロSkillで表示し、各ステージ6人のスコア詳細を取得済み。</td></tr>
         <tr><td>Host allowlist</td><td>今回使用したHost uidで<code>isHostAllowed=true</code>と認証成功、Rules errorなしを確認済み。開催に使う他端末は個別確認が必要。</td></tr>
@@ -74,6 +85,7 @@
 
     <ol>
       <li><strong>旧Rulesの一時バックアップを保全する:</strong> <code>/private/tmp/evg-production-rules-20260729.json</code>を、担当者と日時が分かる組織の承認済み保管先へコピーする。<code>/private/tmp</code>は長期保管先として扱わない。</li>
+      <li><strong>r10を強制再読み込みする:</strong> 開催に使う全Hostタブでアセット版<code>260731-p0p1r10</code>を確認し、旧タブを閉じる。実Import前にinternal-statusのRules errorが空であることを確認する。</li>
       <li><strong>✅ 今回使用したHost uidを確認済み:</strong> internal-statusで<code>isHostAllowed=true</code>を確認した。開催に使う他のHost端末があれば、既存allowlistを消さず端末ごとに確認する。</li>
       <li><strong>✅ Skill backfillを1回実行済み:</strong> 最新版を強制再読み込みし、通常のHost認証を1回行った。次ゲーム作成やステージ操作は行っていない。</li>
       <li><strong>✅ 戦績を確認済み:</strong> schema v3、有限StageSkill 29件、履歴長<code>[4,5,5,5,5,5]</code>、6人の非ゼロSkill、現ゲーム5ステージ完了詳細、Historyの6人表示と各ステージ詳細を確認した。</li>
@@ -83,7 +95,7 @@
       <li><strong>実環境smokeを行う:</strong> 非イベント時間の小規模確認ゲームで、ステージ結果の得点・StageSkill・持ち点・現在Skill、同日次ゲームへの参加継続、archive export/retryを確認する。</li>
     </ol>
 
-    <p>上記2〜4と6は完了しています。残作業は1のバックアップ長期保管、5のSpreadsheet/Apps Script設定確認、7の現在ゲームarchive、8の実環境smokeです。</p>
+    <p>Skill backfill、戦績確認、クライアント公開、Firebase Rules反映は完了しています。残作業は一時バックアップの長期保管、全Hostタブのr10強制再読み込み、Spreadsheet/Apps Script設定確認、現在ゲームarchive、実環境smokeです。</p>
 
     <div class="notice">
       <strong>認証情報や共有リンクをこの文書やGitに貼り付けないでください。</strong>
@@ -249,6 +261,7 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
       <tbody>
         <tr><td>Rules deployが失敗する</td><td>ゲーム開始を止め、CLIのエラーを解消する。緊急復旧が必要なら、2-1で保存したRulesをConsoleに戻して公開する。旧Rulesへ戻した場合は、そのRulesと互換なアプリ版へ戻すまでHostの書込み操作を行わない。</td></tr>
         <tr><td>Hostが「allowlistに登録されていません」</td><td>internal-statusの現在uidと <code>rooms/elevator-game-live/roles/hosts/{uid}</code> を照合する。uidの子を <code>true</code> で追加し、Host画面を再読み込みする。既存のhost uidを一括削除しない。</td></tr>
+        <tr><td>次ゲーム・結果保存が<code>rules_or_conflict</code>で拒否される</td><td>開いたままの旧r9タブを閉じ、r10を強制再読み込みする。履歴ノードやRulesを手動で緩めず、internal-statusのアセット版、roomVersion、<code>lastRulesError</code>を保存する。</td></tr>
         <tr><td>archiveが「GAS URL未設定」またはHTTPエラー</td><td><code>/exec</code> URL、Webアプリのアクセス範囲、公開済みクライアント設定を確認する。直せるまでURLを空に戻せばarchive呼出しは失敗状態になるだけで、ゲーム進行はRTDBで継続する。</td></tr>
         <tr><td>archiveが「Firebase ID token」またはHost認可エラー</td><td>匿名Authが有効か、Host画面を再読み込みしてtokenが更新されるか、GAS側のFirebaseプロジェクト/room設定とallowlistが一致するかを確認する。</td></tr>
         <tr><td>archiveが<code>archive_pending</code>または<code>archive_mismatch</code></td><td>RTDB <code>archive</code>が追跡しているgameIdを変更・削除せず確認し、そのゲームの「未完了を再送」を先に完了する。別ゲームIDを手入力して再送しない。</td></tr>
@@ -263,6 +276,8 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
       <li>✅ 本番RTDB Rulesの一時バックアップを取得し、デプロイ前のSHA-256一致を確認した。</li>
       <li>一時バックアップを組織の承認済み長期保管先へコピーした。</li>
       <li>✅ 欠損root player対応版<code>firebase/database.rules.json</code>を<code>elevator-game-live</code>へ再deployし、release成功と本番Rulesの完全一致を確認した。</li>
+      <li>✅ 履歴消失防止r10をクライアント先行で公開後、履歴親/子削除防止Rulesをreleaseし、5履歴ノードが事前バックアップから不変であることを確認した。</li>
+      <li>開催に使う全Hostタブを強制再読み込みし、アセット版<code>260731-p0p1r10</code>を確認した。</li>
       <li>✅ allowlist済みHostで1回backfillし、29件のStageSkill、6人の現在Skill、5ステージ完了詳細を確認した。</li>
       <li>今回使用したHost uidは確認済み。開催に使用する追加Host端末があればFirebase uidを<code>roles/hosts</code>へ登録・確認する。</li>
       <li>GASの <code>setupElevatorGameSheets</code> を正しいSpreadsheetで実行し、必要シートを確認した。</li>
