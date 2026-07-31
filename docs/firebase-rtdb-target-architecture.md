@@ -1,6 +1,6 @@
 # Firebase RTDB 目標アーキテクチャ
 
-更新日: 2026-07-29
+更新日: 2026-07-31
 
 ## 目的
 
@@ -84,13 +84,13 @@ rooms/{roomId}
 
   public
     gameId
-    phase                  # lobby | stage_intro | voting | countdown | moving | reveal | ranking | final
+    phase                  # lobby | stage_intro | voting | countdown | tallying | reveal | ranking | final
     roomVersion
     currentStageIndex
     currentStageId
     phaseStartedAt
     countdownEndsAt
-    movingEndsAt
+    tallyingEndsAt
     animationStartedAt
     playerCount
     submittedCount
@@ -116,7 +116,7 @@ rooms/{roomId}
     seMuted
 
   nextGameConfigs/{configId}
-    status                 # ACTIVE | ARCHIVED
+    status                 # ACTIVE | INACTIVE
     config                 # 次ゲーム用テンプレート。Spreadsheetは読取り元にしない
     updatedAt
 
@@ -177,36 +177,47 @@ rooms/{roomId}
 
   archive
     requestedAt
-    requestedBy
     status                 # none | queued | exported | failed
     archiveId
+    gameId
+    pendingGameIdsJson
     error
 
   completedGameSummaries/{gameId}
+    gameId
     title
     finishedAt
     interrupted
-    publicRankings          # 表示名、得点、順位だけ
+    rankings               # profileId、表示名、得点、順位だけ
+
+  completedGamePublicDetails/{gameId}
+    gameId
+    rankings               # profileId、表示名、得点、順位だけ
+    stageResults            # ステージごとの公開rankings
 
   completedGameDetails/{gameId}
-    hostOnly                # Host allowlistだけが読む確定詳細
+    gameId
+    ...                     # Host allowlistだけが読む確定ゲーム全体
+
+  completedGamePlayerDetails/{uid}/{gameId}
+    gameId
+    ...                     # 本人またはHostだけが読む個人内訳
+
+  historyPlayers/{profileId}
+    profileId
+    name
+    currentSkill
+    updatedAt
 
 players/{uid}
-  profile
-    currentName
-    currentSkill
-    metrics                 # 9項目: current/average/total Skill、最高得点、参加ゲーム/ステージ数、強制下車数、予想正解率、優勝数
-    updatedAt
-  history/{gameId}
-    summary
-  stageResults/{gameId}_{stageId}
-    score
-    status
-    stageSkill
-    updatedAt
-
-  completedGamePlayerDetails/{gameId}
-    # 本人だけが読む個人内訳。公開履歴には複製しない。
+  name
+  currentSkill
+  stageSkillHistoryJson
+  appliedSkillStageIdsJson
+  joinedAt
+  lastSeenAt
+  updatedAt
+  roomId
 
 archives/{archiveId}
   roomId
@@ -305,16 +316,19 @@ Hostは `roles/hosts/{auth.uid} == true` の場合だけ、以下を書ける。
 - `players`、`playerStats`
 - `results`
 - `scores`
-- `historyPlayers`
-- `completedGameSummaries`、公開/Host/本人用の完了詳細
+- `historyPlayers/{profileId}`
+- `completedGameSummaries/{gameId}`、`completedGamePublicDetails/{gameId}`、`completedGameDetails/{gameId}`、`completedGamePlayerDetails/{uid}/{gameId}`
 - `operations`
 - `archive`
 
 Host操作はroot room transactionではなく、対象ノード単位の疎なパスへ分解する。複数の枝を同時に確定する操作では、DBルートに対する1回のmulti-location `update()`を使い、Rulesで `public` の既存phase/versionをCAS条件として検証する。
 
+完了履歴と公開Skill indexは親ノードを全置換しない。通常クライアントは上記gameId/profileId子パスへ非null値を作成または修復するだけとし、Rulesは5種類の履歴親への書込み、既存子の削除、path keyとpayload内IDの不一致を拒否する。
+
 禁止:
 
 - `rooms/{roomId}` 全体を単一オブジェクトとしてtransaction/update/setする。
+- 完了履歴または `historyPlayers` の親をset/updateし、空オブジェクトをnullへ変換する。
 - フェーズだけを先に確定し、結果・Skill・操作ログを別リクエストで後書きする。
 - `roomFromFirebaseNodes(undefined)` から初期roomを作ってHost操作する。
 - root transactionのローカルキャッシュを信頼してフェーズ判定する。
@@ -334,13 +348,13 @@ Rules validation
   require Host allowlist
 ```
 
-Rulesでは `data.child('phase')` と `newData.child('phase')` の組み合わせを検証し、不正な飛び越しと古いversionからの更新を拒否する。検証に失敗するとmulti-location update全体が反映されないため、操作ログだけが残ることもない。
+同じgameId内では、Rulesが `data.child('phase')` と `newData.child('phase')` の組み合わせを検証し、不正な飛び越しと古いversionからの更新を拒否する。gameId変更は次ゲーム境界として遷移表の例外だが、`roomVersion + 1`は必須であり、通常クライアントは必ず`lobby`を作る。検証に失敗するとmulti-location update全体が反映されないため、操作ログだけが残ることもない。
 
 ### Result commit
 
 結果発表開始時はHostブラウザがticketを読み、決定的な集計関数で結果を計算する。
 
-書き込みは、DBルートに対する**1回のmulti-location `update()`**で `public`、`results/{stageId}`、全 `scores/{uid}`、全 `playerStats/{uid}`、root `players/{uid}`、公開履歴、`operations` を同時に確定する。順次 `set()`、複数回の `update()`、phase先行確定は使わない。
+書き込みは、DBルートに対する**1回のmulti-location `update()`**で `public`、`results/{stageId}`、全 `scores/{uid}`、全 `playerStats/{uid}`、root `players/{uid}`、公開履歴のprofileId子、`operations` を同時に確定する。順次 `set()`、複数回の `update()`、phase先行確定、履歴親の全置換は使わない。
 
 このcommitでは、StageSkill履歴の追記と現在Skill（全履歴の上位5件、最高値を含む）の更新も同じpayloadに含める。二重集計を防ぐため、Rulesのphase/version CASと `results/{stageId}` の新規作成検証で、古いHost操作または既存結果への再commitをupdate全体として拒否する。Sparkでは完全なサーバ再計算ができないため、Blaze移行時にCloud Functionsで再計算検証を追加する。
 
@@ -366,9 +380,13 @@ Spark + Rulesだけでは、クライアントが書いた時刻とFirebaseサ�
 
 この判定はRTDBに保存したticket提出時刻および結果確定時刻をAsia/Tokyoへ変換して行う。Spreadsheetの `game_configs`、`current_game`、`players` は判定・開始の読取り元にしない。
 
+既存roomはplayers/resultsが空でも次ゲーム生成として扱い、初期room生成は保存済みゲーム状態が全て未作成の場合だけに限る。次ゲームのmulti-location updateは旧gameId/profileId集合のsuperset検査を通し、新たに完了するgameIdと更新するprofileId子だけをupsertする。gameId変更時も `public.roomVersion = stored roomVersion + 1` を必須とし、画面が送るbaseVersion、同一タブの待機表示、Rules CASで二重開始を拒否する。
+
+`public`だけ欠損して履歴・meta・config・結果等が残る場合は初期化せず `room_state_incomplete` で停止する。通常JSON Importは履歴Resetを兼ねず、完全Resetは通常クライアントとRulesから分離した管理用API・確認・権限を設計するまで提供しない。
+
 ### 公開履歴の境界
 
-Player/Screenが読む公開履歴は `completedGameSummaries` のゲームサマリ、表示名、得点、順位、公開用現在Skillに限定する。ticket、予想回答、得点内訳、StageSkill履歴、uid/UUID、個人統計は公開ノードへ置かない。本人の詳細は `players/{uid}/completedGamePlayerDetails`、Hostの確定詳細は `completedGameDetails/{gameId}` に分け、Rulesでそれぞれ本人/Host allowlistだけに限定する。
+Player/Screenが読む公開履歴は `completedGameSummaries/{gameId}`、`completedGamePublicDetails/{gameId}`、`historyPlayers/{profileId}` のゲームサマリ、表示名、得点、順位、公開用現在Skillに限定する。ticket、予想回答、得点内訳、StageSkill履歴、uid/UUID、個人統計は公開ノードへ置かない。本人の詳細は `completedGamePlayerDetails/{uid}/{gameId}`、Hostの確定詳細は `completedGameDetails/{gameId}` に分け、Rulesでそれぞれ本人/Host allowlistだけに限定する。
 
 History画面で現在room参加者と公開履歴を併合する場合、raw uidは同じ`publicProfileId(uid)`へ変換してから公開`profileId`と重複排除する。History役は他人の`playerStats`を購読しないため、room playerから合成されたSkill 0で`historyPlayers.currentSkill`を上書きしない。完了詳細の既存gameIdはUnicodeを保持し、Firebase keyで禁止される`.#$\/[]`だけを拒否して読取りパスに使う。
 
