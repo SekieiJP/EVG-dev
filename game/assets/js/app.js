@@ -1658,11 +1658,16 @@
         const uuid = item.profileId || historyPublicProfileId(sourceUuid);
         if (!uuid) return;
         const previous = byUuid.get(uuid) || { uuid };
+        const skill = item.currentSkill !== undefined && item.currentSkill !== null
+          ? Number(item.currentSkill)
+          : previous.currentSkill !== undefined && previous.currentSkill !== null
+            ? Number(previous.currentSkill)
+            : Number(item.skill ?? previous.skill ?? 0);
         byUuid.set(uuid, Object.assign({}, previous, item, {
           uuid,
           sourceUuid: item.profileId ? previous.sourceUuid || "" : sourceUuid || previous.sourceUuid || "",
           name: item.name || item.displayName || previous.name || uuid,
-          skill: Number(item.currentSkill ?? item.skill ?? previous.skill ?? 0),
+          skill,
           stageSkillHistory: item.stageSkillHistory || item.skillHistory || previous.stageSkillHistory || [],
         }));
       });

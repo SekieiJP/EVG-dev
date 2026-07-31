@@ -63,6 +63,7 @@ async function publishMockRoom(page, mutate) {
         };
         return players;
       }, {});
+      room.playerStats = {};
     } else if (source === "bob-ticket") {
       const playerEntry = Object.entries(room.players || {}).find(([, player]) => player.name === "Bob");
       if (!playerEntry) throw new Error("Bob is not registered");
@@ -158,6 +159,7 @@ test("Host・Player 2人・Screenが同じステージ結果とSkill更新へ追
   await historyGameButtons.click();
   await expect(host.locator(".history-stage-result .mini-row")).toHaveCount(2);
   await expect(host.locator("[data-history-player-id]")).toHaveCount(2);
+  await expect(host.locator('[data-history-player-id]:has-text("Skill 0.00")')).toHaveCount(0);
 
   await context.close();
 });
