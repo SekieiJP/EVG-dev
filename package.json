@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "test": "npm run test:unit",
-    "test:unit": "node tests/engine.test.js && node tests/firebase-adapter.test.js && node tests/firebase-rules-static.test.js && node tests/multiplayer-flow.test.js && node tests/ui-static.test.js && node tests/gas-logic.test.js",
+    "test:unit": "node tests/engine.test.js && node tests/firebase-adapter.test.js && node tests/firebase-rules-static.test.js && node tests/multiplayer-flow.test.js && node tests/ui-static.test.js && node tests/gas-logic.test.js && node tests/history-recovery.test.js",
     "test:rules-emulator": "firebase emulators:exec --only database \"node tests/firebase-rules-emulator.test.js\"",
     "test:e2e": "playwright test",
     "test:load": "node tests/firebase-load-model.test.js"
