@@ -44,7 +44,7 @@
 
     <div class="warning">
       <strong>Firebase Skill移行と戦績表示確認は完了しましたが、P1全体の本番作業はまだ完了していません。</strong>
-      GAS archive URL/API keyは未設定です。残りはSpreadsheet/GASの設定、現在ゲームのarchive/recalculate、
+      GAS archive URL/API keyのクライアント公開は完了しました。残りはSpreadsheet/GAS側の設定確認、現在ゲームのarchive/recalculate、
       同日次ゲーム継続とarchive retryの実環境smokeです。下記「0-1」の未完了項目を順に実施してください。
     </div>
 
@@ -53,13 +53,13 @@
     <table>
       <thead><tr><th>確認項目</th><th>結果</th></tr></thead>
       <tbody>
-        <tr><td>GitHub Pages</td><td>コミット<code>e46515c</code>、アセットversion <code>260731-p0p1r7</code>を公開済み。Historyの重複排除と日本語gameId詳細読取りをChrome実機で確認済み。</td></tr>
+        <tr><td>GitHub Pages</td><td>コミット<code>09d13c1</code>、アセットversion <code>260731-p0p1r8</code>を公開済み。History修正版に加え、GAS archiveクライアント設定の配信を確認済み。</td></tr>
         <tr><td>現在room</td><td><code>final</code>。backfillでroomVersionは26→27。次ゲーム作成やステージ操作は行っていない。</td></tr>
         <tr><td>現行Rules</td><td>2026-07-31に欠損root player対応版を再デプロイ済み。本番取得版と正規化JSON SHA-256一致。</td></tr>
         <tr><td>Skill復旧結果</td><td><code>schemaVersion=firebase-rtdb-v3-skill-history</code>、有限StageSkill 29件、root欠損0人、root/roomとも非ゼロSkill 6人。</td></tr>
         <tr><td>履歴・完了詳細</td><td>履歴長とmarker長 <code>[4,5,5,5,5,5]</code>、公開履歴6人、完了詳細5ステージ・6人。History画面も6人だけを非ゼロSkillで表示し、各ステージ6人のスコア詳細を取得済み。</td></tr>
         <tr><td>Host allowlist</td><td>今回使用したHost uidで<code>isHostAllowed=true</code>と認証成功、Rules errorなしを確認済み。開催に使う他端末は個別確認が必要。</td></tr>
-        <tr><td>GAS archive</td><td>公開設定のURL/API keyはいずれも空。</td></tr>
+        <tr><td>GAS archive</td><td>公開設定のHTTPS <code>/exec</code> URLとapiKeyは配信済み。値は本文へ転記しない。Spreadsheet初期化、Webアプリ権限、archive/recalculateの実疎通は未確認。</td></tr>
       </tbody>
     </table>
 
@@ -71,16 +71,16 @@
       <li><strong>✅ Skill backfillを1回実行済み:</strong> 最新版を強制再読み込みし、通常のHost認証を1回行った。次ゲーム作成やステージ操作は行っていない。</li>
       <li><strong>✅ 戦績を確認済み:</strong> schema v3、有限StageSkill 29件、履歴長<code>[4,5,5,5,5,5]</code>、6人の非ゼロSkill、現ゲーム5ステージ完了詳細、Historyの6人表示と各ステージ詳細を確認した。</li>
       <li><strong>GAS archiveを準備する:</strong> Spreadsheetのバックアップ、<code>Code.gs</code>反映、<code>setupElevatorGameSheets</code>実行、Webアプリ新バージョンのデプロイを行う。</li>
-      <li><strong>公開設定を反映する:</strong> GASの<code>/exec</code> URLとapiKeyをクライアント設定へ入れ、アセットversionを更新してGitHub Pagesへ公開する。</li>
+      <li><strong>✅ 公開設定を反映済み:</strong> GASの<code>/exec</code> URLとapiKeyをクライアント設定へ入れ、アセットversion <code>260731-p0p1r8</code>としてGitHub Pagesへ公開した。</li>
       <li><strong>現在の終了済みゲームをarchiveする:</strong> Hostの「現在ゲームを保存」を実行し、5ステージがSpreadsheetへ保存され、再送しても重複せず、再集計が成功することを確認する。</li>
       <li><strong>実環境smokeを行う:</strong> 非イベント時間の小規模確認ゲームで、ステージ結果の得点・StageSkill・持ち点・現在Skill、同日次ゲームへの参加継続、archive export/retryを確認する。</li>
     </ol>
 
-    <p>上記2〜4は完了しています。残作業は1のバックアップ長期保管と、5〜8のSpreadsheet/Apps Script権限、実際のWebアプリURL/apiKey、実環境smokeです。</p>
+    <p>上記2〜4と6は完了しています。残作業は1のバックアップ長期保管、5のSpreadsheet/Apps Script設定確認、7の現在ゲームarchive、8の実環境smokeです。</p>
 
     <div class="notice">
-      <strong>秘密値をこの文書やGitに貼り付けないでください。</strong>
-      Firebase/GASの認証情報、Spreadsheetの共有リンク、実際のAPI keyは、組織の承認済みの秘密管理または管理画面でのみ扱ってください。ここには値そのものを記載しません。
+      <strong>認証情報や共有リンクをこの文書やGitに貼り付けないでください。</strong>
+      GAS archiveのapiKeyは静的クライアントへ配信する識別子で、単独では秘密の認可境界ではありません。実値は必要なクライアント設定ファイルだけに置き、この文書、Issue、コミットメッセージへ重複転記しません。実際の書込み認可はFirebase ID tokenとHost allowlistで行います。
     </div>
 
     <h2>1. 目的と前提</h2>
@@ -200,7 +200,7 @@
     <h3>4-3. クライアント設定を更新して公開する</h3>
 
     <ol>
-      <li><code>game/assets/js/config.js</code> の次の2項目に、運用環境で管理している値を設定する。実値をIssue、レビューコメント、このHTML、コミットメッセージには書かない。</li>
+      <li><code>game/assets/js/config.js</code> の次の2項目に、運用環境で管理している値を設定する。実値はこの設定ファイル以外のIssue、レビューコメント、HTML、コミットメッセージへ重複転記しない。</li>
     </ol>
     <pre><code>FIREBASE_ARCHIVE_GAS_URL: "&lt;GAS Webアプリの /exec URL&gt;",
 FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
@@ -260,7 +260,7 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
       <li>今回使用したHost uidは確認済み。開催に使用する追加Host端末があればFirebase uidを<code>roles/hosts</code>へ登録・確認する。</li>
       <li>GASの <code>setupElevatorGameSheets</code> を正しいSpreadsheetで実行し、必要シートを確認した。</li>
       <li>GASを「実行者: 運用者」「アクセス: Hostブラウザがログイン不要で到達可能」のWebアプリとして新バージョンdeployした。</li>
-      <li>GASの <code>/exec</code> URLと運用中のapiKeyをクライアント設定へ反映し、通常の公開手順で配信した。</li>
+      <li>✅ GASの <code>/exec</code> URLと運用中のapiKeyをクライアント設定へ反映し、コミット<code>09d13c1</code>・アセット版<code>260731-p0p1r8</code>として配信した。</li>
       <li>Host画面からarchive exportとrecalculateが成功し、Spreadsheetの行と <code>archive_log</code> を確認した。</li>
       <li>未完了archiveがある場合、retryで保存済みになり、同一archiveIdの重複行がないことを確認した。</li>
       <li>Rules/GAS/クライアント設定のリリース日時・担当者・コミットを運用記録に残した。</li>

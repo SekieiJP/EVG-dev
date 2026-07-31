@@ -432,7 +432,9 @@
           <li><strong>実機で発見した表示不具合:</strong> backfill後のHistoryで、公開<code>profileId</code>と現在roomのraw uidを別人として扱い同じ6人を二重表示していた。またHistory役は他人の<code>playerStats</code>を購読しないため、room playerから合成されたSkill 0が公開履歴の非ゼロ値を上書きした。公開IDを<code>publicProfileId(uid)</code>で統合し、既存<code>historyPlayers.currentSkill</code>を優先するよう修正した。</li>
           <li><strong>実機で発見した詳細読取り不具合:</strong> 日本語を含む既存gameIdを詳細読取り前にASCII用<code>cleanKey()</code>へ通し、実在しないキーに変換していた。既存Firebase keyはUnicodeを保持し、禁止文字<code>.#$\/[]</code>だけを拒否する検証へ分離した。</li>
           <li><strong>r7本番確認:</strong> コミット<code>e46515c</code>とアセット版<code>260731-p0p1r7</code>のPages公開成功後、History実機で6人だけの非ゼロSkill一覧、5ステージ×6人の公開スコア詳細、<code>/api/history/games</code>成功を確認した。E2Eでも日本語gameId、公開profileIdとraw uidの重複排除、<code>playerStats</code>非購読時の非ゼロSkill保持を固定した。</li>
-          <li><strong>未解決の質問:</strong> Firebase Skill移行と戦績表示の本番確認は完了した。P1全体の残りは、運用者によるGAS/Spreadsheet archive設定、公開URL/API key反映、現在ゲームのarchive/recalculate、実環境での同日次ゲーム継続とarchive retry smokeである。</li>
+          <li><strong>r8 GAS archive設定公開:</strong> 運用者が設定したHTTPS <code>/exec</code> URLとapiKeyだけを差分監査し、アセット版<code>260731-p0p1r8</code>・コミット<code>09d13c1</code>としてPagesへ公開した。公開HTMLと設定を再取得し、r8参照、Firebase正系、HTTPS <code>/exec</code>、非空apiKeyを値非表示で確認した。静的クライアントへ配るapiKeyは秘密の認可境界とせず、Firebase ID tokenとHost allowlistを実際の書込み認可にする。</li>
+          <li><strong>テスト判断:</strong> 「クライアントにGAS URLを一切含めない」という旧静的検査を、進行用GAS transportとlocal fallbackは禁止したまま、archive専用の2設定だけを必須にする条件へ更新した。単体・50人/20ステージ負荷モデル・Playwright E2Eを実行し、E2Eは初回に1 Playerの購読追従が10秒を超えたが同条件再実行で成功した。</li>
+          <li><strong>未解決の質問:</strong> Firebase Skill移行、戦績表示、GAS archiveクライアント設定の本番公開は完了した。P1全体の残りは、運用者によるGAS/Spreadsheet側の設定確認、現在ゲームのarchive/recalculate、実環境での同日次ゲーム継続とarchive retry smokeである。</li>
         </ul>
       </section>
 
@@ -454,7 +456,7 @@
           <li>GAS archive APIの冪等キーは<code>archiveId</code>、ゲームの論理識別は<code>gameId</code>に確定した。実Spreadsheetで同一archiveId再送が重複しないことは運用者smokeで確認する。</li>
           <li>本番Host端末のFirebase uidをallowlistへ登録する運用手順を確定し、GitHub Pagesで使うroomIdごとに登録漏れがないか確認する必要がある。</li>
           <li>2026-06-02にallowlist版Firebase Rulesをdeployした記録はあるが、2026-07-29監査では今回のP0/P1用Rules（<code>historyPlayers</code>、<code>nextGameConfigs</code>、完了履歴境界）は未反映だった。2026-07-30にP0/P1用Rulesを改めてreleaseし、リポジトリ版との完全一致を確認した。</li>
-          <li>2026-07-31に欠損root player対応版Rulesを再releaseし、Host backfillと戦績表示の本番確認まで完了した。P1全体の残りはGAS/Spreadsheet archive設定、現在ゲームarchive、同日次ゲーム継続とarchive retryの実環境smokeである。</li>
+          <li>2026-07-31に欠損root player対応版Rulesを再releaseし、Host backfill、戦績表示、GAS archiveクライアント設定の公開まで完了した。P1全体の残りはGAS/Spreadsheet側の設定確認、現在ゲームarchive/recalculate、同日次ゲーム継続とarchive retryの実環境smokeである。</li>
         </ul>
       </section>
     </main>
