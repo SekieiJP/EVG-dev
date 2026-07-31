@@ -237,7 +237,7 @@
         };
       }
       if (path.indexOf("/api/history/game/") === 0) {
-        const gameId = cleanKey(path.split("/").pop());
+        const gameId = decodedFirebaseExistingKey(path.split("/").pop());
         if (!gameId) return { ok: false, code: "bad_request", error: "gameIdを指定してください。" };
         const hostAuth = this.verifyHost(payload.hostToken);
         const canReadHostDetail = hostAuth.ok && await this.isHostAllowed();
@@ -255,7 +255,8 @@
         return player ? { ok: true, player: masterPlayerForHistory(uuid, player) } : { ok: false, code: "not_found", error: "UUIDが見つかりません。" };
       }
       if (path === "/api/history/games" && payload.includeDetail && (payload.detailGameId || payload.gameId)) {
-        const gameId = cleanKey(payload.detailGameId || payload.gameId);
+        const gameId = firebaseExistingKey(payload.detailGameId || payload.gameId);
+        if (!gameId) return { ok: false, code: "bad_request", error: "gameIdが不正です。" };
         const hostAuth = this.verifyHost(payload.hostToken);
         const canReadHostDetail = hostAuth.ok && await this.isHostAllowed();
         const detail = await this.readCompletedGameDetail(gameId, canReadHostDetail);
@@ -2380,6 +2381,19 @@
     return String(value || "elevator-game-live").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80) || "elevator-game-live";
   }
 
+  function firebaseExistingKey(value) {
+    const key = Array.from(String(value || "")).slice(0, 160).join("");
+    return key && !/[.#$\/\[\]]/.test(key) ? key : "";
+  }
+
+  function decodedFirebaseExistingKey(value) {
+    try {
+      return firebaseExistingKey(decodeURIComponent(String(value || "")));
+    } catch (error) {
+      return "";
+    }
+  }
+
   function loadJson(key, fallback) {
     try {
       const raw = localStorage.getItem(key);
@@ -2447,6 +2461,7 @@
     queueArchiveForGame,
     completedGamePublicDetailNode,
     publicProfileId,
+    firebaseExistingKey,
     playerUpdates,
     rootPlayerNode,
     restorePlayerFromMaster,

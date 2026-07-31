@@ -1500,9 +1500,9 @@
           <section class="panel">
             <h2>現在Skill</h2>
             ${rankings.map((row) => `
-              ${row.uuid === state.playerUuid
-                ? `<button class="ranking-row is-self" data-action="select-history" data-uuid="${escapeAttr(row.uuid)}"><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>Skill ${formatSkill(row.skill)}</strong></button>`
-                : `<div class="ranking-row"><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>Skill ${formatSkill(row.skill)}</strong></div>`}
+              ${row.sourceUuid === state.playerUuid
+                ? `<button class="ranking-row is-self" data-history-player-id="${escapeAttr(row.uuid)}" data-action="select-history" data-uuid="${escapeAttr(row.sourceUuid)}"><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>Skill ${formatSkill(row.skill)}</strong></button>`
+                : `<div class="ranking-row" data-history-player-id="${escapeAttr(row.uuid)}"><span>${row.rank}. ${escapeHtml(row.name)}</span><strong>Skill ${formatSkill(row.skill)}</strong></div>`}
             `).join("") || `<p class="muted">なし</p>`}
           </section>
           <section class="panel">
@@ -1654,11 +1654,13 @@
     sources.forEach((source) => {
       asHistoryArray(source).forEach((item) => {
         if (!item || typeof item !== "object") return;
-        const uuid = item.profileId || item.uuid || item.playerUuid || item.uid;
+        const sourceUuid = item.uuid || item.playerUuid || item.uid || "";
+        const uuid = item.profileId || historyPublicProfileId(sourceUuid);
         if (!uuid) return;
         const previous = byUuid.get(uuid) || { uuid };
         byUuid.set(uuid, Object.assign({}, previous, item, {
           uuid,
+          sourceUuid: item.profileId ? previous.sourceUuid || "" : sourceUuid || previous.sourceUuid || "",
           name: item.name || item.displayName || previous.name || uuid,
           skill: Number(item.currentSkill ?? item.skill ?? previous.skill ?? 0),
           stageSkillHistory: item.stageSkillHistory || item.skillHistory || previous.stageSkillHistory || [],
@@ -1668,9 +1670,19 @@
     return [...byUuid.values()];
   }
 
+  function historyPublicProfileId(uuid) {
+    if (!uuid) return "";
+    return window.EVGFirebaseAdapter && typeof window.EVGFirebaseAdapter.publicProfileId === "function"
+      ? window.EVGFirebaseAdapter.publicProfileId(uuid)
+      : uuid;
+  }
+
   function getSelfHistoryPlayer(uuid = state.playerUuid) {
     if (!uuid) return null;
-    const rosterPlayer = getHistoryPlayers().find((player) => player.uuid === uuid);
+    const profileId = historyPublicProfileId(uuid);
+    const rosterPlayer = getHistoryPlayers().find((player) => (
+      player.uuid === profileId || player.sourceUuid === uuid
+    ));
     const selfSources = [
       state.room.selfHistoryPlayer,
       state.room.historySelfPlayer,
@@ -2860,8 +2872,11 @@
     const rows = getHistoryPlayers()
       .map((player) => ({
         uuid: player.uuid,
+        sourceUuid: player.sourceUuid || "",
         name: player.name,
-        score: games.reduce((sum, game) => sum + Number((game.scores || {})[player.uuid] || 0), 0),
+        score: games.reduce((sum, game) => (
+          sum + Number((game.scores || {})[player.sourceUuid || player.uuid] || 0)
+        ), 0),
         skill: player.skill || 0,
       }))
       .sort((a, b) => b.skill - a.skill || b.score - a.score || a.name.localeCompare(b.name, "ja"));

@@ -200,6 +200,16 @@ run("firebase root player node is the canonical saved player record", () => {
   assert.strictEqual(node.roomId, "unit-room");
 });
 
+run("firebase history detail keys preserve valid Unicode game ids", () => {
+  assert.strictEqual(
+    EVGFirebaseAdapter.firebaseExistingKey("清新本部杯・2026初夏-20260612"),
+    "清新本部杯・2026初夏-20260612"
+  );
+  ["bad/key", "bad.key", "bad#key", "bad$key", "bad[key]"].forEach((gameId) => {
+    assert.strictEqual(EVGFirebaseAdapter.firebaseExistingKey(gameId), "");
+  });
+});
+
 run("firebase restore uses saved name and skill without requiring a rename", () => {
   const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   const result = EVGFirebaseAdapter.restorePlayerFromMaster(Engine, room, "alice", {

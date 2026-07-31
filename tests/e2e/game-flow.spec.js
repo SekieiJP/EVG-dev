@@ -22,12 +22,47 @@ async function publishMockRoom(page, mutate) {
     // code. This keeps page evaluation deterministic and CSP-safe.
     if (source === "one-stage") {
       room.config.stages = room.config.stages.slice(0, 1);
+    } else if (source === "unicode-game-id") {
+      room.public.gameId = "日本語ゲーム-20260731";
+      room.meta.activeGameId = room.public.gameId;
     } else if (source === "expire-moving") {
       room.public.countdownEndsAt = new Date(Date.now() - 5_000).toISOString();
       room.public.tallyingEndsAt = new Date(Date.now() - 1_000).toISOString();
     } else if (source === "finish-reveal") {
       room.public.animationStartedAt = new Date(Date.now() - 120_000).toISOString();
       room.public.revealEndsAt = new Date(Date.now() - 1_000).toISOString();
+    } else if (source === "history-fixture") {
+      const gameId = room.public.gameId;
+      const result = room.results && room.results["stage-001"];
+      const finishedAt = new Date().toISOString();
+      const detail = {
+        gameId,
+        title: "日本語ゲーム",
+        finishedAt,
+        rankings: result && result.rankings || [],
+        stageResults: room.results || {},
+      };
+      room.completedGameSummaries = {
+        [gameId]: {
+          gameId,
+          title: detail.title,
+          finishedAt,
+          stageCount: 1,
+          rankings: detail.rankings,
+        },
+      };
+      room.completedGameDetails = { [gameId]: detail };
+      room.completedGamePublicDetails = { [gameId]: detail };
+      room.historyPlayers = Object.entries(room.players || {}).reduce((players, [uid, player]) => {
+        const profileId = window.EVGFirebaseAdapter.publicProfileId(uid);
+        players[profileId] = {
+          profileId,
+          name: player.name,
+          currentSkill: Number(room.playerStats && room.playerStats[uid] && room.playerStats[uid].currentSkill || 0),
+          updatedAt: finishedAt,
+        };
+        return players;
+      }, {});
     } else if (source === "bob-ticket") {
       const playerEntry = Object.entries(room.players || {}).find(([, player]) => player.name === "Bob");
       if (!playerEntry) throw new Error("Bob is not registered");
@@ -63,6 +98,7 @@ test("Host・Player 2人・Screenが同じステージ結果とSkill更新へ追
   await host.locator("#hostAuthForm button[type=submit]").click();
   await expect(host.locator(".host-shell")).toBeVisible();
   await publishMockRoom(host, "one-stage");
+  await publishMockRoom(host, "unicode-game-id");
 
   const alice = await openRole(context, "player", "alice");
   await alice.locator("#joinForm input[name=name]").fill("Alice");
@@ -113,6 +149,15 @@ test("Host・Player 2人・Screenが同じステージ結果とSkill更新へ追
   await expect(host.locator("body")).toHaveAttribute("data-phase", "final");
   await expect(alice.locator("body")).toHaveAttribute("data-phase", "final");
   await expect(bob.locator("body")).toHaveAttribute("data-phase", "final");
+
+  await publishMockRoom(host, "history-fixture");
+  await host.getByRole("button", { name: "History", exact: true }).click();
+  await expect(host.locator("body")).toHaveAttribute("data-role", "history");
+  const historyGameButtons = host.locator('[data-action="select-history-game"]');
+  await expect(historyGameButtons).toHaveCount(1);
+  await historyGameButtons.click();
+  await expect(host.locator(".history-stage-result .mini-row")).toHaveCount(2);
+  await expect(host.locator("[data-history-player-id]")).toHaveCount(2);
 
   await context.close();
 });

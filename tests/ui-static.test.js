@@ -175,9 +175,11 @@ run("history skill list accepts public history player statistics", () => {
   assert.strictEqual(historyPlayers.includes("historyPlayers"), true);
   assert.strictEqual(historyPlayers.includes("publicPlayerStats"), true);
   assert.strictEqual(historyPlayers.includes("currentSkill"), true);
+  assert.strictEqual(historyPlayers.includes("historyPublicProfileId(sourceUuid)"), true);
   const historyView = section(appSource, "function renderHistoryView", "function getHistorySummaries");
   assert.strictEqual(historyView.includes("現在Skill"), true);
   assert.strictEqual(historyView.includes("Skill ${formatSkill(row.skill)}"), true);
+  assert.strictEqual(historyView.includes("data-history-player-id"), true);
 });
 
 run("history can synthesize the signed-in player from master data", () => {
