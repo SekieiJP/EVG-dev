@@ -427,8 +427,12 @@
           <li><strong>トレードオフ:</strong> RTDB Rulesは欠損rootからroomIdを逆引きできないため、移行対象の本番通常roomをRulesへ明示した。別roomへ同じ欠損移行を展開する場合は、root player所属indexまたは信頼済みサーバ移行処理を先に設計する。</li>
           <li><strong>診断:</strong> <code>readRootPlayer()</code>の拒否時に絶対パス<code>/players/{uid}</code>を付けたエラーを<code>lastRulesError</code>と通信ログへ保存する。後続updateへ到達しない失敗もHostのinternal-statusで識別できる。</li>
           <li><strong>検証:</strong> Rules emulatorへ、欠損rootを本番roomのallowlist済みHostだけが読めること、部外者と非参加uidは拒否されること、root作成・room mirror・公開履歴・schemaVersion更新を含むbackfill形状のmulti-location updateが成功することを追加した。adapter unit testでは読取り拒否の対象パスがinternal-statusと通信ログへ残ることを確認した。</li>
-          <li><strong>公開・本番反映:</strong> アセット版<code>260731-p0p1r5</code>と修正版Rulesは、全回帰検証、コミット、push後に公開・本番releaseする。本項記録時点では未実施。</li>
-          <li><strong>未解決の質問:</strong> 修正版Rules release後、allowlist済みHostで強制再読み込みと通常認証を1回行い、schema v3、有限StageSkill 29件、6人の非ゼロSkill、履歴長<code>[4,5,5,5,5,5]</code>を本番データで確認する必要がある。GAS/Spreadsheet作業も引き続き未実施。</li>
+          <li><strong>公開・本番反映:</strong> 修正コミット<code>1a1c7f1</code>をpushし、GitHub Pagesの<code>260731-p0p1r5</code>公開成功後、本番<code>elevator-game-live-default-rtdb</code>へRulesを再releaseした。デプロイ後に本番Rulesを再取得し、リポジトリ版と正規化JSON SHA-256 <code>55a13ff0a90b8dde097475b28e0c58156494ddbbea60bea509f729f27cbbeeae</code>で完全一致した。</li>
+          <li><strong>本番backfill結果:</strong> Chrome実機で強制再読み込み後にallowlist済みHost認証を1回行い、<code>firebase-backfill-skill-history</code>成功、roomVersion 26→27、空の<code>lastRulesError</code>を確認した。読取り専用の集計でもschema v3、有限StageSkill 29件、root欠損0人、root/roomとも非ゼロSkill 6人、履歴とmarker長<code>[4,5,5,5,5,5]</code>、公開履歴6人、完了詳細5ステージ・6スナップショットを確認した。</li>
+          <li><strong>実機で発見した表示不具合:</strong> backfill後のHistoryで、公開<code>profileId</code>と現在roomのraw uidを別人として扱い同じ6人を二重表示していた。またHistory役は他人の<code>playerStats</code>を購読しないため、room playerから合成されたSkill 0が公開履歴の非ゼロ値を上書きした。公開IDを<code>publicProfileId(uid)</code>で統合し、既存<code>historyPlayers.currentSkill</code>を優先するよう修正した。</li>
+          <li><strong>実機で発見した詳細読取り不具合:</strong> 日本語を含む既存gameIdを詳細読取り前にASCII用<code>cleanKey()</code>へ通し、実在しないキーに変換していた。既存Firebase keyはUnicodeを保持し、禁止文字<code>.#$\/[]</code>だけを拒否する検証へ分離した。</li>
+          <li><strong>r7本番確認:</strong> コミット<code>e46515c</code>とアセット版<code>260731-p0p1r7</code>のPages公開成功後、History実機で6人だけの非ゼロSkill一覧、5ステージ×6人の公開スコア詳細、<code>/api/history/games</code>成功を確認した。E2Eでも日本語gameId、公開profileIdとraw uidの重複排除、<code>playerStats</code>非購読時の非ゼロSkill保持を固定した。</li>
+          <li><strong>未解決の質問:</strong> Firebase Skill移行と戦績表示の本番確認は完了した。P1全体の残りは、運用者によるGAS/Spreadsheet archive設定、公開URL/API key反映、現在ゲームのarchive/recalculate、実環境での同日次ゲーム継続とarchive retry smokeである。</li>
         </ul>
       </section>
 
@@ -450,6 +454,7 @@
           <li>GAS archive APIの冪等キーは<code>archiveId</code>、ゲームの論理識別は<code>gameId</code>に確定した。実Spreadsheetで同一archiveId再送が重複しないことは運用者smokeで確認する。</li>
           <li>本番Host端末のFirebase uidをallowlistへ登録する運用手順を確定し、GitHub Pagesで使うroomIdごとに登録漏れがないか確認する必要がある。</li>
           <li>2026-06-02にallowlist版Firebase Rulesをdeployした記録はあるが、2026-07-29監査では今回のP0/P1用Rules（<code>historyPlayers</code>、<code>nextGameConfigs</code>、完了履歴境界）は未反映だった。2026-07-30にP0/P1用Rulesを改めてreleaseし、リポジトリ版との完全一致を確認した。</li>
+          <li>2026-07-31に欠損root player対応版Rulesを再releaseし、Host backfillと戦績表示の本番確認まで完了した。P1全体の残りはGAS/Spreadsheet archive設定、現在ゲームarchive、同日次ゲーム継続とarchive retryの実環境smokeである。</li>
         </ul>
       </section>
     </main>

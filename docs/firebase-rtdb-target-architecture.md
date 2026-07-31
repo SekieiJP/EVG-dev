@@ -364,6 +364,8 @@ Spark + Rulesだけでは、クライアントが書いた時刻とFirebaseサ�
 
 Player/Screenが読む公開履歴は `completedGameSummaries` のゲームサマリ、表示名、得点、順位、公開用現在Skillに限定する。ticket、予想回答、得点内訳、StageSkill履歴、uid/UUID、個人統計は公開ノードへ置かない。本人の詳細は `players/{uid}/completedGamePlayerDetails`、Hostの確定詳細は `completedGameDetails/{gameId}` に分け、Rulesでそれぞれ本人/Host allowlistだけに限定する。
 
+History画面で現在room参加者と公開履歴を併合する場合、raw uidは同じ`publicProfileId(uid)`へ変換してから公開`profileId`と重複排除する。History役は他人の`playerStats`を購読しないため、room playerから合成されたSkill 0で`historyPlayers.currentSkill`を上書きしない。完了詳細の既存gameIdはUnicodeを保持し、Firebase keyで禁止される`.#$\/[]`だけを拒否して読取りパスに使う。
+
 ## GAS Archive
 
 GASは進行中状態を扱わない。役割はアーカイブ保存に限定する。

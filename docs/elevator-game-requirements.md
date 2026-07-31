@@ -624,6 +624,7 @@ SpreadsheetはGAS archiveの出力先であり、進行中room・次ゲーム候
 - 結果発表演出は `animationStartedAt` と `revealEndsAt` をDBに保存し、Host再読み込み後も同じ演出完了判定を復元する。
 - 最終ステージ後も `ranking` フェーズは経由するが、この画面では総合得点カラムを表示せず、ステージランキングだけを表示する。総合最終結果は次の `final` フェーズで表示する。
 - Host、Screen、Player、Historyなど各画面の現在ゲーム表示では、RTDBの現在ゲーム参加者と8.3の当日参加判定で直前ゲームから引き継いだプレイヤーを表示する。前日以前に最後に参加したプレイヤーは自動コピーしない。
+- Historyの現在Skill一覧では、現在roomのraw uidを公開`profileId`へ変換して同一人物を重複排除し、他人の`playerStats`を購読できない場合も公開`historyPlayers.currentSkill`を合成値0で上書きしない。日本語を含む有効なgameIdは変更せず完了詳細を取得する。
 - 累積戦歴はRTDBのプロフィール・確定履歴から算出し、Spreadsheetは監査・外部保存用途に限る。
 
 ### 11.8 ゲームID
