@@ -471,11 +471,29 @@
       </section>
 
       <section>
+        <h2>2026-07-31 最終アーカイブの全ステージ保存 r11</h2>
+        <ul>
+          <li><strong>本番で確認した事実:</strong> 現在の終了済みゲームにはRTDB <code>results</code>として4ステージ・24人分の結果が残っている一方、自動確定された<code>completedGameDetails</code>とGAS送信payloadには最終1ステージしか含まれていなかった。<code>archive.status=exported</code>でも、payloadの全ステージ性までは保証されていなかった。</li>
+          <li><strong>既知障害との切り分け:</strong> r10で扱った「次ゲーム作成時に既存のRTDB履歴親が削除された問題」とは別件である。旧履歴消失はGAS archive、保存済みRTDB export、root playerを照合して別payload・別承認で復旧する。今回の現在ゲームは元の4ステージ分の<code>results</code>がRTDBに残っているため、推測復元をせず同じgameId/archiveIdで完了詳細とSpreadsheet archiveを再生成できる。</li>
+          <li><strong>障害原因:</strong> 通常購読を現ステージの<code>results/{stageId}</code>だけに絞る設計のまま最終advanceを処理し、完了詳細とarchive payloadを作る直前に<code>results</code>親を再読込みしていなかった。そのためブラウザ内roomには最終ステージだけが実体化し、不完全な完了snapshotが確定された。</li>
+          <li><strong>デザインの決定:</strong> 全履歴を確定または退避する境界である最終advance、JSON Import、次ゲーム候補開始では、処理前にHost権限で<code>results</code>親を読み、全ステージをroomへmaterializeする。中間ステージの通常advanceは従来どおり現ステージ子だけを読み、Player/Screenへ全結果の読取り権限を広げない。</li>
+          <li><strong>安全側の停止:</strong> 境界処理で<code>results</code>親を読めない場合は、部分的な完了詳細を保存したりGASへ送信したりせず、RTDB更新0件・GAS送信0件で停止し、対象<code>results</code>パスを<code>lastRulesError</code>へ残す。</li>
+          <li><strong>トレードオフ:</strong> 最終advanceと次ゲーム切替時にHostが<code>results</code>親を1回追加読取りする。最大50人×20ステージ相当の境界読取りコストより、完了詳細・GAS archiveの欠落防止を優先し、通常の進行中購読は軽量なまま維持する。</li>
+          <li><strong>検証:</strong> 4ステージの最終advanceでRTDB完了詳細とGAS payloadが全4ステージになること、Import/次ゲーム開始でも4ステージを退避して同日参加者とSkillを保持すること、中間advanceは現ステージ子だけを読むこと、親読取り拒否時はRTDB/GASの副作用がないことをadapter統合テストへ追加した。</li>
+          <li><strong>E2E mockの安定化:</strong> mockの別タブ同期が<code>BroadcastChannel</code>の一時通知だけに依存し、購読開始との競合で通知を取りこぼす場合があった。mock経路だけに<code>storage</code>イベントのフォールバックを追加し、対象シナリオ15回連続と全E2Eを通した。本番RTDB購読経路は変更していない。</li>
+          <li><strong>GAS endpointの読取り専用確認:</strong> 公開<code>/exec</code>へ秘密値を記録しないsanitized probeを行い、runtime setup完了、必要な7シートの存在、設定済みapiKeyの一致、Firebase ID token検証の有効化まで確認した。Spreadsheetの実ヘッダ、保存行、同一archiveIdの冪等upsert、recalculate、retry、長期バックアップ、実環境smokeは所有者確認が残る。</li>
+          <li><strong>緊急運用:</strong> r11公開と現在ゲーム修復の確認が終わるまで、次ゲーム作成・次ゲーム候補開始・JSON Importを行わない。公開後、allowlist済みHostプロファイルで強制再読み込みし、「現在ゲームを保存」を1回実行する。RTDB完了詳細が4ステージ、Spreadsheetが同じgameId/archiveIdの4ステージを重複なしでupsertしたことを確認し、「保存済み戦績を再集計」を成功させてから次ゲーム運用を再開する。</li>
+          <li><strong>権限境界:</strong> 今回の確認に使用できるChromeプロファイルは本番roomのHost allowlistに登録されていない。既にallowlist済みのHostプロファイルを使うか、意図したuidの子だけを追加する明示承認を得る。診断のためにallowlistを自動変更せず、uidの実値も文書へ記録しない。</li>
+          <li><strong>未解決の質問:</strong> r11の本番公開後、運用者による現在ゲーム修復、Spreadsheet実データ確認、recalculate、retry、バックアップ、同日次ゲーム継続を含む実環境smokeが必要である。旧履歴消失の復旧はこの確認と混ぜず、別の復旧手順・承認で実施する。</li>
+        </ul>
+      </section>
+
+      <section>
         <h2>未解決の質問</h2>
         <ul>
           <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>
           <li>制作ツールの出力項目名は現行<code>engine.js</code>とGAS実装に合わせた。今後JSONスキーマを変更する場合、追加JSONで暫定運用できるが、頻出項目は専用フォームへ昇格する必要がある。</li>
-          <li>GAS archive実デプロイURLでのexport/retry/recalculate疎通は、運用者によるWebアプリ再deployとURL設定後に確認が必要。</li>
+          <li>GAS archive公開endpointは、必要な7シート、runtime setup、apiKey一致、Firebase ID token検証まで確認済み。Spreadsheet実ヘッダ/保存行、同一archiveIdの重複防止、recalculate、retryは所有者による確認が必要。</li>
           <li>50人×20ステージのローカル負荷モデルは完了した。実RTDBの反映遅延、実端末の同時接続、Spreadsheet書込み時間は本番前smokeで確認が必要。</li>
           <li>結果発表終了時のBGM/SEフェードアウト秒数を確定したい。</li>
           <li>強制下車SEとして使う<code>se_forced_off.mp3</code>の素材を配置するか、既存素材のどれを割り当てるか確認したい。</li>
@@ -488,7 +506,7 @@
           <li>GAS archive APIの冪等キーは<code>archiveId</code>、ゲームの論理識別は<code>gameId</code>に確定した。実Spreadsheetで同一archiveId再送が重複しないことは運用者smokeで確認する。</li>
           <li>本番Host端末のFirebase uidをallowlistへ登録する運用手順を確定し、GitHub Pagesで使うroomIdごとに登録漏れがないか確認する必要がある。</li>
           <li>2026-06-02にallowlist版Firebase Rulesをdeployした記録はあるが、2026-07-29監査では今回のP0/P1用Rules（<code>historyPlayers</code>、<code>nextGameConfigs</code>、完了履歴境界）は未反映だった。2026-07-30にP0/P1用Rulesを改めてreleaseし、リポジトリ版との完全一致を確認した。</li>
-          <li>2026-07-31に欠損root player対応版と履歴消失防止r10 Rulesをreleaseし、Host backfill、戦績表示、GAS archiveクライアント設定、次ゲーム履歴保護の本番公開まで完了した。P1全体の残りは全Hostタブのr10強制再読み込み、GAS/Spreadsheet側の設定確認、現在ゲームarchive/recalculate、同日次ゲーム継続とarchive retryの実環境smokeである。</li>
+          <li>2026-07-31に欠損root player対応版と履歴消失防止r10 Rulesをreleaseし、Host backfill、戦績表示、GAS archiveクライアント設定、次ゲーム履歴保護の本番公開まで完了した。その後、現在ゲームの4ステージresultsに対して自動完了詳細/GAS payloadが最終1ステージだけになる別障害を確認した。r11公開と現在ゲーム修復が終わるまで次ゲームを開始せず、修復後もSpreadsheet確認、recalculate、retry、長期バックアップ、実環境smokeがP1残作業である。</li>
         </ul>
       </section>
     </main>

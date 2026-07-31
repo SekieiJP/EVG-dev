@@ -1,0 +1,41 @@
+name: Verify
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Install dependencies
+        run: npm ci
+      - name: Unit and static tests
+        run: npm run test:unit
+      - name: Load model
+        run: npm run test:load
+      - name: Realtime Database Rules emulator tests
+        run: npm run test:rules-emulator
+      - name: Browser E2E
+        run: npm run test:e2e

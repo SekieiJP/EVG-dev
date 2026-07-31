@@ -105,9 +105,16 @@
             callback(this.readMockRoom());
           }
         };
+        const storageHandler = (event) => {
+          if (event.key === MOCK_DB_KEY) callback(this.readMockRoom());
+        };
         if (this.channel) this.channel.addEventListener("message", handler);
+        if (root.addEventListener) root.addEventListener("storage", storageHandler);
         callback(this.readMockRoom());
-        return () => this.channel && this.channel.removeEventListener("message", handler);
+        return () => {
+          if (this.channel) this.channel.removeEventListener("message", handler);
+          if (root.removeEventListener) root.removeEventListener("storage", storageHandler);
+        };
       }
       this.unsubscribe = this.listenRest(callback);
       return this.unsubscribe;
@@ -471,9 +478,12 @@
         payload = Object.assign({}, payload, { config: snapshot.val().config });
       }
       this.lastRestRoomReadState = null;
+      const startsNextGame = path === "/api/host/import-config" || path === "/api/host/start-game-config";
       const room = await this.readRestRoom({
         purpose: "mutation",
         includeCompletedGames: ["/api/host/import-config", "/api/host/start-game-config", "/api/host/advance"].includes(path),
+        includeAllStageResults: startsNextGame,
+        includeAllStageResultsOnFinalAdvance: path === "/api/host/advance",
       });
       const storedGameStateExists = Boolean(room) || Boolean(
         this.lastRestRoomReadState && this.lastRestRoomReadState.gameStateExists
@@ -494,7 +504,6 @@
 
       if (path === "/api/host/import-config" || path === "/api/host/start-game-config" || path === "/api/host/update-config") {
         const nextRoom = stampHostRoom(result.room, this.roomId, currentRoom, this.serverNowIso());
-        const startsNextGame = path === "/api/host/import-config" || path === "/api/host/start-game-config";
         const currentGameAlreadyArchived = (currentRoom.completedGames || []).some((game) => game.gameId === currentRoom.gameId);
         const archivedGame = !currentGameAlreadyArchived && startsNextGame
           ? (nextRoom.completedGames || []).find((game) => game.gameId === currentRoom.gameId)
@@ -804,8 +813,15 @@
       };
       if (!base.public) return null;
       if (base.roles && base.roles.hosts && base.roles.hosts[this.auth.uid]) this.debug.isHostAllowed = true;
-      const stageId = currentStageIdFromNodes(base);
-      if (stageId) {
+      const includeAllStageResults = Boolean(options.includeAllStageResults) || Boolean(
+        options.includeAllStageResultsOnFinalAdvance && finalAdvanceFromNodes(base)
+      );
+      if (includeAllStageResults) {
+        const allResults = await this.readRestNodes(["results"]);
+        mergeNodes(base, allResults);
+      } else {
+        const stageId = currentStageIdFromNodes(base);
+        if (!stageId) return roomFromFirebaseNodes(base, this.engine);
         const stage = await this.readRestNodes(firebaseStageSubscriptionPaths(
           this.getRole(),
           this.auth.uid,
@@ -2309,6 +2325,14 @@
     const stages = nodes.config && nodes.config.stages ? nodes.config.stages : [];
     const stage = stages[index] || null;
     return stage && stage.stageId || "";
+  }
+
+  function finalAdvanceFromNodes(nodes) {
+    const status = nodes && nodes.public || {};
+    const stages = arrayFromFirebase(nodes && nodes.config && nodes.config.stages);
+    return status.phase === "ranking" &&
+      stages.length > 0 &&
+      Number(status.currentStageIndex || 0) >= stages.length - 1;
   }
 
   function initializedRoom(engine, roomId, config) {

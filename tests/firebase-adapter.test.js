@@ -24,6 +24,84 @@ async function runAsync(name, fn) {
   }
 }
 
+function nestedValue(source, pathValue) {
+  return String(pathValue || "")
+    .split("/")
+    .filter(Boolean)
+    .reduce((value, key) => value && value[key], source);
+}
+
+function productionLikeRestHarness(room, allResults, options = {}) {
+  const nodes = EVGFirebaseAdapter.roomToFirebaseNodes(room);
+  nodes.results = Engine.deepClone(allResults || {});
+  nodes.roles = { hosts: { host: true } };
+  Object.assign(nodes, Engine.deepClone(options.extraNodes || {}));
+  const reads = [];
+  const updates = [];
+  const roomPrefix = "/rooms/unit-room/";
+  return {
+    reads,
+    updates,
+    sdk: {
+      ref: (_db, pathValue) => pathValue,
+      get: async (pathValue) => {
+        reads.push(pathValue);
+        if ((options.failReadPaths || []).includes(pathValue)) {
+          throw new Error(options.readError || "Permission denied");
+        }
+        const relative = String(pathValue).startsWith(roomPrefix)
+          ? String(pathValue).slice(roomPrefix.length)
+          : String(pathValue).replace(/^\//, "");
+        const value = nestedValue(nodes, relative);
+        return {
+          exists: () => value !== undefined && value !== null,
+          val: () => value === undefined ? null : Engine.deepClone(value),
+        };
+      },
+      update: async (pathValue, nextUpdates) => {
+        updates.push({ path: pathValue, updates: Engine.deepClone(nextUpdates) });
+      },
+    },
+  };
+}
+
+function productionStageResult(stageId, calculatedAt, playerRows) {
+  const players = (playerRows || []).reduce((acc, row) => {
+    acc[row.uuid] = {
+      uuid: row.uuid,
+      name: row.name,
+      score: row.score,
+      stageSkill: row.stageSkill,
+      ticket: { uuid: row.uuid, abstained: false },
+    };
+    return acc;
+  }, {});
+  return {
+    stageId,
+    stageName: stageId,
+    calculatedAt,
+    players,
+    rankings: (playerRows || []).map((row, index) => ({
+      uuid: row.uuid,
+      name: row.name,
+      rank: index + 1,
+      score: row.score,
+      currentSkill: row.stageSkill,
+    })),
+    timeline: [],
+    stats: {},
+  };
+}
+
+function productionFourStageConfig() {
+  const config = Engine.deepClone(Engine.DEFAULT_CONFIG);
+  const fourth = Engine.deepClone(config.stages[config.stages.length - 1]);
+  fourth.stageId = "stage-004";
+  fourth.name = "Stage 4";
+  config.stages.push(fourth);
+  return Engine.normalizeConfig(config);
+}
+
 run("firebase nodes round-trip room state without snapshot", () => {
   let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
   room = Engine.registerPlayer(room, "Alice", "alice").room;
@@ -1348,6 +1426,272 @@ run("firebase final transition atomically persists completed history and queued 
   assert.strictEqual(updates["rooms/unit-room/completedGameDetails"], undefined);
   assert.strictEqual(updates["rooms/unit-room/completedGamePlayerDetails"], undefined);
   assert.strictEqual(updates["rooms/unit-room/archive"].status, "queued");
+});
+
+runAsync("firebase final transition materializes every production result before RTDB history and GAS export", async () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.roomId = "unit-room";
+  room.gameId = "production-four-stage-final";
+  room.config = productionFourStageConfig();
+  room.currentStageIndex = 3;
+  room.phase = Engine.PHASES.RANKING;
+  room.roomVersion = 40;
+  room.players = [{
+    uuid: "alice",
+    name: "Alice",
+    skill: 86,
+    stageSkillHistory: [20, 21, 22, 23],
+    appliedSkillStageIds: room.config.stages.map((stage) => JSON.stringify([room.gameId, stage.stageId])),
+    connected: true,
+  }];
+  room.scores = { alice: 86 };
+  const allResults = room.config.stages.reduce((acc, stage, index) => {
+    acc[stage.stageId] = productionStageResult(
+      stage.stageId,
+      `2026-07-31T0${index + 1}:00:00.000Z`,
+      [{ uuid: "alice", name: "Alice", score: 20 + index, stageSkill: 20 + index }]
+    );
+    return acc;
+  }, {});
+  room.stageResults = allResults;
+
+  const harness = productionLikeRestHarness(room, allResults);
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.firebaseDb = {};
+  adapter.sdk = harness.sdk;
+  adapter.debug.isHostAllowed = true;
+  adapter.isHostAllowed = async () => true;
+  adapter.serverNowIso = () => "2026-07-31T05:00:00.000Z";
+  let exportedGame = null;
+  adapter.exportArchiveGame = async (game) => {
+    exportedGame = Engine.deepClone(game);
+    return {
+      ok: true,
+      archive: { status: "exported", gameId: game.gameId, archiveId: `archive-${game.gameId}` },
+    };
+  };
+
+  const response = await adapter.postRestHost("/api/host/advance", {
+    hostToken: "firebase-host:host:test",
+    hostName: "host",
+  });
+
+  assert.strictEqual(response.ok, true, response.error);
+  assert.deepStrictEqual(Object.keys(exportedGame.stageResults).sort(), Object.keys(allResults).sort());
+  assert.strictEqual(harness.reads.includes("/rooms/unit-room/results"), true);
+  assert.strictEqual(
+    harness.reads.some((pathValue) => pathValue === "/rooms/unit-room/results/stage-004"),
+    false
+  );
+  const writes = harness.updates[0].updates;
+  const completed = writes[`rooms/unit-room/completedGameDetails/${room.gameId}`];
+  assert.deepStrictEqual(Object.keys(completed.stageResults).sort(), Object.keys(allResults).sort());
+  assert.strictEqual(completed.stageResults["stage-001"].players.alice.score, 20);
+  assert.strictEqual(completed.stageResults["stage-004"].players.alice.score, 23);
+});
+
+runAsync("firebase import and saved-config start archive all results and keep every same-day participant", async () => {
+  for (const pathValue of ["/api/host/import-config", "/api/host/start-game-config"]) {
+    const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+    room.roomId = "unit-room";
+    room.gameId = `production-interrupted-${pathValue.split("/").pop()}`;
+    room.config = productionFourStageConfig();
+    room.currentStageIndex = 3;
+    room.phase = Engine.PHASES.STAGE_INTRO;
+    room.roomVersion = 50;
+    room.players = [
+      {
+        uuid: "alice",
+        name: "Alice",
+        skill: 72,
+        stageSkillHistory: [32, 40],
+        appliedSkillStageIds: ['["old","stage-001"]', '["old","stage-002"]'],
+        connected: true,
+      },
+      {
+        uuid: "bob",
+        name: "Bob",
+        skill: 55,
+        stageSkillHistory: [55],
+        appliedSkillStageIds: ['["old","stage-004"]'],
+        connected: true,
+      },
+      {
+        uuid: "yesterday",
+        name: "Yesterday",
+        skill: 44,
+        stageSkillHistory: [44],
+        appliedSkillStageIds: ['["old","stage-003"]'],
+        connected: true,
+      },
+    ];
+    room.scores = { alice: 31, bob: 24, yesterday: 18 };
+    const stageIds = room.config.stages.map((stage) => stage.stageId);
+    const allResults = {
+      [stageIds[0]]: productionStageResult(stageIds[0], "2026-07-31T01:00:00.000Z", [
+        { uuid: "alice", name: "Alice", score: 31, stageSkill: 72 },
+      ]),
+      [stageIds[1]]: productionStageResult(stageIds[1], "2026-07-31T02:00:00.000Z", []),
+      [stageIds[2]]: productionStageResult(stageIds[2], "2026-07-30T01:00:00.000Z", [
+        { uuid: "yesterday", name: "Yesterday", score: 18, stageSkill: 44 },
+      ]),
+      [stageIds[3]]: productionStageResult(stageIds[3], "2026-07-31T03:00:00.000Z", [
+        { uuid: "bob", name: "Bob", score: 24, stageSkill: 55 },
+      ]),
+    };
+    room.stageResults = allResults;
+    const extraNodes = pathValue === "/api/host/start-game-config"
+      ? {
+          nextGameConfigs: {
+            "config-next": {
+              configId: "config-next",
+              status: "ACTIVE",
+              config: Engine.DEFAULT_CONFIG,
+            },
+          },
+        }
+      : {};
+    const harness = productionLikeRestHarness(room, allResults, { extraNodes });
+    const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+      config: { FIREBASE_ROOM_ID: "unit-room" },
+      engine: Engine,
+      getRole: () => "host",
+    });
+    adapter.auth = { uid: "host" };
+    adapter.firebaseDb = {};
+    adapter.sdk = harness.sdk;
+    adapter.debug.isHostAllowed = true;
+    adapter.isHostAllowed = async () => true;
+    adapter.serverNowIso = () => "2026-07-31T05:00:00.000Z";
+    let exportedGame = null;
+    adapter.exportArchiveGame = async (game) => {
+      exportedGame = Engine.deepClone(game);
+      return {
+        ok: true,
+        archive: { status: "exported", gameId: game.gameId, archiveId: `archive-${game.gameId}` },
+      };
+    };
+    const payload = pathValue === "/api/host/start-game-config"
+      ? { hostToken: "firebase-host:host:test", configId: "config-next", baseVersion: 50 }
+      : { hostToken: "firebase-host:host:test", config: Engine.DEFAULT_CONFIG, baseVersion: 50 };
+
+    const response = await adapter.postRestHost(pathValue, payload);
+
+    assert.strictEqual(response.ok, true, `${pathValue}: ${response.error || "failed"}`);
+    assert.strictEqual(harness.reads.includes("/rooms/unit-room/results"), true, pathValue);
+    assert.deepStrictEqual(Object.keys(exportedGame.stageResults).sort(), stageIds.sort(), pathValue);
+    assert.deepStrictEqual(response.room.players.map((player) => player.uuid).sort(), ["alice", "bob"], pathValue);
+    assert.strictEqual(response.room.players.find((player) => player.uuid === "alice").skill, 72, pathValue);
+    assert.deepStrictEqual(response.room.players.find((player) => player.uuid === "alice").stageSkillHistory, [32, 40], pathValue);
+    assert.deepStrictEqual(response.room.scores, { alice: 0, bob: 0 }, pathValue);
+    const writes = harness.updates[0].updates;
+    const completed = writes[`rooms/unit-room/completedGameDetails/${room.gameId}`];
+    assert.deepStrictEqual(Object.keys(completed.stageResults).sort(), Object.keys(allResults).sort(), pathValue);
+  }
+});
+
+runAsync("firebase non-final advance reads only the current result child", async () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.roomId = "unit-room";
+  room.gameId = "production-mid-game";
+  room.config = productionFourStageConfig();
+  room.currentStageIndex = 1;
+  room.phase = Engine.PHASES.RANKING;
+  room.roomVersion = 60;
+  const allResults = room.config.stages.reduce((acc, stage, index) => {
+    acc[stage.stageId] = productionStageResult(stage.stageId, `2026-07-31T0${index + 1}:00:00.000Z`, []);
+    return acc;
+  }, {});
+  room.stageResults = allResults;
+  const harness = productionLikeRestHarness(room, allResults);
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host" };
+  adapter.firebaseDb = {};
+  adapter.sdk = harness.sdk;
+  adapter.debug.isHostAllowed = true;
+  adapter.isHostAllowed = async () => true;
+  adapter.exportArchiveGame = async () => {
+    throw new Error("non-final advance must not export");
+  };
+
+  const response = await adapter.postRestHost("/api/host/advance", {
+    hostToken: "firebase-host:host:test",
+    hostName: "host",
+  });
+
+  assert.strictEqual(response.ok, true, response.error);
+  assert.strictEqual(harness.reads.includes("/rooms/unit-room/results"), false);
+  assert.strictEqual(harness.reads.includes("/rooms/unit-room/results/stage-002"), true);
+  assert.strictEqual(response.room.phase, Engine.PHASES.STAGE_INTRO);
+  assert.strictEqual(response.room.currentStageIndex, 2);
+});
+
+runAsync("firebase required results-parent read failure stops RTDB and GAS side effects", async () => {
+  for (const pathValue of ["/api/host/advance", "/api/host/import-config", "/api/host/start-game-config"]) {
+    const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+    room.roomId = "unit-room";
+    room.gameId = `read-failure-${pathValue.split("/").pop()}`;
+    room.config = productionFourStageConfig();
+    room.currentStageIndex = 3;
+    room.phase = pathValue === "/api/host/advance" ? Engine.PHASES.RANKING : Engine.PHASES.STAGE_INTRO;
+    room.roomVersion = 70;
+    const allResults = room.config.stages.reduce((acc, stage) => {
+      acc[stage.stageId] = productionStageResult(stage.stageId, "2026-07-31T01:00:00.000Z", []);
+      return acc;
+    }, {});
+    room.stageResults = allResults;
+    const harness = productionLikeRestHarness(room, allResults, {
+      failReadPaths: ["/rooms/unit-room/results"],
+      extraNodes: pathValue === "/api/host/start-game-config"
+        ? {
+            nextGameConfigs: {
+              "config-next": {
+                configId: "config-next",
+                status: "ACTIVE",
+                config: Engine.DEFAULT_CONFIG,
+              },
+            },
+          }
+        : {},
+    });
+    const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+      config: { FIREBASE_ROOM_ID: "unit-room" },
+      engine: Engine,
+      getRole: () => "host",
+    });
+    adapter.auth = { uid: "host" };
+    adapter.firebaseDb = {};
+    adapter.sdk = harness.sdk;
+    adapter.debug.isHostAllowed = true;
+    adapter.isHostAllowed = async () => true;
+    let exports = 0;
+    adapter.exportArchiveGame = async () => {
+      exports += 1;
+      return { ok: true };
+    };
+    const payload = pathValue === "/api/host/import-config"
+      ? { hostToken: "firebase-host:host:test", config: Engine.DEFAULT_CONFIG, baseVersion: 70 }
+      : pathValue === "/api/host/start-game-config"
+        ? { hostToken: "firebase-host:host:test", configId: "config-next", baseVersion: 70 }
+        : { hostToken: "firebase-host:host:test", hostName: "host" };
+
+    await assert.rejects(
+      () => adapter.postRestHost(pathValue, payload),
+      /Permission denied at results/
+    );
+    assert.strictEqual(harness.updates.length, 0, pathValue);
+    assert.strictEqual(exports, 0, pathValue);
+    assert.match(adapter.getDebugInfo().lastRulesError, /results/, pathValue);
+  }
 });
 
 runAsync("firebase final archive callback then next game remains visible to a fresh History model", async () => {

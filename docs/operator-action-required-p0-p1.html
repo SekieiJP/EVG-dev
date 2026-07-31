@@ -55,14 +55,18 @@
     </div>
 
     <div class="warning">
-      <strong>次のHost操作前に、開いたままのHostタブをすべて強制再読み込みしてください。</strong>
-      旧r9タブは新Rulesと非互換で、次ゲーム・結果保存・backfill等が拒否されます。履歴削除はRulesで防止されますが、正常運用にはr10の読み込みが必要です。複数Host端末がある場合は全端末で確認してください。
+      <strong>緊急: r11の公開と現在ゲームの修復確認が終わるまで、次ゲーム作成・次ゲーム候補開始・JSON Importを行わないでください。</strong>
+      本番の現在ゲームにはRTDB <code>results</code>として4ステージ・24人分が残っていますが、自動確定された<code>completedGameDetails</code>とGAS送信payloadは最終1ステージだけです。次ゲームへ切り替える前なら、残っているresultsを正として推測なしに修復できます。
+    </div>
+
+    <div class="warning">
+      <strong>r11公開後、次のHost操作前に開いたままのHostタブをすべて強制再読み込みしてください。</strong>
+      現在の確認用Chromeプロファイルは本番roomのHost allowlistに登録されていません。既にallowlist済みのHostプロファイルを使用してください。別プロファイルのuidを追加する場合は、意図したuidの子だけを追加する明示承認を先に得てください。
     </div>
 
     <div class="warning">
       <strong>Firebase Skill移行と戦績表示確認は完了しましたが、P1全体の本番作業はまだ完了していません。</strong>
-      GAS archive URL/API keyのクライアント公開は完了しました。残りはSpreadsheet/GAS側の設定確認、現在ゲームのarchive/recalculate、
-      同日次ゲーム継続とarchive retryの実環境smokeです。下記「0-1」の未完了項目を順に実施してください。
+      GAS archive endpointは必要な7シート、runtime、apiKey、Firebase ID token検証まで読取り専用で確認済みです。残りはr11公開後の現在ゲーム修復、Spreadsheet実ヘッダ/保存行/冪等upsert/recalculateの所有者確認、retry、長期バックアップ、同日次ゲーム継続を含む実環境smokeです。下記「0-1」の未完了項目を順に実施してください。
     </div>
 
     <h2>0. 現在確認できている本番状態</h2>
@@ -70,32 +74,36 @@
     <table>
       <thead><tr><th>確認項目</th><th>結果</th></tr></thead>
       <tbody>
-        <tr><td>GitHub Pages</td><td>コミット<code>3f82740</code>、アセットversion <code>260731-p0p1r10</code>を公開済み。公開adapter本文もローカル版と完全一致を確認済み。</td></tr>
-        <tr><td>現在room</td><td><code>final</code>。backfillでroomVersionは26→27。次ゲーム作成やステージ操作は行っていない。</td></tr>
+        <tr><td>GitHub Pages</td><td>履歴削除防止のアセットversion <code>260731-p0p1r10</code>まで公開済み。最終アーカイブ全ステージ化r11は公開・公開本文一致の確認後に使用する。</td></tr>
+        <tr><td>現在room</td><td><code>final</code>。RTDB <code>results</code>は4ステージ・24人分が残っている。修復完了まで次ゲーム作成・候補開始・Importを停止する。</td></tr>
         <tr><td>現行Rules</td><td>2026-07-31にr10削除防止版をrelease済み。5履歴親の書込みと既存子削除を拒否し、gameId変更時もroomVersion + 1を必須化。release後本文一致を確認済み。</td></tr>
         <tr><td>Skill復旧結果</td><td><code>schemaVersion=firebase-rtdb-v3-skill-history</code>、有限StageSkill 29件、root欠損0人、root/roomとも非ゼロSkill 6人。</td></tr>
-        <tr><td>履歴・完了詳細</td><td>履歴長とmarker長 <code>[4,5,5,5,5,5]</code>、公開履歴6人、完了詳細5ステージ・6人。History画面も6人だけを非ゼロSkillで表示し、各ステージ6人のスコア詳細を取得済み。</td></tr>
-        <tr><td>Host allowlist</td><td>今回使用したHost uidで<code>isHostAllowed=true</code>と認証成功、Rules errorなしを確認済み。開催に使う他端末は個別確認が必要。</td></tr>
+        <tr><td>履歴・完了詳細</td><td>Skill backfill時には履歴長とmarker長 <code>[4,5,5,5,5,5]</code>、公開履歴6人、5ステージ完了詳細を確認済み。その後の現在ゲームは、4ステージresultsに対して自動<code>completedGameDetails</code>とGAS payloadが1ステージだけであり、r11での修復が必要。</td></tr>
+        <tr><td>Host allowlist</td><td>以前の実機確認ではallowlist済みHostで認証成功済み。現在の確認用Chromeプロファイルは未登録のため、修復には既にallowlist済みのHostプロファイルを使う。新しいuid追加は明示承認後に既存一覧を保ったまま子1件だけ追加する。</td></tr>
         <tr><td>締切カウントダウン</td><td>既定10秒。Hostが1〜60秒の整数へ変更でき、本番<code>roomSettings/countdownSeconds</code>は10で初期化・再読取り済み。</td></tr>
-        <tr><td>GAS archive</td><td>公開設定のHTTPS <code>/exec</code> URLとapiKeyは配信済み。値は本文へ転記しない。Spreadsheet初期化、Webアプリ権限、archive/recalculateの実疎通は未確認。</td></tr>
+        <tr><td>GAS archive</td><td>公開HTTPS <code>/exec</code>へのsanitized probeで、必要な7シート、runtime setup、設定済みapiKeyの一致、Firebase ID token検証の有効化を確認済み。実値は本文へ転記しない。Spreadsheetのヘッダ/保存行、冪等upsert、recalculate、retryは所有者確認が必要。</td></tr>
       </tbody>
     </table>
 
     <h2>0-1. 今からP1完了までに行う順序</h2>
 
     <ol>
-      <li><strong>旧Rulesの一時バックアップを保全する:</strong> <code>/private/tmp/evg-production-rules-20260729.json</code>を、担当者と日時が分かる組織の承認済み保管先へコピーする。<code>/private/tmp</code>は長期保管先として扱わない。</li>
-      <li><strong>r10を強制再読み込みする:</strong> 開催に使う全Hostタブでアセット版<code>260731-p0p1r10</code>を確認し、旧タブを閉じる。実Import前にinternal-statusのRules errorが空であることを確認する。</li>
-      <li><strong>✅ 今回使用したHost uidを確認済み:</strong> internal-statusで<code>isHostAllowed=true</code>を確認した。開催に使う他のHost端末があれば、既存allowlistを消さず端末ごとに確認する。</li>
+      <li><strong>次ゲーム操作を停止する:</strong> r11公開と現在ゲーム修復確認まで、次ゲーム作成・次ゲーム候補開始・JSON Importを行わない。現在の4ステージresultsを保持する。</li>
+      <li><strong>バックアップを保全する:</strong> 現在roomのRTDB exportと対象Spreadsheetの通常バックアップを取得する。あわせて旧Rulesの一時バックアップ<code>/private/tmp/evg-production-rules-20260729.json</code>を、担当者と日時が分かる組織の承認済み保管先へコピーする。<code>/private/tmp</code>は長期保管先として扱わない。</li>
+      <li><strong>r11公開完了を確認する:</strong> 公開HTMLのアセットversionとadapter本文一致が開発側で確認されるまでHost修復操作をしない。</li>
+      <li><strong>allowlist済みHostを使う:</strong> 現在の確認用Chromeプロファイルは未登録なので、既にallowlist済みのHostプロファイルを開く。別uid追加が必要なら明示承認を得て、既存allowlistを消さず対象uidの子だけを追加する。</li>
+      <li><strong>r11を強制再読み込みする:</strong> 使用する全Hostタブで公開r11のアセットversionを確認し、旧タブを閉じる。internal-statusの<code>isHostAllowed=true</code>と空のRules errorを確認する。</li>
       <li><strong>✅ Skill backfillを1回実行済み:</strong> 最新版を強制再読み込みし、通常のHost認証を1回行った。次ゲーム作成やステージ操作は行っていない。</li>
-      <li><strong>✅ 戦績を確認済み:</strong> schema v3、有限StageSkill 29件、履歴長<code>[4,5,5,5,5,5]</code>、6人の非ゼロSkill、現ゲーム5ステージ完了詳細、Historyの6人表示と各ステージ詳細を確認した。</li>
-      <li><strong>GAS archiveを準備する:</strong> Spreadsheetのバックアップ、<code>Code.gs</code>反映、<code>setupElevatorGameSheets</code>実行、Webアプリ新バージョンのデプロイを行う。</li>
+      <li><strong>✅ Skill backfill対象の戦績を確認済み:</strong> schema v3、有限StageSkill 29件、履歴長<code>[4,5,5,5,5,5]</code>、6人の非ゼロSkill、当時の5ステージ完了詳細、Historyの6人表示と各ステージ詳細を確認した。これは今回の4ステージ現在ゲームの修復完了を意味しない。</li>
+      <li><strong>GAS/Spreadsheetを所有者が確認する:</strong> <code>Code.gs</code>反映、7シートと正しいヘッダ、Webアプリの実行者/アクセス設定を確認する。endpoint probeだけでは実Spreadsheetの内容確認を代替しない。</li>
       <li><strong>✅ 公開設定を反映済み:</strong> GASの<code>/exec</code> URLとapiKeyをクライアント設定へ入れ、アセットversion <code>260731-p0p1r8</code>としてGitHub Pagesへ公開した。</li>
-      <li><strong>現在の終了済みゲームをarchiveする:</strong> Hostの「現在ゲームを保存」を実行し、5ステージがSpreadsheetへ保存され、再送しても重複せず、再集計が成功することを確認する。</li>
+      <li><strong>現在ゲームを修復する:</strong> allowlist済みHostで「現在ゲームを保存」を1回実行する。RTDBの同じgameIdの<code>completedGameDetails</code>が4ステージになり、archiveが保存済みになることを確認する。</li>
+      <li><strong>Spreadsheetを確認する:</strong> 同じgameId/archiveIdについて4ステージ分がupsertされ、旧1ステージ分と二重行を作っていないことを所有者が確認する。</li>
+      <li><strong>再集計する:</strong> Hostの「保存済み戦績を再集計」を実行し、成功応答と集計結果を確認する。この完了後にだけ次ゲーム運用を再開する。</li>
       <li><strong>実環境smokeを行う:</strong> 非イベント時間の小規模確認ゲームで、ステージ結果の得点・StageSkill・持ち点・現在Skill、同日次ゲームへの参加継続、archive export/retryを確認する。</li>
     </ol>
 
-    <p>Skill backfill、戦績確認、クライアント公開、Firebase Rules反映は完了しています。残作業は一時バックアップの長期保管、全Hostタブのr10強制再読み込み、Spreadsheet/Apps Script設定確認、現在ゲームarchive、実環境smokeです。</p>
+    <p>Skill backfill、戦績表示、Firebase Rules反映、GAS endpointの認証境界確認は完了しています。残作業はr11公開後の現在ゲーム修復、RTDB 4ステージ確認、Spreadsheetの実ヘッダ/4ステージupsert/重複なし/recalculate、retry、バックアップの長期保管、実環境smokeです。旧来のRTDB履歴消失復旧はこの手順とは別のpayload・承認で扱います。</p>
 
     <div class="notice">
       <strong>認証情報や共有リンクをこの文書やGitに貼り付けないでください。</strong>
@@ -160,7 +168,7 @@
       <li>allowlist済みHostブラウザでアセット版<code>260731-p0p1r5</code>を強制再読み込みした。</li>
       <li>通常のHost認証を1回行い、全<code>results</code>と欠損root playerを読み、Skill履歴、room mirror、公開履歴、完了詳細をversion CAS付きmulti-location updateで同期した。</li>
       <li>通信ログの<code>firebase-backfill-skill-history</code>、認証成功、Rules errorなしを確認した。</li>
-      <li>読取り専用集計でschema v3、有限StageSkill 29件、6人の非ゼロSkill、履歴長<code>[4,5,5,5,5,5]</code>、5ステージ完了詳細を確認した。</li>
+      <li>読取り専用集計でschema v3、有限StageSkill 29件、6人の非ゼロSkill、履歴長<code>[4,5,5,5,5,5]</code>、当時の5ステージ完了詳細を確認した。</li>
       <li>表示修正版<code>260731-p0p1r7</code>でHistoryを再確認し、6人だけの非ゼロSkillと5ステージ×6人の公開スコア詳細を確認した。</li>
     </ol>
 
@@ -169,7 +177,7 @@
     </div>
 
     <div class="success">
-      backfillは完了し、同じroomでの再認証はschema v3 markerにより再実行されません。次ゲーム作成前のSkill移行条件は満たしました。
+      backfillは完了し、同じroomでの再認証はschema v3 markerにより再実行されません。Skill移行条件は満たしましたが、現在の4ステージゲームに対するr11修復は別条件です。5-1の確認完了までは次ゲームを開始しないでください。
     </div>
 
     <div class="warning">
@@ -191,6 +199,10 @@
 
     <p>シークレットウィンドウ、ブラウザデータ消去、別ブラウザ・別端末ではuidが変わる場合があります。開催に使うHost環境ごとに確認してください。Hostパスワードの画面入力は誤操作防止であり、RTDB/GASの認可根拠ではありません。</p>
 
+    <div class="warning">
+      現在の確認用Chromeプロファイルは本番roomのallowlistに登録されていません。r11修復では既にallowlist済みのHostプロファイルを使ってください。新しいuidを登録する必要がある場合は、追加対象を確認して明示承認を得た後、既存<code>roles/hosts</code>を置換せずそのuidの子だけを<code>true</code>にします。この文書へuid実値を転記しないでください。
+    </div>
+
     <h2>4. GAS archive専用版のセットアップとWebアプリ配布</h2>
 
     <h3>4-1. 対象Spreadsheetに紐づくApps Scriptを更新する</h3>
@@ -200,7 +212,7 @@
       <li>リポジトリの <code>gas/src/Code.gs</code> を対象プロジェクトの <code>Code.gs</code> に反映する。</li>
       <li>保存後、エディタから <code>setupElevatorGameSheets</code> を1回実行する。</li>
       <li>Googleが求める権限を確認して承認する。Spreadsheetへの書込みと、Firebase ID token / Host allowlist検証のための外部HTTPアクセス（<code>UrlFetchApp</code>）が必要である。</li>
-      <li>Spreadsheetに <code>config</code>、<code>save_data</code>、<code>stage_results</code>、<code>stage_settings</code>、<code>game_history</code>、<code>archive_log</code> が作成または更新されたことを確認する。</li>
+      <li>Spreadsheetに必要な7シート、<code>config</code>、<code>save_data</code>、<code>players</code>、<code>stage_results</code>、<code>stage_settings</code>、<code>game_history</code>、<code>archive_log</code> が作成または更新されたことを確認する。</li>
     </ol>
 
     <p><code>setupElevatorGameSheets</code> は必要なシートとヘッダを用意します。既存archiveデータを削除する操作ではありません。ただし本番Spreadsheetで初めて実行する前に、通常のSpreadsheetバックアップを作成してください。</p>
@@ -229,26 +241,52 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
       <li>設定を反映したコミット、公開日時、GASデプロイ版を対応付けて記録する。</li>
     </ol>
 
-    <h2>5. 実ブラウザでのarchive確認</h2>
-
-    <p>本番イベントの本ゲームではなく、参加者に影響しない小規模な確認ゲームで実施してください。archiveは <code>archiveId</code> と <code>gameId</code> による冪等upsertなので、同じアーカイブの再送でSpreadsheetに二重行を作らない設計です。</p>
-
-    <ol>
-      <li>allowlist済みHostで、小規模な確認ゲームを最終結果まで完了する。</li>
-      <li>Host画面の<strong>戦績アーカイブ → 現在ゲームを保存</strong>を押す。</li>
-      <li>表示が<strong>保存済み</strong>になり、エラーが空であることを確認する。</li>
-      <li>Spreadsheetの <code>archive_log</code> に成功記録があり、<code>save_data</code>、<code>stage_results</code>、<code>stage_settings</code>、<code>game_history</code> に当該ゲームのデータがあることを確認する。</li>
-      <li><strong>保存済み戦績を再集計</strong>を押し、GASの再集計応答が成功することを確認する。</li>
-      <li>既に <strong>未完了</strong> または長時間変わらない<strong>送信待ち</strong>のarchiveがある場合は、URL/API key/allowlistを直したうえで<strong>未完了を再送</strong>を押す。先行ゲームに続いて、延期されていた後続ゲームも古い順に自動送信される。最後のゲームが保存済みに変わり、各 <code>archiveId</code> の行が重複しないことを確認する。</li>
-    </ol>
-
-    <p>2026-06-12終了済みの本番ゲームはSkill backfillにより5ステージの完了詳細へ修復済みです。GAS設定反映後、同じHost画面の<strong>現在ゲームを保存</strong>からこの保存済み現ゲームを送信できます。手動送信でも全resultsを再確認し、修復詳細をRTDBへ原子的に保存してから同じgameId/archiveIdでGASへ送ります。新しいゲームを作成する前に、表示が<strong>保存済み</strong>となり、Spreadsheet側の5ステージを確認してください。</p>
-
-    <div class="warning">
-      別ゲームのarchiveが<strong>送信待ち</strong>または<strong>未完了</strong>の間は、現在ゲームの手動保存を先に行わないでください。アプリも<code>archive_pending</code>として拒否します。ゲーム進行とRTDB完了履歴は継続でき、後続gameIdはFirebaseのキューへ保存されます。追跡中ゲームの<strong>未完了を再送</strong>すると、成功後に後続ゲームも古い順で自動送信されます。retry対象gameIdが追跡状態と異なる場合は<code>archive_mismatch</code>として拒否されます。
+    <div class="success">
+      公開<code>/exec</code>へのsanitized probeでは、runtime setup完了、上記7シートの存在、設定済みapiKeyの一致、Firebase ID token検証が有効であることまで確認済みです。URL、apiKey、uidの実値は記録していません。
     </div>
 
-    <p>再送の導線自体を事前検証する必要があり、未完了の実例がない場合は、<strong>本番イベントではない確認ゲーム</strong>だけで一時的に無効なarchive URLを配信して失敗状態を作り、正しいURLへ戻して再送する方法があります。この確認は公開切替を伴うため、通常の変更管理・承認手順で行ってください。</p>
+    <div class="notice">
+      probeはSpreadsheet所有者として実ヘッダや保存行を閲覧する確認ではありません。所有者は、7シートのヘッダが<code>gas/src/Code.gs</code>と一致すること、対象gameId/archiveIdの行、再送時の重複なし、recalculate、retry、Spreadsheetバックアップを別途確認してください。
+    </div>
+
+    <h2>5. 現在ゲームの緊急修復とarchive確認</h2>
+
+    <h3>5-1. r11公開後、現在の4ステージゲームを修復する</h3>
+
+    <div class="warning">
+      以下がすべて完了するまで次ゲームを開始しないでください。今回の修復元はRTDBに残る現在ゲームの4ステージresultsです。次ゲーム作成時に過去の履歴親が削除された既知障害の復旧とは別であり、旧履歴をこの操作だけで復旧することはできません。
+    </div>
+
+    <ol>
+      <li>現在roomのRTDB exportと対象Spreadsheetのバックアップを取得し、取得日時・担当者を記録する。</li>
+      <li>r11の公開完了と公開adapter本文一致を確認する。release hashやアセットversionは、確定した値を運用記録へ記入する。</li>
+      <li>既にallowlist済みのHostブラウザプロファイルでHost画面を開き、強制再読み込みする。internal-statusでr11、<code>isHostAllowed=true</code>、空の<code>lastRulesError</code>を確認する。現在の確認用Chromeプロファイルは未登録なので使用しない。</li>
+      <li>現在roomが<code>final</code>であり、RTDB <code>rooms/elevator-game-live/results</code>に4ステージ・24人分が残っていることを再確認する。</li>
+      <li>Host画面の<strong>戦績アーカイブ → 現在ゲームを保存</strong>を1回押す。同じgameId/archiveIdを用いる冪等修復であり、新しいIDを手入力しない。</li>
+      <li>画面が<strong>保存済み</strong>になり、エラーが空であることを確認する。</li>
+      <li>Firebase Consoleで、同じgameIdの<code>rooms/elevator-game-live/completedGameDetails/{gameId}/stageResults</code>が4ステージになったことを確認する。1ステージのままなら次ゲームへ進まず、RTDB exportとinternal-statusの通信ログを保全する。</li>
+      <li>Spreadsheet所有者が、同じgameId/archiveIdについて<code>archive_log</code>の成功記録と、<code>save_data</code>、<code>players</code>、<code>stage_results</code>、<code>stage_settings</code>、<code>game_history</code>の保存内容を確認する。4つのstageIdとRTDBに対応する24人分のstage resultがあり、旧1ステージ送信分との重複行がないことを確認する。</li>
+      <li>Host画面の<strong>保存済み戦績を再集計</strong>を押し、GASの成功応答とSpreadsheetの再集計結果を確認する。</li>
+      <li>以上を運用記録へ残してから、次ゲーム作成・次ゲーム候補開始・JSON Importを再開する。</li>
+    </ol>
+
+    <h3>5-2. retryと次ゲーム継続の実環境smoke</h3>
+
+    <p>現在ゲームの修復後、本番イベントの本ゲームではなく、参加者に影響しない小規模な確認ゲームで実施してください。archiveは<code>archiveId</code>と<code>gameId</code>による冪等upsertなので、同じアーカイブの再送でSpreadsheetに二重行を作らない設計ですが、実Spreadsheetでの確認が必要です。</p>
+
+    <ol>
+      <li>allowlist済みHostで小規模な確認ゲームを最終結果まで完了し、全ステージの得点、StageSkill、持ち点、現在Skillを確認する。</li>
+      <li>同日次ゲームでは直前ゲームの参加者が継続し、前日以前の参加者は退室状態になることを確認する。</li>
+      <li>archive exportと<strong>現在ゲームを保存</strong>を確認し、RTDB完了詳細とSpreadsheetのステージ数が一致することを確認する。</li>
+      <li>既に<strong>未完了</strong>または長時間変わらない<strong>送信待ち</strong>のarchiveがある場合は、URL/API key/allowlistを直したうえで<strong>未完了を再送</strong>を押す。先行ゲームに続いて延期されていた後続ゲームも古い順に自動送信され、各archiveIdの行が重複しないことを確認する。</li>
+      <li><strong>保存済み戦績を再集計</strong>を再度実行し、実ゲームでも成功することを確認する。</li>
+    </ol>
+
+    <div class="warning">
+      別ゲームのarchiveが<strong>送信待ち</strong>または<strong>未完了</strong>の間は、現在ゲームの手動保存を先に行わないでください。アプリも<code>archive_pending</code>として拒否します。追跡中ゲームの<strong>未完了を再送</strong>すると、成功後に後続ゲームも古い順で自動送信されます。retry対象gameIdが追跡状態と異なる場合は<code>archive_mismatch</code>として拒否されます。
+    </div>
+
+    <p>未完了の実例がない場合のretry smokeは、<strong>本番イベントではない確認ゲーム</strong>だけで一時的に無効なarchive URLを配信して失敗状態を作り、正しいURLへ戻して再送できます。この確認は公開切替を伴うため、通常の変更管理・承認手順で行ってください。</p>
 
     <div class="success">
       archive送信に失敗しても、RTDB上の進行・Skill・完了履歴は正系として残ります。失敗状態はHostの「未完了を再送」で回復できます。SpreadsheetからRTDBへ戻す復元操作は通常運用に含めません。
@@ -260,12 +298,13 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
       <thead><tr><th>症状</th><th>確認・復旧</th></tr></thead>
       <tbody>
         <tr><td>Rules deployが失敗する</td><td>ゲーム開始を止め、CLIのエラーを解消する。緊急復旧が必要なら、2-1で保存したRulesをConsoleに戻して公開する。旧Rulesへ戻した場合は、そのRulesと互換なアプリ版へ戻すまでHostの書込み操作を行わない。</td></tr>
-        <tr><td>Hostが「allowlistに登録されていません」</td><td>internal-statusの現在uidと <code>rooms/elevator-game-live/roles/hosts/{uid}</code> を照合する。uidの子を <code>true</code> で追加し、Host画面を再読み込みする。既存のhost uidを一括削除しない。</td></tr>
-        <tr><td>次ゲーム・結果保存が<code>rules_or_conflict</code>で拒否される</td><td>開いたままの旧r9タブを閉じ、r10を強制再読み込みする。履歴ノードやRulesを手動で緩めず、internal-statusのアセット版、roomVersion、<code>lastRulesError</code>を保存する。</td></tr>
+        <tr><td>Hostが「allowlistに登録されていません」</td><td>可能なら既にallowlist済みのHostプロファイルを使う。新しいuidが必要なら追加対象の明示承認を得てから、internal-statusの現在uidと<code>rooms/elevator-game-live/roles/hosts/{uid}</code>を照合し、そのuidの子だけを<code>true</code>で追加する。既存のHost uidを一括削除しない。</td></tr>
+        <tr><td>次ゲーム・結果保存が<code>rules_or_conflict</code>で拒否される</td><td>開いたままの旧タブを閉じ、公開済みr11を強制再読み込みする。履歴ノードやRulesを手動で緩めず、internal-statusのアセット版、roomVersion、<code>lastRulesError</code>を保存する。</td></tr>
+        <tr><td>現在ゲーム保存後も完了詳細が1ステージ</td><td>次ゲーム操作を停止したままにし、元の4ステージresultsを変更せず、RTDB export、公開アセットversion、internal-status通信ログを保全して開発担当へ渡す。Spreadsheetの行を手動で複製して埋めない。</td></tr>
         <tr><td>archiveが「GAS URL未設定」またはHTTPエラー</td><td><code>/exec</code> URL、Webアプリのアクセス範囲、公開済みクライアント設定を確認する。直せるまでURLを空に戻せばarchive呼出しは失敗状態になるだけで、ゲーム進行はRTDBで継続する。</td></tr>
         <tr><td>archiveが「Firebase ID token」またはHost認可エラー</td><td>匿名Authが有効か、Host画面を再読み込みしてtokenが更新されるか、GAS側のFirebaseプロジェクト/room設定とallowlistが一致するかを確認する。</td></tr>
         <tr><td>archiveが<code>archive_pending</code>または<code>archive_mismatch</code></td><td>RTDB <code>archive</code>が追跡しているgameIdを変更・削除せず確認し、そのゲームの「未完了を再送」を先に完了する。別ゲームIDを手入力して再送しない。</td></tr>
-        <tr><td>GASがsetup_requiredを返す</td><td>正しいSpreadsheetに紐づくスクリプトで <code>setupElevatorGameSheets</code> を実行し、必要シートが作成されているか確認する。</td></tr>
+        <tr><td>GASがsetup_requiredを返す</td><td>正しいSpreadsheetに紐づくスクリプトで<code>setupElevatorGameSheets</code>を実行し、<code>players</code>を含む必要な7シートとヘッダが作成されているか確認する。</td></tr>
         <tr><td>archiveを一時停止したい</td><td>通常の公開手順で <code>FIREBASE_ARCHIVE_GAS_URL</code> を空にした版を配信する。RTDBのRules、進行データ、確定履歴を削除しない。復旧後はURLを戻して「未完了を再送」を使う。</td></tr>
       </tbody>
     </table>
@@ -275,16 +314,22 @@ FIREBASE_ARCHIVE_API_KEY: "&lt;GAS config シートの apiKey&gt;",</code></pre>
     <ul class="checklist">
       <li>✅ 本番RTDB Rulesの一時バックアップを取得し、デプロイ前のSHA-256一致を確認した。</li>
       <li>一時バックアップを組織の承認済み長期保管先へコピーした。</li>
+      <li>現在ゲーム修復前のRTDB exportとSpreadsheetバックアップを、日時・担当者付きで保全した。</li>
       <li>✅ 欠損root player対応版<code>firebase/database.rules.json</code>を<code>elevator-game-live</code>へ再deployし、release成功と本番Rulesの完全一致を確認した。</li>
       <li>✅ 履歴消失防止r10をクライアント先行で公開後、履歴親/子削除防止Rulesをreleaseし、5履歴ノードが事前バックアップから不変であることを確認した。</li>
-      <li>開催に使う全Hostタブを強制再読み込みし、アセット版<code>260731-p0p1r10</code>を確認した。</li>
+      <li>最終アーカイブ全ステージ化r11のPages公開と公開adapter本文一致を確認した。</li>
+      <li>既にallowlist済みのHostプロファイルで全Hostタブを強制再読み込みし、r11アセットversion、<code>isHostAllowed=true</code>、空のRules errorを確認した。</li>
       <li>✅ allowlist済みHostで1回backfillし、29件のStageSkill、6人の現在Skill、5ステージ完了詳細を確認した。</li>
-      <li>今回使用したHost uidは確認済み。開催に使用する追加Host端末があればFirebase uidを<code>roles/hosts</code>へ登録・確認する。</li>
-      <li>GASの <code>setupElevatorGameSheets</code> を正しいSpreadsheetで実行し、必要シートを確認した。</li>
+      <li>開催に使用する追加Host端末があれば、明示承認後にFirebase uidの子だけを<code>roles/hosts</code>へ追加・確認する。</li>
+      <li>GASの<code>setupElevatorGameSheets</code>を正しいSpreadsheetで実行し、<code>players</code>を含む7シートと実ヘッダを確認した。</li>
       <li>GASを「実行者: 運用者」「アクセス: Hostブラウザがログイン不要で到達可能」のWebアプリとして新バージョンdeployした。</li>
       <li>✅ GASの <code>/exec</code> URLと運用中のapiKeyをクライアント設定へ反映し、コミット<code>09d13c1</code>・アセット版<code>260731-p0p1r8</code>として配信した。</li>
-      <li>Host画面からarchive exportとrecalculateが成功し、Spreadsheetの行と <code>archive_log</code> を確認した。</li>
+      <li>✅ 公開endpointのsanitized probeで、7シート、runtime setup、apiKey一致、Firebase ID token検証を確認した。</li>
+      <li>「現在ゲームを保存」でRTDB完了詳細を4ステージへ修復し、archiveが保存済みになった。</li>
+      <li>Spreadsheet所有者が同じgameId/archiveIdの4ステージ・24人分、重複なし、<code>archive_log</code>成功を確認した。</li>
+      <li>Host画面からrecalculateが成功し、Spreadsheetの再集計結果を確認した。</li>
       <li>未完了archiveがある場合、retryで保存済みになり、同一archiveIdの重複行がないことを確認した。</li>
+      <li>非イベント時間の実環境smokeで、同日参加継続、前日以前の退室、全ステージ結果/Skill、archive export/retryを確認した。</li>
       <li>Rules/GAS/クライアント設定のリリース日時・担当者・コミットを運用記録に残した。</li>
     </ul>
   </main>

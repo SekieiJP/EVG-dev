@@ -5,10 +5,10 @@
 ## 自動テスト
 
 ```sh
-node tests/engine.test.js
-node tests/multiplayer-flow.test.js
-npx firebase emulators:exec --only auth,database "npm test"
-npx playwright test
+npm run test:unit
+npm run test:load
+npm run test:rules-emulator
+npm run test:e2e
 ```
 
 ### Unit tests
@@ -17,6 +17,7 @@ npx playwright test
 - StageSkill と現在Skillを検証する。現在Skillは全StageSkillの上位5件の合計であり、最高値を除外しない。
 - 累積戦歴の9指標（現在Skill、平均Skill、合計Skill、最高得点、参加ゲーム数、参加ステージ数、強制下車回数、予想イベント正解率、優勝回数）を検証する。
 - 同日継続は、次ゲーム開始日と同じAsia/Tokyo日付にticketを提出したプレイヤーだけを残し、ゲーム内score/ticket/stage resultを初期化することを検証する。
+- final自動確定、JSON Import、次ゲーム候補開始は、現在ステージだけでなく保存済み`results`親全件を読んでから完了ゲームとGAS payloadを作る。複数ステージの完了詳細と同日継続判定が欠けず、全件読取り失敗時はRTDB更新とGAS呼出しがともに0回であることを検証する。
 - 5種類の履歴ノードがある参加者0人・results 0件の既存ロビーへJSON Importと次ゲーム候補開始を行い、旧gameIdと公開Skill profileIdが減らず、履歴親へのnull/全置換が生成されないことを検証する。
 - 次ゲーム開始前の履歴集合検査で旧gameIdまたはprofileIdが欠ける場合は `history_preservation_failed` となり、RTDB updateとGAS archive呼出しがともに0回であることを検証する。
 - 同一baseVersionの次ゲーム開始、再読込み後の再送、別Host競合では先着以外をversion conflictとして扱い、履歴件数が減らないことを検証する。
@@ -29,7 +30,7 @@ npx playwright test
 - Playerは自分のプロフィール、ticket、ticketPresenceだけを書け、他人のデータ、`public`、`results`、`scores` は書けない。
 - Host allowlist uidだけが `public` を含む原子的commit、設定、次ゲーム候補、結果commit、archive状態を変更できる。
 - `roomSettings/countdownSeconds` はHostだけが書け、1〜60の整数以外を拒否する。
-- `lobby -> stage_intro -> voting -> countdown -> moving -> reveal -> ranking -> stage_intro/final` 以外の遷移を拒否する。
+- `lobby -> stage_intro -> voting -> countdown -> tallying/reveal -> ranking -> stage_intro/final` 以外の遷移を拒否する。
 - phase/version CASは、古いphaseまたは `roomVersion` からのmulti-location updateを全体として拒否する。
 - gameIdが変わる次ゲーム開始も `roomVersion + 1` を必須とし、同じ旧versionからの後発更新を全体拒否する。
 - 同じ `results/{stageId}` の二重作成を拒否する。
@@ -44,6 +45,7 @@ npx playwright test
 - 結果commitが一つのmulti-location updateで `results`、`scores`、`playerStats`、本人履歴、`operations` を反映し、途中状態を公開しない。
 - Host再読込、ネットワーク一時切断、別Hostの競合操作で、RTDBの確定phase/versionが戻らない。
 - 空ロビーImportと `update-config` は既存履歴親を更新対象に含めず、中断・final・backfillは新規または修復対象のgameId/profileId子だけを原子的にupsertする。
+- finalまたは次ゲーム境界では全`results`を取得し、設定ステージ数・保存済みresult数・完了詳細/GAS payloadのstage集合を一致させる。通常の中間ステージadvanceでは全`results`親を読まない。
 - final確定からGAS archive送信、次ゲーム開始、fresh History取得までを通し、archive失敗の有無にかかわらずRTDB完了履歴と現在Skillが残る。
 - Player/Screen/未認証Hostの初回アクセスではroomを作成しない。allowlist済みHostのセットアップだけが作成する。
 - finalまたは中断後、GAS archive失敗でもゲームは完了し、`archive.status=failed` から同じarchiveIdを再送できる。
