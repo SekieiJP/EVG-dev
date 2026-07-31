@@ -48,7 +48,7 @@
 - 公開adapter SHA-256: `61eb22acfa1a69ea31c307dc315d0364208fecbbb8ad1edde22e1873f5f38dc2`。ローカル本文と一致
 - Verify workflow: Unit/static、50人×20ステージ負荷モデル、Realtime Database Rules emulator、Playwright E2Eの全ステップ成功
 - Firebase Rules: r10から本文変更なし。今回のreleaseでは再deployしていない
-- 残作業: allowlist済みHostによる現在ゲーム再保存、RTDB 4ステージ確認、Spreadsheetの同一gameId/archiveId 4ステージ・重複なし確認、recalculate。その完了までは次ゲーム操作を停止する
+- 2026-08-01にallowlist済みHostで現在ゲームを再保存し、RTDBとSpreadsheetを4ステージへ修復、recalculateまで完了した。緊急の次ゲーム停止は解除可能である。
 
 ## 2026-08-01 読取り専用再監査
 
@@ -58,14 +58,14 @@
 - GAS endpointを副作用なしで再probeし、キーなしの拒否、設定済みapiKeyの受理、無効Firebase tokenの拒否を確認した。
 - 運用者から指定された本番Spreadsheet `EVG2026` をGoogle Sheets APIで読取り専用監査した。archive用7シートとヘッダは `gas/src/Code.gs` の定義に一致し、互換用の空の `current_game` を含む8タブ構成だった。
 - 現gameは同一gameId/archiveIdについて `archive_log=exported` 1件、`save_data` 6件、`players` 6件、`stage_settings` 4件、`game_history` 1件を保持する一方、`stage_results` は最終ステージ6件だけである。`game_history` と6人の `save_data` も `stageCount=1` であり、現行の複合キーに重複はない。RTDBとSpreadsheetの双方が同じ部分保存状態であることを確認した。
-- 修復前RTDBは `/private/tmp/evg-p0p1-current-room-reaudit.json`、root playerは `/private/tmp/evg-p0p1-root-players-reaudit.json` に一時退避した。機微データを含むためGitへ追加せず、運用者がアクセス制御された長期保管先へ移す。
+- 修復前RTDBは `/private/tmp/evg-p0p1-current-room-reaudit.json`、root playerは `/private/tmp/evg-p0p1-root-players-reaudit.json` に一時退避した。機微データを含むためGitへ追加していない。
 
-## 本番修復手順
+## 本番修復手順（2026-08-01実施済み）
 
-詳細な画面操作は `docs/operator-action-required-p0-p1.html` を正とする。
+詳細な完了記録は `docs/operator-action-required-p0-p1.html` を正とする。以下は実施時の手順として保持する。
 
 1. 次ゲーム開始、JSON Import、同じJSONで再開始を停止する。
-2. 現在のRTDB全体とSpreadsheetをバックアップする。
+2. 現在のRTDBを退避する。Spreadsheetは運用者の常時バックアップを正とし、都度バックアップを要求しない。
 3. 修正版クライアントのPages公開完了を確認し、allowlist済みHostタブを強制再読み込みする。
 4. Hostの「戦績アーカイブ → 現在ゲームを保存」を1回実行する。
 5. RTDBの同じ `completedGameDetails/{gameId}` が4ステージになり、公開詳細・本人詳細も同じgameIdで修復されたことを確認する。
@@ -74,3 +74,12 @@
 8. 上記確認後にのみ次ゲーム操作を再開する。
 
 この修復は現在RTDBに残る4ステージ結果を正本にする。以前の次ゲームImportで既に消失した別ゲームの履歴復旧は、`next-game-history-loss-revision-plan.md` の別承認手順で行う。
+
+## 2026-08-01 本番修復結果
+
+- allowlist済みHostで公開r11を強制再読み込みし、`isHostAllowed=true`、Rules/subscription errorなしを確認して「現在ゲームを保存」を1回だけ実行した。
+- 本番roomは `final`、`roomVersion=22` となり、同一gameIdのHost詳細、公開詳細、本人詳細はいずれも4ステージへ修復された。現在参加者6人、4ステージ×6人の24結果、archiveは `exported`、pending 0、errorなしである。
+- Spreadsheetは同一archiveId/gameIdについて `stage_results=24`、複合キー24件すべて一意、4 stageId×6人、`stage_settings=4`、`save_data=6`、`players=6`、`game_history=1` を確認した。`save_data`と`game_history`の `stageCount` は4である。
+- Hostの「保存済み戦績を再集計」を実行し、`/api/host/archive-recalculate` の成功応答を確認した。再集計後も24結果・重複0を維持し、6人のplayers、各4件のSkill履歴、集計Skillとの式一致を確認した。
+- `gas/src/Code.gs` は変更していない。Spreadsheetは運用者の常時バックアップがあるため、この修復について追加のGAS/Spreadsheet運用者作業はない。
+- 既に消失していた別ゲームの履歴復旧も、同日、`next-game-history-loss-revision-plan.md` の検証付き15パス更新として完了した。
