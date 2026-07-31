@@ -7,6 +7,7 @@ const {
 
 const projectId = "evg-rules-test";
 const roomId = "unit-room";
+const productionRoomId = "elevator-game-live";
 
 function publicNode(overrides = {}) {
   return Object.assign({
@@ -47,13 +48,97 @@ async function main() {
               updatedAt: "2026-07-29T00:00:00.000Z",
             },
           },
+          [productionRoomId]: {
+            roles: { hosts: { "production-host": true } },
+            public: publicNode({
+              gameId: "production-game",
+              roomVersion: 20,
+            }),
+            meta: {
+              roomId: productionRoomId,
+              title: "Production rules test",
+              schemaVersion: "firebase-rtdb-v2",
+              activeGameId: "production-game",
+              status: "active",
+              createdAt: "2026-07-29T00:00:00.000Z",
+              updatedAt: "2026-07-29T00:00:00.000Z",
+            },
+            players: {
+              "missing-root": {
+                name: "Missing Root",
+                connected: true,
+                joinedAt: "2026-07-29T00:00:00.000Z",
+                lastSeenAt: "2026-07-29T00:00:00.000Z",
+              },
+            },
+          },
         },
       });
     });
 
     const host = env.authenticatedContext("host").database();
+    const productionHost = env.authenticatedContext("production-host").database();
     const alice = env.authenticatedContext("alice").database();
     const stranger = env.authenticatedContext("stranger").database();
+
+    const missingRoot = await assertSucceeds(
+      productionHost.ref("players/missing-root").once("value")
+    );
+    if (missingRoot.exists()) throw new Error("missing root player unexpectedly existed");
+    await assertFails(stranger.ref("players/missing-root").once("value"));
+    await assertFails(host.ref("players/missing-root").once("value"));
+    await assertFails(productionHost.ref("players/not-a-current-participant").once("value"));
+
+    await assertSucceeds(productionHost.ref().update({
+      [`rooms/${productionRoomId}/public`]: publicNode({
+        gameId: "production-game",
+        phase: "reveal",
+        roomVersion: 21,
+        animationStartedAt: "2026-07-29T00:00:04.000Z",
+      }),
+      [`rooms/${productionRoomId}/meta`]: {
+        roomId: productionRoomId,
+        title: "Production rules test",
+        schemaVersion: "firebase-rtdb-v3-skill-history",
+        activeGameId: "production-game",
+        status: "active",
+        createdAt: "2026-07-29T00:00:00.000Z",
+        updatedAt: "2026-07-29T00:00:05.000Z",
+      },
+      [`rooms/${productionRoomId}/playerStats/missing-root`]: {
+        currentSkill: 70,
+        stageSkillHistoryJson: "[30,40]",
+        appliedSkillStageIdsJson: "[\"[\\\"production-game\\\",\\\"stage-001\\\"]\",\"[\\\"production-game\\\",\\\"stage-002\\\"]\"]",
+        updatedAt: "2026-07-29T00:00:05.000Z",
+      },
+      [`rooms/${productionRoomId}/historyPlayers/p_missing_root`]: {
+        profileId: "p_missing_root",
+        name: "Missing Root",
+        currentSkill: 70,
+        updatedAt: "2026-07-29T00:00:05.000Z",
+      },
+      [`rooms/${productionRoomId}/operations/backfill`]: {
+        at: "2026-07-29T00:00:05.000Z",
+        actor: "host",
+        action: "firebase-backfill-skill-history",
+      },
+      "players/missing-root": {
+        name: "Missing Root",
+        currentSkill: 70,
+        stageSkillHistoryJson: "[30,40]",
+        appliedSkillStageIdsJson: "[\"[\\\"production-game\\\",\\\"stage-001\\\"]\",\"[\\\"production-game\\\",\\\"stage-002\\\"]\"]",
+        joinedAt: "2026-07-29T00:00:00.000Z",
+        lastSeenAt: "2026-07-29T00:00:05.000Z",
+        updatedAt: "2026-07-29T00:00:05.000Z",
+        roomId: productionRoomId,
+      },
+    }));
+    const migratedRoot = await assertSucceeds(
+      productionHost.ref("players/missing-root").once("value")
+    );
+    if (migratedRoot.child("currentSkill").val() !== 70) {
+      throw new Error("missing root backfill did not commit atomically");
+    }
 
     await assertSucceeds(host.ref("players/preflight").set({
       name: "Preflight",

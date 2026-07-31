@@ -47,6 +47,9 @@ run("stage results allow create or delete but never overwrite", () => {
 run("player master and self stats writes are explicitly scoped", () => {
   assert.match(roomRules.playerStats.$uid[".write"], /auth\.uid === \$uid/);
   assert.match(rules.players.$uid[".read"], /auth\.uid === \$uid/);
+  assert.match(rules.players.$uid[".read"], /!data\.exists\(\)/);
+  assert.match(rules.players.$uid[".read"], /child\('elevator-game-live'\)\.child\('players'\)\.child\(\$uid\)\.exists\(\)/);
+  assert.match(rules.players.$uid[".read"], /child\('elevator-game-live'\)\.child\('roles'\)\.child\('hosts'\)/);
   assert.match(rules.players.$uid[".write"], /auth\.uid === \$uid/);
   assert.match(rules.players.$uid[".write"], /roles'\)\.child\('hosts/);
   assert.match(rules.players.$uid[".write"], /stageSkillHistory/);

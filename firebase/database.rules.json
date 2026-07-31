@@ -180,7 +180,7 @@
     },
     "players": {
       "$uid": {
-        ".read": "auth != null && (auth.uid === $uid || root.child('rooms').child(data.child('roomId').val()).child('roles').child('hosts').child(auth.uid).val() === true)",
+        ".read": "auth != null && (auth.uid === $uid || (data.exists() && root.child('rooms').child(data.child('roomId').val()).child('roles').child('hosts').child(auth.uid).val() === true) || (!data.exists() && root.child('rooms').child('elevator-game-live').child('players').child($uid).exists() && root.child('rooms').child('elevator-game-live').child('roles').child('hosts').child(auth.uid).val() === true))",
         ".write": "auth != null && (root.child('rooms').child(newData.child('roomId').val()).child('roles').child('hosts').child(auth.uid).val() === true || (auth.uid === $uid && ((!data.exists() && newData.child('currentSkill').val() === 0 && newData.child('stageSkillHistoryJson').val() === '[]' && newData.child('appliedSkillStageIdsJson').val() === '[]') || (data.exists() && newData.child('currentSkill').val() === data.child('currentSkill').val() && newData.child('stageSkillHistoryJson').val() === data.child('stageSkillHistoryJson').val() && newData.child('appliedSkillStageIdsJson').val() === data.child('appliedSkillStageIdsJson').val()))))",
         ".validate": "newData.hasChildren(['name', 'currentSkill', 'stageSkillHistoryJson', 'appliedSkillStageIdsJson', 'joinedAt', 'lastSeenAt', 'updatedAt', 'roomId'])",
         "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 24" },

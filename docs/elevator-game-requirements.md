@@ -154,6 +154,7 @@ Host / Screen / Player browser
 - Host、Player、Screenは `public`、現在ステージ設定、必要な本人/投影用データをRTDB購読で自動追従する。HTTPの定期ポーリング、GAS `/api/status`、同一端末 `BroadcastChannel` 同期は本番経路に使わない。
 - `public` のフェーズ遷移はHost allowlist uidだけが実行できる。クライアントは読取り時の `expectedPhase` と `roomVersion` を添えて変更を作り、Rulesが既存値に対する正しい次フェーズと `roomVersion + 1` を検証する。競合時は書込み全体を拒否して最新 `public` を再取得する。Playerの「次へ」ボタンでフェーズを進めたり、ランキング画面に意図的に置き去りにしたりしない。
 - Hostがステージ集計を確定するときは、RTDBルートを基準にした1回のmulti-location `update()` で、フェーズ、`results/{stageId}`、`scores/{uid}`、`playerStats/{uid}`、プレイヤー履歴、操作ログを原子的に一括反映する。フェーズを先に確定して副作用を後書きする二段階方式と、個別順次書込みは禁止する。Rulesのversion/phase検証または既存結果により拒否された場合はupdate全体が反映されず、二重集計を防ぐ。
+- 既存データ移行でroot `players/{uid}` が未作成の場合、通常room `elevator-game-live` の現在参加者であるuidに限り、同roomのallowlist済みHostが欠損確認の読取りを行える。任意の欠損uidをHostが探索できる規則にはしない。作成時の認可は `newData.roomId` と同roomのHost allowlistを照合し、room mirror、公開履歴、schemaVersionと同じmulti-location `update()`で原子的に作成する。
 
 ### 4.4 RTDB購読と同期
 - 全画面で `rooms/{roomId}` rootの購読は禁止する。Hostは `public`、設定、参加者、投票状況、結果等、Playerは本人ticket/結果/score、Screenは投影用集約結果だけを購読する。
@@ -594,6 +595,7 @@ StageSkill = (上昇成功階数 / (ステージ階数 × 定員 / 参加人数)
 
 #### RTDB / Host側
 - Host commandの成功・失敗を `operations` に記録し、Hostのinternal-statusでuid、phase、roomVersion、stageId、Rules error、archive statusを確認できるようにする。
+- root player読取りが拒否された場合は、`lastRulesError` に対象の絶対パス `players/{uid}` を含め、Hostのinternal-statusと通信ログから移行が停止した場所を特定できるようにする。
 - GASはarchive endpointの受付・upsert成否だけを実行ログに記録する。進行APIログは持たない。
 
 #### スプレッドシート構成

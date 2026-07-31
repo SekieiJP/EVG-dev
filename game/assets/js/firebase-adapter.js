@@ -1026,8 +1026,18 @@
 
     async readRootPlayer(uid) {
       if (!uid) return null;
-      const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, `/players/${uid}`));
-      return snapshot.exists() ? snapshot.val() : null;
+      const path = `/players/${uid}`;
+      try {
+        const snapshot = await this.sdk.get(this.sdk.ref(this.firebaseDb, path));
+        return snapshot.exists() ? snapshot.val() : null;
+      } catch (error) {
+        const message = `${error && error.message ? error.message : String(error)} at ${path}`;
+        const nextError = new Error(message);
+        nextError.code = error && error.code;
+        this.debug.lastRulesError = message;
+        this.log("firebase.root-player.read.error", { path, message });
+        throw nextError;
+      }
     }
 
     async writeRootPlayer(player) {

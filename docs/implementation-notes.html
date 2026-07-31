@@ -420,6 +420,19 @@
       </section>
 
       <section>
+        <h2>2026-07-31 欠損root playerのRules修正 r5</h2>
+        <ul>
+          <li><strong>障害原因:</strong> 本番の現参加者6人はroot <code>players/{uid}</code> が未作成だった。backfillの事前読取りに対するRulesが既存<code>data.roomId</code>だけでHostを判定していたため、<code>data.roomId=null</code>となり、別のallowlist済みHost uidでも同じ<code>permission_denied</code>になっていた。事前読取りで停止するためschemaVersionやSkillの部分更新は発生していない。</li>
+          <li><strong>デザインの決定:</strong> 欠損root playerの読取りは、本番通常room <code>elevator-game-live</code> の現在参加者として対象uidが存在し、要求者が同roomのallowlist済みHostである場合だけ許可する。既存rootは従来どおり本人または<code>data.roomId</code>のHostに限定し、任意の欠損uidをHostが探索できる規則にはしない。</li>
+          <li><strong>トレードオフ:</strong> RTDB Rulesは欠損rootからroomIdを逆引きできないため、移行対象の本番通常roomをRulesへ明示した。別roomへ同じ欠損移行を展開する場合は、root player所属indexまたは信頼済みサーバ移行処理を先に設計する。</li>
+          <li><strong>診断:</strong> <code>readRootPlayer()</code>の拒否時に絶対パス<code>/players/{uid}</code>を付けたエラーを<code>lastRulesError</code>と通信ログへ保存する。後続updateへ到達しない失敗もHostのinternal-statusで識別できる。</li>
+          <li><strong>検証:</strong> Rules emulatorへ、欠損rootを本番roomのallowlist済みHostだけが読めること、部外者と非参加uidは拒否されること、root作成・room mirror・公開履歴・schemaVersion更新を含むbackfill形状のmulti-location updateが成功することを追加した。adapter unit testでは読取り拒否の対象パスがinternal-statusと通信ログへ残ることを確認した。</li>
+          <li><strong>公開・本番反映:</strong> アセット版<code>260731-p0p1r5</code>と修正版Rulesは、全回帰検証、コミット、push後に公開・本番releaseする。本項記録時点では未実施。</li>
+          <li><strong>未解決の質問:</strong> 修正版Rules release後、allowlist済みHostで強制再読み込みと通常認証を1回行い、schema v3、有限StageSkill 29件、6人の非ゼロSkill、履歴長<code>[4,5,5,5,5,5]</code>を本番データで確認する必要がある。GAS/Spreadsheet作業も引き続き未実施。</li>
+        </ul>
+      </section>
+
+      <section>
         <h2>未解決の質問</h2>
         <ul>
           <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>

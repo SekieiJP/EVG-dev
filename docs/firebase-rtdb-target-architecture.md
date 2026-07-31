@@ -346,6 +346,8 @@ StageSkillの適用済みキーはstageId単独ではなく `JSON.stringify([gam
 
 通常運用の購読は引き続き `results/{currentStageId}` に限定する。移行時だけはallowlist済みHostに `results` 親の一回読取りを許可し、Player/Screenが親を一括取得することはRulesで拒否する。rootに非空canonical履歴があるプレイヤーはroot profile自体を書き直さず、room `playerStats` と公開indexだけを同期する。
 
+root `players/{uid}` が未作成の場合は既存 `data.roomId` をHost認可に利用できない。本番の通常room `elevator-game-live` に限り、対象uidが `rooms/elevator-game-live/players/{uid}` の現在参加者として存在し、かつ要求者が同roomのallowlist済みHostである場合だけ、欠損ノードの読取りを許可する。root作成は `newData.roomId` により同roomのHostを検証できるため、backfillの単一multi-location updateで行う。これは既存本番データを安全に移行するための限定境界であり、別roomへ展開する場合はroomごとのroot player所属indexまたはサーバ移行処理を設計してからRulesを拡張する。
+
 ### 時刻同期と締切
 
 全クライアントは `/.info/serverTimeOffset` を購読し、`Date.now() + offset` を補正済みサーバ時刻として用いる。Hostはこの補正済み時刻から `countdownEndsAt`、`tallyingEndsAt`、`animationStartedAt`、`revealEndsAt` を確定して書き、Player/Screenも同じ補正方法で描画する。
@@ -484,6 +486,8 @@ Host操作エラー時は必ず以下をログ化する。
 - response error
 - forced refresh後のphase/version/stageId
 
+root playerの事前読取りエラーは、拒否された絶対パス `/players/{uid}` を `lastRulesError` と通信ログに残す。後続の原子的updateへ到達しなかった場合でも、internal-statusだけで停止箇所を判別できるようにする。
+
 Player/Screenにも通信ログを持つ。Screenは通常投影を邪魔しないよう `?debug=1` のときだけ表示する。
 
 ## Rules方針
@@ -540,6 +544,8 @@ Firebase Emulator SuiteでRulesを検証する。
 - `stage_intro` のDBに対し、Hostの `open-voting` が成功する。
 - `lobby` のDBに対し、Hostの `open-voting` が拒否される。
 - `results/{stageId}` 二重作成が拒否される。
+- 通常roomの現参加者でroot playerが未作成でもallowlist済みHostは欠損を読め、部外者および同roomにいない欠損uidの読取りは拒否される。
+- 欠損root playerの作成を含むSkill backfillのmulti-location updateが原子的に成功する。
 
 ### RTDB integration tests
 

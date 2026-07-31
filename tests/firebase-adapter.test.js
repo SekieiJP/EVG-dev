@@ -133,17 +133,20 @@ run("firebase adapter derives command time from the RTDB server offset", () => {
 
 runAsync("firebase read errors include the rejected path", async () => {
   global.BroadcastChannel = undefined;
+  const logs = [];
   const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
     config: { FIREBASE_ROOM_ID: "unit-room" },
     engine: Engine,
     getRole: () => "host",
     getUuid: () => "host-uid",
+    log: (kind, detail) => logs.push({ kind, detail }),
   });
   adapter.firebaseDb = {};
   adapter.sdk = {
     ref: (db, path) => path,
     get: async (ref) => {
       if (String(ref).endsWith("/completedGameDetails")) throw new Error("Permission denied");
+      if (String(ref) === "/players/alice") throw new Error("Root player denied");
       return { exists: () => true, val: () => ({ ok: true }) };
     },
   };
@@ -153,6 +156,19 @@ runAsync("firebase read errors include the rejected path", async () => {
     /Permission denied at completedGameDetails/
   );
   assert.match(adapter.getDebugInfo().lastRulesError, /completedGameDetails/);
+
+  await assert.rejects(
+    () => adapter.readRootPlayer("alice"),
+    /Root player denied at \/players\/alice/
+  );
+  assert.match(adapter.getDebugInfo().lastRulesError, /\/players\/alice/);
+  assert.strictEqual(
+    logs.some((entry) => (
+      entry.kind === "firebase.root-player.read.error"
+      && entry.detail.path === "/players/alice"
+    )),
+    true
+  );
 });
 
 run("firebase player updates write room player stats for self restore", () => {
