@@ -79,8 +79,12 @@ run("firebase next-game config catalog is host scoped", () => {
   assert.match(roomRules.nextGameConfigs[".write"], /roles'\)\.child\('hosts/);
 });
 
-run("room settings allow separated bgm and se audio controls", () => {
+run("room settings validate countdown and separated audio controls", () => {
   const settings = roomRules.roomSettings;
+  assert.match(settings.countdownSeconds[".validate"], /newData\.isNumber/);
+  assert.match(settings.countdownSeconds[".validate"], /newData\.val\(\) >= 1/);
+  assert.match(settings.countdownSeconds[".validate"], /newData\.val\(\) <= 60/);
+  assert.match(settings.countdownSeconds[".validate"], /% 1 === 0/);
   ["volume", "bgmVolume", "seVolume"].forEach((key) => {
     assert.match(settings[key][".validate"], /newData\.isNumber/);
     assert.match(settings[key][".validate"], /newData\.val\(\) >= 0/);

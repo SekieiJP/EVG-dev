@@ -101,13 +101,19 @@ rooms/{roomId}
     gameMeta
     settings
       hostUiMode
-      countdownSeconds
       movingSeconds
       revealSecondsPerFloor
     stages/{stageId}
       name
       params
       events
+
+  roomSettings
+    countdownSeconds       # 1〜60の整数。既定10。Host変更後は次ゲームにも引き継ぐ
+    bgmVolume
+    seVolume
+    bgmMuted
+    seMuted
 
   nextGameConfigs/{configId}
     status                 # ACTIVE | ARCHIVED

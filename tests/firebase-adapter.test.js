@@ -31,6 +31,7 @@ run("firebase nodes round-trip room state without snapshot", () => {
   room.hostUid = "host-uid";
   room.phase = Engine.PHASES.VOTING;
   room.roomVersion = 7;
+  room.countdownSeconds = 24;
   room.revealEndsAt = "2026-06-01T00:02:00.000Z";
   room.scores = { alice: 12, bob: -3 };
   room.tickets = {
@@ -47,6 +48,7 @@ run("firebase nodes round-trip room state without snapshot", () => {
   assert.strictEqual(nodes.meta.schemaVersion, "firebase-rtdb-v3-skill-history");
   assert.strictEqual(nodes.players.alice.name, "Alice");
   assert.strictEqual(nodes.scores.alice.total, 12);
+  assert.strictEqual(nodes.roomSettings.countdownSeconds, 24);
   assert.strictEqual(nodes.ticketPresence["stage-001"].alice.status, "submitted");
 
   nodes.roles = { hosts: { "host-uid": true } };
@@ -55,11 +57,36 @@ run("firebase nodes round-trip room state without snapshot", () => {
   assert.strictEqual(restored.firebaseSchemaVersion, "firebase-rtdb-v3-skill-history");
   assert.strictEqual(restored.phase, Engine.PHASES.VOTING);
   assert.strictEqual(restored.roomVersion, 7);
+  assert.strictEqual(restored.countdownSeconds, 24);
   assert.strictEqual(restored.revealEndsAt, "2026-06-01T00:02:00.000Z");
   assert.deepStrictEqual(restored.scores, { alice: 12, bob: -3 });
   assert.strictEqual(restored.players.length, 2);
   assert.strictEqual(restored.tickets["stage-001"].alice.exitFloor, 4);
   assert.strictEqual(restored.operations[0].action, "open-voting");
+});
+
+run("firebase Host room-setting update persists only the validated countdown setting with the atomic phase version", () => {
+  const current = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  current.roomId = "unit-room";
+  current.roomVersion = 7;
+  const changed = Engine.updateRoomSettings(
+    current,
+    { countdownSeconds: 18 },
+    "host",
+    "2026-07-31T00:00:00.000Z"
+  );
+  assert.strictEqual(changed.ok, true, changed.error);
+  changed.room.roomVersion = 8;
+  const updates = EVGFirebaseAdapter.hostAtomicUpdates(
+    "/api/host/update-room-settings",
+    current,
+    changed.room,
+    "unit-room",
+    Engine
+  );
+  assert.strictEqual(updates["rooms/unit-room/roomSettings/countdownSeconds"], 18);
+  assert.strictEqual(updates["rooms/unit-room/public"].roomVersion, 8);
+  assert.strictEqual(updates["rooms/unit-room/roomSettings"], undefined);
 });
 
 run("firebase operation nodes use stable unique keys", () => {
@@ -129,6 +156,31 @@ run("firebase adapter derives command time from the RTDB server offset", () => {
   const actual = new Date(adapter.serverNowIso()).getTime();
   const after = Date.now() + 90_000;
   assert.strictEqual(actual >= before && actual <= after, true);
+});
+
+runAsync("firebase Host auth backfills a missing countdown room setting with 10 seconds", async () => {
+  global.BroadcastChannel = undefined;
+  const writes = [];
+  const adapter = EVGFirebaseAdapter.createFirebaseAdapter({
+    config: { FIREBASE_ROOM_ID: "unit-room" },
+    engine: Engine,
+    getRole: () => "host",
+  });
+  adapter.auth = { uid: "host-uid" };
+  adapter.firebaseDb = {};
+  adapter.sdk = {
+    ref: (_db, path) => path,
+    get: async () => ({ exists: () => false, val: () => null }),
+    set: async (ref, value) => writes.push([ref, value]),
+  };
+
+  const value = await adapter.ensureCountdownRoomSetting();
+
+  assert.strictEqual(value, 10);
+  assert.deepStrictEqual(writes, [[
+    "/rooms/unit-room/roomSettings/countdownSeconds",
+    10,
+  ]]);
 });
 
 runAsync("firebase read errors include the rejected path", async () => {

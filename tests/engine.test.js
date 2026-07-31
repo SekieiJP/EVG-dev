@@ -135,9 +135,26 @@ run("same game JSON creates distinct game ids on restart", () => {
   assert.notStrictEqual(first.gameId, second.gameId);
 });
 
-run("next game keeps separated audio volume settings", () => {
+run("countdown defaults to 10 seconds and accepts only 1 to 60 seconds", () => {
+  const room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  assert.strictEqual(room.countdownSeconds, 10);
+
+  const updated = Engine.updateRoomSettings(room, { countdownSeconds: 24 }, "host", "2026-07-31T00:00:00.000Z");
+  assert.strictEqual(updated.ok, true, updated.error);
+  assert.strictEqual(updated.room.countdownSeconds, 24);
+  assert.strictEqual(updated.room.operations[0].action, "update-room-settings");
+
+  [0, 1.5, 61, "invalid"].forEach((countdownSeconds) => {
+    const rejected = Engine.updateRoomSettings(room, { countdownSeconds });
+    assert.strictEqual(rejected.ok, false);
+    assert.strictEqual(rejected.room, room);
+  });
+});
+
+run("next game keeps room settings and separated audio settings", () => {
   const config = Engine.normalizeConfig(Engine.DEFAULT_CONFIG);
   const first = Engine.createInitialRoom(config);
+  first.countdownSeconds = 24;
   first.bgmVolume = 0.35;
   first.seVolume = 0.9;
   first.bgmMuted = true;
@@ -149,6 +166,7 @@ run("next game keeps separated audio volume settings", () => {
     error: "retry",
   };
   const second = Engine.createNextGameRoom(first, config);
+  assert.strictEqual(second.countdownSeconds, 24);
   assert.strictEqual(second.bgmVolume, 0.35);
   assert.strictEqual(second.seVolume, 0.9);
   assert.strictEqual(second.bgmMuted, true);
@@ -465,10 +483,20 @@ run("host deadlines and result timestamps use the injected server-corrected time
   room = Engine.advancePhase(room, "open-voting", "host", "2026-07-29T14:59:51.000Z").room;
   room = Engine.submitTicket(room, "alice", { boardFloor: 1, exitFloor: 2, predictions: {} }, "2026-07-29T14:59:52.000Z").room;
   room = Engine.advancePhase(room, "close-voting", "host", "2026-07-29T14:59:55.000Z").room;
-  assert.strictEqual(room.countdownEndsAt, "2026-07-29T15:00:10.000Z");
-  assert.strictEqual(room.tallyingEndsAt, "2026-07-29T15:00:13.000Z");
-  const tallied = Engine.tallyCurrentStage(room, "2026-07-29T15:00:13.000Z");
-  assert.strictEqual(tallied.room.stageResults["stage-001"].calculatedAt, "2026-07-29T15:00:13.000Z");
-  assert.strictEqual(tallied.room.animationStartedAt, "2026-07-29T15:00:13.000Z");
-  assert.strictEqual(tallied.room.updatedAt, "2026-07-29T15:00:13.000Z");
+  assert.strictEqual(room.countdownEndsAt, "2026-07-29T15:00:05.000Z");
+  assert.strictEqual(room.tallyingEndsAt, "2026-07-29T15:00:08.000Z");
+  const tallied = Engine.tallyCurrentStage(room, "2026-07-29T15:00:08.000Z");
+  assert.strictEqual(tallied.room.stageResults["stage-001"].calculatedAt, "2026-07-29T15:00:08.000Z");
+  assert.strictEqual(tallied.room.animationStartedAt, "2026-07-29T15:00:08.000Z");
+  assert.strictEqual(tallied.room.updatedAt, "2026-07-29T15:00:08.000Z");
+});
+
+run("host close-voting uses the saved countdown setting", () => {
+  let room = Engine.createInitialRoom(Engine.DEFAULT_CONFIG);
+  room.countdownSeconds = 24;
+  room.phase = Engine.PHASES.VOTING;
+  const closed = Engine.advancePhase(room, "close-voting", "host", "2026-07-31T00:00:00.000Z");
+  assert.strictEqual(closed.ok, true, closed.error);
+  assert.strictEqual(closed.room.countdownEndsAt, "2026-07-31T00:00:24.000Z");
+  assert.strictEqual(closed.room.tallyingEndsAt, "2026-07-31T00:00:27.000Z");
 });

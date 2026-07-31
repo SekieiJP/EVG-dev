@@ -384,6 +384,12 @@ async function main() {
     }));
     await assertFails(alice.ref(`rooms/${roomId}/nextGameConfigs/next`).once("value"));
 
+    await assertSucceeds(host.ref(`rooms/${roomId}/roomSettings/countdownSeconds`).set(10));
+    await assertFails(host.ref(`rooms/${roomId}/roomSettings/countdownSeconds`).set(0));
+    await assertFails(host.ref(`rooms/${roomId}/roomSettings/countdownSeconds`).set(1.5));
+    await assertFails(host.ref(`rooms/${roomId}/roomSettings/countdownSeconds`).set(61));
+    await assertFails(alice.ref(`rooms/${roomId}/roomSettings/countdownSeconds`).set(20));
+
     await assertSucceeds(host.ref(`rooms/${roomId}/completedGamePublicDetails/game-0`).set({
       gameId: "game-0",
       rankings: [{ profileId: "p_alice", name: "Alice", rank: 1, score: 20 }],

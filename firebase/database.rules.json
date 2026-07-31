@@ -160,6 +160,7 @@
         "roomSettings": {
           ".read": "auth != null",
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+          "countdownSeconds": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 60 && newData.val() % 1 === 0" },
           "volume": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1" },
           "bgmVolume": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1" },
           "seVolume": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1" },

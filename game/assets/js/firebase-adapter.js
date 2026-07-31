@@ -311,8 +311,14 @@
         result = this.commitHostResult(room, payload.room, payload.baseVersion);
       } else if (path === "/api/host/remove-player") {
         result = this.engine.removePlayerFromRoom(room, payload.uuid, payload.hostName || "host");
+      } else if (path === "/api/host/update-room-settings") {
+        result = this.engine.updateRoomSettings(room, payload, payload.hostName || "host", this.serverNowIso());
       } else if (path === "/api/host/import-config") {
-        result = { ok: true, room: room.players.length || Object.keys(room.stageResults || {}).length ? this.engine.createNextGameRoom(room, payload.config, this.serverNowIso()) : this.engine.createInitialRoom(payload.config) };
+        const nextRoom = room.players.length || Object.keys(room.stageResults || {}).length
+          ? this.engine.createNextGameRoom(room, payload.config, this.serverNowIso())
+          : this.engine.createInitialRoom(payload.config);
+        nextRoom.countdownSeconds = room.countdownSeconds;
+        result = { ok: true, room: nextRoom };
       } else if (path === "/api/host/update-config") {
         const next = this.engine.deepClone(room);
         next.config = this.engine.normalizeConfig(payload.config);
@@ -320,9 +326,15 @@
         next.updatedAt = nowIso();
         result = { ok: true, room: next };
       } else if (path === "/api/host/start-game-config") {
-        result = payload.config
-          ? { ok: true, room: room.players.length || Object.keys(room.stageResults || {}).length ? this.engine.createNextGameRoom(room, payload.config, this.serverNowIso()) : this.engine.createInitialRoom(payload.config) }
-          : { ok: false, code: "not_found", error: "次ゲーム設定が見つかりません。" };
+        if (payload.config) {
+          const nextRoom = room.players.length || Object.keys(room.stageResults || {}).length
+            ? this.engine.createNextGameRoom(room, payload.config, this.serverNowIso())
+            : this.engine.createInitialRoom(payload.config);
+          nextRoom.countdownSeconds = room.countdownSeconds;
+          result = { ok: true, room: nextRoom };
+        } else {
+          result = { ok: false, code: "not_found", error: "次ゲーム設定が見つかりません。" };
+        }
       } else if (path.indexOf("/api/host/") === 0) {
         const hostAuth = this.verifyHost(payload.hostToken);
         if (!hostAuth.ok) return hostAuth;
@@ -584,6 +596,7 @@
           await this.writeRestRoomChildren(initializedRoom(this.engine, this.roomId));
         } else {
           await this.backfillHistoryIndexes();
+          await this.ensureCountdownRoomSetting();
         }
         return;
       }
@@ -591,6 +604,24 @@
       room.hostUid = this.auth.uid;
       room.updatedAt = nowIso();
       await this.writeRoom(room);
+    }
+
+    async ensureCountdownRoomSetting() {
+      const settingRef = this.sdk.ref(
+        this.firebaseDb,
+        `/rooms/${this.roomId}/roomSettings/countdownSeconds`
+      );
+      const snapshot = await this.sdk.get(settingRef);
+      const value = Number(snapshot.exists() ? snapshot.val() : NaN);
+      if (
+        Number.isInteger(value) &&
+        value >= this.engine.MIN_COUNTDOWN_SECONDS &&
+        value <= this.engine.MAX_COUNTDOWN_SECONDS
+      ) {
+        return value;
+      }
+      await this.sdk.set(settingRef, this.engine.DEFAULT_COUNTDOWN_SECONDS);
+      return this.engine.DEFAULT_COUNTDOWN_SECONDS;
     }
 
     verifyHost(token) {
@@ -1232,6 +1263,9 @@
       }, {}),
       operations: keyOperations(room.operations || []),
       roomSettings: {
+        countdownSeconds: room.countdownSeconds !== undefined
+          ? Number(room.countdownSeconds)
+          : 10,
         volume: room.volume !== undefined ? room.volume : 0.8,
         bgmVolume: room.bgmVolume !== undefined ? room.bgmVolume : (room.volume !== undefined ? room.volume : 0.8),
         seVolume: room.seVolume !== undefined ? room.seVolume : (room.volume !== undefined ? room.volume : 0.8),
@@ -1315,6 +1349,9 @@
       roomVersion: Number(status.roomVersion || 0),
       ticketPresence: nodes.ticketPresence || {},
       archive: nodes.archive || null,
+      countdownSeconds: settings.countdownSeconds !== undefined
+        ? Number(settings.countdownSeconds)
+        : fallback.countdownSeconds,
       volume: settings.volume !== undefined ? Number(settings.volume) : fallback.volume,
       bgmVolume: settings.bgmVolume !== undefined ? Number(settings.bgmVolume) : (settings.volume !== undefined ? Number(settings.volume) : fallback.bgmVolume),
       seVolume: settings.seVolume !== undefined ? Number(settings.seVolume) : (settings.volume !== undefined ? Number(settings.volume) : fallback.seVolume),
@@ -1423,6 +1460,10 @@
       updates[roomPath("players")] = emptyObjectToNull(nodes.players);
       updates[roomPath("playerStats")] = emptyObjectToNull(nodes.playerStats);
       updates[roomPath("historyPlayers")] = emptyObjectToNull(nodes.historyPlayers);
+    }
+
+    if (path === "/api/host/update-room-settings") {
+      updates[roomPath("roomSettings/countdownSeconds")] = nodes.roomSettings.countdownSeconds;
     }
 
     const completedGameChanged =
@@ -2325,6 +2366,11 @@
     room.ticketPresence = room.ticketPresence || {};
     room.archive = room.archive || null;
     room.revealEndsAt = room.revealEndsAt || null;
+    room.countdownSeconds = Number.isInteger(Number(room.countdownSeconds)) &&
+      Number(room.countdownSeconds) >= 1 &&
+      Number(room.countdownSeconds) <= 60
+      ? Number(room.countdownSeconds)
+      : fallback.countdownSeconds;
     room.volume = room.volume !== undefined ? room.volume : fallback.volume;
     room.muted = Boolean(room.muted);
     room.bgmVolume = room.bgmVolume !== undefined ? room.bgmVolume : room.volume;

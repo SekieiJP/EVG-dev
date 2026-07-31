@@ -17,6 +17,7 @@ npx playwright test
 - StageSkill と現在Skillを検証する。現在Skillは全StageSkillの上位5件の合計であり、最高値を除外しない。
 - 累積戦歴の9指標（現在Skill、平均Skill、合計Skill、最高得点、参加ゲーム数、参加ステージ数、強制下車回数、予想イベント正解率、優勝回数）を検証する。
 - 同日継続は、次ゲーム開始日と同じAsia/Tokyo日付にticketを提出したプレイヤーだけを残し、ゲーム内score/ticket/stage resultを初期化することを検証する。
+- 締切カウントダウンは既定10秒、1〜60秒のHost設定を時間計算へ使い、次ゲームへ引き継ぐことを検証する。
 - RTDB小ノードのserializer/deserializer、公開履歴payload、本人詳細payload、GAS archive payloadを検証する。
 
 ### RTDB Rules emulator tests
@@ -24,6 +25,7 @@ npx playwright test
 - 未認証者は読み書きできない。
 - Playerは自分のプロフィール、ticket、ticketPresenceだけを書け、他人のデータ、`public`、`results`、`scores` は書けない。
 - Host allowlist uidだけが `public` を含む原子的commit、設定、次ゲーム候補、結果commit、archive状態を変更できる。
+- `roomSettings/countdownSeconds` はHostだけが書け、1〜60の整数以外を拒否する。
 - `lobby -> stage_intro -> voting -> countdown -> moving -> reveal -> ranking -> stage_intro/final` 以外の遷移を拒否する。
 - phase/version CASは、古いphaseまたは `roomVersion` からのmulti-location updateを全体として拒否する。
 - 同じ `results/{stageId}` の二重作成を拒否する。
@@ -44,7 +46,7 @@ npx playwright test
 
 ローカルmockでは1つのBrowser Context内の独立pageを使い、`testSlot`ごとにHost、Player A、Player B、Screenの認証IDを分ける。実Firebaseの本番前smokeでは独立Browser Contextまたは物理端末を使う。
 
-1. Host allowlist uidでログインし、Player A/Bが匿名ログインして参加する。
+1. Host allowlist uidでログインし、締切カウントダウンの既定10秒を任意値へ変更してroom settingsへの保存を確認する。Player A/Bが匿名ログインして参加する。
 2. Hostがステージ説明、投票開始、締切、結果発表、ランキング、次ステージ/最終結果を進める。
 3. Playerはticketを送信し、結果発表後に本人のscore/StageSkill/現在Skillを確認する。
 4. Playerがランキングに留まるボタンを押さなくても、Hostの次フェーズへ自動追従することを確認する。

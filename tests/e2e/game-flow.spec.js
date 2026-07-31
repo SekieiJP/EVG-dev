@@ -98,6 +98,16 @@ test("Host・Player 2人・Screenが同じステージ結果とSkill更新へ追
   await host.locator("#hostAuthForm input[name=password]").fill("host");
   await host.locator("#hostAuthForm button[type=submit]").click();
   await expect(host.locator(".host-shell")).toBeVisible();
+  const countdownInput = host.locator('#hostRoomSettingsForm input[name="countdownSeconds"]');
+  await expect(countdownInput).toHaveValue("10");
+  await countdownInput.fill("12");
+  await host.locator("#hostRoomSettingsForm").evaluate((form) => form.requestSubmit());
+  await expect(countdownInput).toHaveValue("12");
+  const persistedCountdownSeconds = await host.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem("evg.firebase.mock.db.v1") || "{}");
+    return db.rooms["elevator-game-live"].roomSettings.countdownSeconds;
+  });
+  expect(persistedCountdownSeconds).toBe(12);
   await publishMockRoom(host, "one-stage");
   await publishMockRoom(host, "unicode-game-id");
 

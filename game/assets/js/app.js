@@ -259,6 +259,19 @@
       await restartFirebaseSync();
       render();
     }
+    if (form.id === "hostRoomSettingsForm") {
+      const countdownSeconds = Number(form.elements.countdownSeconds.value);
+      const result = await runMutation(
+        () => Engine.updateRoomSettings(state.room, { countdownSeconds }, "host"),
+        "/api/host/update-room-settings",
+        { countdownSeconds, hostName: "host" }
+      );
+      if (!result.ok) return showToast(result.error || "進行設定を保存できませんでした。");
+      state.room = result.room;
+      saveRoom("host.room-settings", "host");
+      showToast(`締切カウントダウンを${countdownSeconds}秒に変更しました。`);
+      render();
+    }
     if (form.id === "renameForm") {
       const nextName = form.elements.nextName.value;
       const result = await runMutation(
@@ -784,6 +797,17 @@
           ${renderHostFlowPanel()}
           ${renderHostNextPanel()}
           <section class="panel">
+            <h2>進行設定</h2>
+            <form id="hostRoomSettingsForm" class="form-grid">
+              <label>
+                締切カウントダウン（秒）
+                <input name="countdownSeconds" type="number" min="${Engine.MIN_COUNTDOWN_SECONDS}" max="${Engine.MAX_COUNTDOWN_SECONDS}" step="1" value="${state.room.countdownSeconds}" required>
+              </label>
+              <p class="muted">次回の受付終了から適用し、Firebase RTDBのroomSettingsへ保存します。</p>
+              <button type="submit">保存</button>
+            </form>
+          </section>
+          <section class="panel">
             <h2>音量</h2>
             ${renderAudioControls("host")}
           </section>
@@ -892,6 +916,7 @@
       ["currentStageIndex", state.room.currentStageIndex],
       ["currentStageId", stage ? stage.stageId : ""],
       ["roomVersion", state.room.roomVersion || 0],
+      ["countdownSeconds", state.room.countdownSeconds],
       ["players", state.room.players.length],
       ["currentStageTickets", ticketCount],
       ["stageResults", resultCount],

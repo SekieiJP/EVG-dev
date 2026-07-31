@@ -15,6 +15,9 @@
     RANKING: "ranking",
     FINAL: "final",
   };
+  const DEFAULT_COUNTDOWN_SECONDS = 10;
+  const MIN_COUNTDOWN_SECONDS = 1;
+  const MAX_COUNTDOWN_SECONDS = 60;
 
   const DEFAULT_CONFIG = {
     schemaVersion: "1.0.0",
@@ -115,6 +118,7 @@
       scores: {},
       completedGames: [],
       operations: [],
+      countdownSeconds: DEFAULT_COUNTDOWN_SECONDS,
       countdownEndsAt: null,
       tallyingEndsAt: null,
       animationStartedAt: null,
@@ -146,6 +150,7 @@
     next.volume = room.volume !== undefined ? room.volume : next.volume;
     next.bgmVolume = room.bgmVolume !== undefined ? room.bgmVolume : next.volume;
     next.seVolume = room.seVolume !== undefined ? room.seVolume : next.volume;
+    next.countdownSeconds = normalizeCountdownSeconds(room.countdownSeconds);
     next.muted = Boolean(room.muted);
     next.bgmMuted = room.bgmMuted !== undefined ? Boolean(room.bgmMuted) : next.muted;
     next.seMuted = room.seMuted !== undefined ? Boolean(room.seMuted) : next.muted;
@@ -930,8 +935,9 @@
       if (next.phase !== PHASES.VOTING) return { room, ok: false, error: "現在は締切できません。" };
       next.phase = PHASES.COUNTDOWN;
       const commandMs = new Date(at).getTime();
-      next.countdownEndsAt = new Date(commandMs + 15000).toISOString();
-      next.tallyingEndsAt = new Date(commandMs + 18000).toISOString();
+      const countdownMs = normalizeCountdownSeconds(next.countdownSeconds) * 1000;
+      next.countdownEndsAt = new Date(commandMs + countdownMs).toISOString();
+      next.tallyingEndsAt = new Date(commandMs + countdownMs + 3000).toISOString();
     } else if (action === "tally") {
       return tallyCurrentStage(next, at);
     } else if (action === "show-ranking") {
@@ -956,12 +962,32 @@
         next.phase = PHASES.FINAL;
       }
     } else if (action === "reset-room") {
-      return { room: createInitialRoom(next.config), ok: true };
+      const reset = createInitialRoom(next.config);
+      reset.countdownSeconds = normalizeCountdownSeconds(next.countdownSeconds);
+      return { room: reset, ok: true };
     }
     next.operations.unshift(log);
     next.operations = next.operations.slice(0, 100);
     next.updatedAt = at;
     return { room: next, ok: true, stage };
+  }
+
+  function updateRoomSettings(room, settings, actor, commandAt) {
+    const seconds = Number(settings && settings.countdownSeconds);
+    if (!Number.isInteger(seconds) || seconds < MIN_COUNTDOWN_SECONDS || seconds > MAX_COUNTDOWN_SECONDS) {
+      return {
+        room,
+        ok: false,
+        error: `締切カウントダウンは${MIN_COUNTDOWN_SECONDS}〜${MAX_COUNTDOWN_SECONDS}秒の整数で指定してください。`,
+      };
+    }
+    const next = deepClone(room);
+    const at = validIsoTimestamp(commandAt) ? commandAt : nowIso();
+    next.countdownSeconds = seconds;
+    next.operations.unshift({ at, actor: actor || "host", action: "update-room-settings" });
+    next.operations = next.operations.slice(0, 100);
+    next.updatedAt = at;
+    return { room: next, ok: true, settings: { countdownSeconds: seconds } };
   }
 
   function applyPendingNames(room) {
@@ -1025,6 +1051,13 @@
     return Math.max(min, Math.min(max, number));
   }
 
+  function normalizeCountdownSeconds(value) {
+    const number = Number(value);
+    return Number.isInteger(number) && number >= MIN_COUNTDOWN_SECONDS && number <= MAX_COUNTDOWN_SECONDS
+      ? number
+      : DEFAULT_COUNTDOWN_SECONDS;
+  }
+
   function clampNumber(value, min, max, fallback) {
     const number = Number(value);
     if (!Number.isFinite(number)) return fallback;
@@ -1063,6 +1096,9 @@
   return {
     PHASES,
     DEFAULT_CONFIG,
+    DEFAULT_COUNTDOWN_SECONDS,
+    MIN_COUNTDOWN_SECONDS,
+    MAX_COUNTDOWN_SECONDS,
     createInitialRoom,
     createNextGameRoom,
     archiveCurrentGame,
@@ -1083,6 +1119,7 @@
     skillStageApplicationId,
     cumulativeRankings,
     advancePhase,
+    updateRoomSettings,
     createUuid,
     deepClone,
     roundScore,

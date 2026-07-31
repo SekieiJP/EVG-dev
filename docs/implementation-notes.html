@@ -439,6 +439,19 @@
       </section>
 
       <section>
+        <h2>2026-07-31 締切カウントダウン room settings化 r9</h2>
+        <ul>
+          <li><strong>デザインの決定:</strong> 受付終了後の締切カウントダウン既定値を15秒から10秒へ変更した。Hostは進行設定フォームから1〜60秒の整数へ変更でき、変更は次回の受付終了から適用する。開始済みの<code>countdownEndsAt</code>は設定変更で延長・短縮しない。</li>
+          <li><strong>永続化:</strong> 正本を<code>rooms/{roomId}/roomSettings/countdownSeconds</code>とし、Host専用commandでpublic phase/version、meta、operationsと同じmulti-location updateへ保存する。既存roomで値が欠損または範囲外の場合は、allowlist済みHost認証時に10を補完する。</li>
+          <li><strong>ゲーム間保持:</strong> JSONのゲーム設定ではなくroom settingsとして扱い、同じJSONの再開始、RTDB次ゲーム候補開始、通常の次ゲーム生成でも値を引き継ぐ。過去roomを読み込むクライアントは欠損値を10として復元する。</li>
+          <li><strong>トレードオフ:</strong> 誤入力による極端な待ち時間を避けるため自由入力を1〜60秒の整数へ制限した。締切後の遅延受信に使う移動待ち3秒は別の役割なので変更していない。</li>
+          <li><strong>逸脱:</strong> <code>gas/src/Code.gs</code>に残る旧進行用15秒処理はarchive専用の現行routingから到達不能であり、本番正系ではないため変更していない。進行時間はFirebase/ブラウザエンジンだけを正とする。</li>
+          <li><strong>検証:</strong> 既定10秒、範囲拒否、設定時間による終了時刻、次ゲーム引継ぎ、RTDB serializer/deserializer、Host原子的更新、既存room補完、Host UI保存をUnitとPlaywright E2Eへ追加した。Unit、50人×20ステージ負荷モデル、E2Eは成功し、Firebase CLIの本番project向けdry-runでもRules構文を検証した。Rules emulatorは実装ではなくローカル環境にJava Runtimeがないため起動できなかった。</li>
+          <li><strong>未完了:</strong> 新しい<code>roomSettings/countdownSeconds</code>のRulesを本番へreleaseし、r9をPages公開した後、Host認証で本番roomに10が補完されることを確認する必要がある。</li>
+        </ul>
+      </section>
+
+      <section>
         <h2>未解決の質問</h2>
         <ul>
           <li>E3bの「条件」は、今回の<code>S〜Tに経路が触れたら適用</code>でよいか。それとも「乗車階が範囲内」「降車階が範囲内」「特定イベント条件」など別条件にするか。</li>

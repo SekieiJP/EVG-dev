@@ -138,6 +138,14 @@ run("player countdown updates do not rerender active ticket input", () => {
   assert.strictEqual(cssSource.includes(".inline-countdown:empty"), true);
 });
 
+run("Host can persist the room countdown setting", () => {
+  assert.strictEqual(appSource.includes('id="hostRoomSettingsForm"'), true);
+  assert.strictEqual(appSource.includes('name="countdownSeconds"'), true);
+  assert.strictEqual(appSource.includes('"/api/host/update-room-settings"'), true);
+  assert.strictEqual(appSource.includes("Engine.MIN_COUNTDOWN_SECONDS"), true);
+  assert.strictEqual(appSource.includes("Engine.MAX_COUNTDOWN_SECONDS"), true);
+});
+
 run("archive recovery is available for queued jobs and manual save waits for final", () => {
   const archivePanel = section(appSource, "function renderArchivePanel", "function renderGameConfigOption");
   assert.strictEqual(
