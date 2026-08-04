@@ -2,6 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const { buildCompatRules } = require("../scripts/build-firebase-rules-compat");
 const { buildCompatRules: buildMembershipCompatRules } = require("../scripts/build-firebase-rules-compat-v5");
+const { buildMaintenanceRules } = require("../scripts/build-firebase-rules-maintenance");
 
 const finalRulesDocument = JSON.parse(fs.readFileSync("firebase/database.rules.json", "utf8"));
 const rules = finalRulesDocument.rules;
@@ -22,6 +23,15 @@ function changedLeafPaths(left, right, prefix = "") {
       return changedLeafPaths(leftValue, rightValue, path);
     }
     return JSON.stringify(leftValue) === JSON.stringify(rightValue) ? [] : [path];
+  });
+}
+
+function ruleValues(node, ruleKey, prefix = "") {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return [];
+  return Object.keys(node).flatMap((key) => {
+    const path = prefix ? `${prefix}/${key}` : key;
+    if (key === ruleKey) return [{ path, value: node[key] }];
+    return ruleValues(node[key], ruleKey, path);
   });
 }
 
@@ -136,7 +146,7 @@ run("compatibility Rules are generated from final Rules and reopen only legacy r
   ]);
 });
 
-run("membership compatibility Rules allow legacy shapes only before the v5 marker", () => {
+run("membership compatibility Rules allow legacy shapes but forbid client marker transition", () => {
   const generated = buildMembershipCompatRules(finalRulesDocument);
   const checkedIn = JSON.parse(fs.readFileSync("firebase/database.rules.compat-v5.json", "utf8"));
   assert.deepStrictEqual(checkedIn, generated);
@@ -179,6 +189,62 @@ run("membership compatibility Rules allow legacy shapes only before the v5 marke
     generated.rules.rooms.$roomId.ticketPresence.$stageId[".read"],
     roomRules.ticketPresence.$stageId[".read"]
   );
+  const migrationTicketValidation = generated.rules.rooms.$roomId.tickets.$stageId.$uid[".validate"];
+  assert.match(migrationTicketValidation, /currentStageId/);
+  assert.ok(migrationTicketValidation.includes(
+    "!newData.parent().parent().parent().child('meta').child('membershipSchemaVersion').exists()"
+  ));
+  assert.doesNotMatch(migrationTicketValidation, /membershipMigration/);
+  assert.strictEqual(generated.rules.rooms.$roomId[".write"], false);
+  assert.strictEqual(generated.rules.rooms.$roomId.membershipMigration[".write"], false);
+  assert.strictEqual(
+    generated.rules.players.$uid[".write"],
+    rules.players.$uid[".write"]
+  );
+  assert.match(generated.rules.rooms.$roomId.meta[".validate"], /data\.child\('membershipSchemaVersion'\)\.val\(\) === 'game-membership-v1'/);
+});
+
+run("maintenance Rules preserve strict reads and recursively freeze every write", () => {
+  const generated = buildMaintenanceRules(finalRulesDocument);
+  const checkedIn = JSON.parse(fs.readFileSync(
+    "firebase/database.rules.maintenance.json",
+    "utf8"
+  ));
+  const config = JSON.parse(fs.readFileSync("firebase.maintenance.json", "utf8"));
+  assert.deepStrictEqual(checkedIn, generated);
+  assert.strictEqual(
+    config.database.rules,
+    "firebase/database.rules.maintenance.json"
+  );
+  const changed = changedLeafPaths(finalRulesDocument, generated);
+  assert.ok(changed.length > 0);
+  changed.forEach((path) => {
+    assert.match(path, /\/\.write$/);
+    const segments = path.split("/");
+    let value = generated;
+    segments.forEach((segment) => { value = value[segment]; });
+    assert.strictEqual(value, false);
+  });
+  const maintenanceWrites = ruleValues(generated, ".write");
+  assert.ok(maintenanceWrites.length > 0);
+  maintenanceWrites.forEach(({ path, value }) => {
+    assert.strictEqual(value, false, `${path} must be frozen`);
+  });
+  assert.deepStrictEqual(
+    ruleValues(generated, ".read"),
+    ruleValues(finalRulesDocument, ".read")
+  );
+});
+
+run("strict Rules retain an immutable Host-readable migration receipt", () => {
+  const migration = roomRules.membershipMigration;
+  assert.match(migration[".read"], /roles'\)\.child\('hosts/);
+  assert.strictEqual(migration[".write"], false);
+  assert.match(migration[".validate"], /state'\)\.val\(\) === 'complete'/);
+  assert.match(migration[".validate"], /completedAtMs/);
+  assert.match(migration.token[".validate"], /\^m_/);
+  assert.match(migration.expiresAtMs[".validate"], /newData\.isNumber/);
+  assert.strictEqual(migration.$other[".validate"], false);
 });
 
 run("membership generations, per-player CAS and exact name claims are enforced", () => {
@@ -199,8 +265,8 @@ run("membership generations, per-player CAS and exact name claims are enforced",
   ));
   assert.doesNotMatch(privatePlayer.name[".validate"], /!data\.parent\(\)\.child\('pendingName'\)\.exists/);
   assert.match(privatePlayer.name[".validate"], /data\.parent\(\)\.child\('pendingName'\)\.exists/);
-  assert.match(privatePlayer.name[".validate"], /\\x00/);
-  assert.match(privatePlayer.pendingName[".validate"], /\\x00/);
+  assert.match(privatePlayer.name[".validate"], /\u0000/);
+  assert.match(privatePlayer.pendingName[".validate"], /\u0000/);
 
   const claim = roomRules.nameClaims.$generationId.$normalizedName;
   assert.match(roomRules.nameClaims[".read"], /roles'\)\.child\('hosts/);
@@ -209,7 +275,7 @@ run("membership generations, per-player CAS and exact name claims are enforced",
   assert.match(claim[".write"], /nameClaimKey/);
   assert.match(claim[".write"], /pendingNameClaimKey/);
   assert.match(claim[".validate"], /newData\.parent\(\)\.parent\(\)\.parent\(\)\.child\('players'/);
-  assert.match(claim.name[".validate"], /\\x00/);
+  assert.match(claim.name[".validate"], /\u0000/);
   assert.strictEqual(claim.$other[".validate"], false);
 
   assert.ok(roomRules.membership.activeGenerationId[".validate"].includes(

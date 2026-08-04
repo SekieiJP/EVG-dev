@@ -38,6 +38,20 @@
           "activeGenerationId": { ".validate": "newData.isString() && newData.val().matches(/^g_[A-Za-z0-9_-]{8,80}$/)" },
           "$other": { ".validate": false }
         },
+        "membershipMigration": {
+          ".read": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
+          ".write": false,
+          ".validate": "newData.hasChildren(['state', 'ownerUid', 'token', 'sourceSchemaVersion', 'targetSchemaVersion', 'acquiredAtMs', 'expiresAtMs', 'completedAtMs']) && newData.child('state').val() === 'complete' && newData.child('sourceSchemaVersion').val() === 'firebase-rtdb-v4-public-projection' && newData.child('targetSchemaVersion').val() === 'firebase-rtdb-v5-membership-generation' && newData.child('expiresAtMs').val() >= newData.child('acquiredAtMs').val() + 5000 && newData.child('expiresAtMs').val() <= newData.child('acquiredAtMs').val() + 60000 && newData.child('completedAtMs').val() >= newData.child('acquiredAtMs').val() && newData.child('completedAtMs').val() <= newData.child('expiresAtMs').val() && newData.child('completedAtMs').val() <= now + 5000 && newData.parent().child('meta').child('membershipSchemaVersion').val() === 'game-membership-v1'",
+          "state": { ".validate": "newData.isString() && newData.val() === 'complete'" },
+          "ownerUid": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 128" },
+          "token": { ".validate": "newData.isString() && newData.val().matches(/^m_[A-Za-z0-9_-]{8,176}$/)" },
+          "sourceSchemaVersion": { ".validate": "newData.isString() && newData.val() === 'firebase-rtdb-v4-public-projection'" },
+          "targetSchemaVersion": { ".validate": "newData.isString() && newData.val() === 'firebase-rtdb-v5-membership-generation'" },
+          "acquiredAtMs": { ".validate": "newData.isNumber() && newData.val() % 1 === 0" },
+          "expiresAtMs": { ".validate": "newData.isNumber() && newData.val() % 1 === 0" },
+          "completedAtMs": { ".validate": "newData.isNumber() && newData.val() % 1 === 0" },
+          "$other": { ".validate": false }
+        },
         "public": {
           ".read": "auth != null",
           ".write": "auth != null && root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true",
@@ -185,7 +199,7 @@
               "ownerUid": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 128" },
               "profileId": { ".validate": "newData.isString() && newData.val().matches(/^p_[a-z0-9]+$/)" },
               "generationId": { ".validate": "newData.isString() && newData.val() === $generationId" },
-              "name": { ".validate": "newData.isString() && newData.val() === $normalizedName && newData.val().matches(/^[^.#$\\/\\[\\]\\x00-\\x1F\\x7F]{1,24}$/)" },
+              "name": { ".validate": "newData.isString() && newData.val() === $normalizedName && newData.val().matches(/^[^.#$\\/\\[\\]\u0000-\u001F\u007F]{1,24}$/)" },
               "$other": { ".validate": false }
             }
           }
@@ -298,11 +312,11 @@
             ".write": "auth != null && newData.exists() && (root.child('rooms').child($roomId).child('roles').child('hosts').child(auth.uid).val() === true || (auth.uid === $uid && newData.child('generationId').val() === newData.parent().parent().child('membership').child('activeGenerationId').val()))",
             ".validate": "newData.hasChildren(['profileId', 'name', 'connected', 'joinedAt', 'lastSeenAt', 'generationId', 'profileRevision']) && ((!data.exists() && newData.child('profileRevision').val() === 1) || (data.exists() && ((!data.child('profileRevision').exists() && newData.child('profileRevision').val() === 1) || (data.child('profileRevision').exists() && newData.child('profileRevision').val() === data.child('profileRevision').val() + 1)))) && newData.parent().parent().child('publicProfileOwners').child(newData.child('profileId').val()).val() === $uid && newData.parent().parent().child('publicPlayers').child(newData.child('profileId').val()).child('name').val() === newData.child('name').val() && newData.parent().parent().child('publicPlayers').child(newData.child('profileId').val()).child('connected').val() === newData.child('connected').val() && newData.parent().parent().child('publicPlayers').child(newData.child('profileId').val()).child('generationId').val() === newData.child('generationId').val() && newData.parent().parent().child('publicPlayers').child(newData.child('profileId').val()).child('profileRevision').val() === newData.child('profileRevision').val() && newData.parent().parent().child('scores').child($uid).child('generationId').val() === newData.child('generationId').val() && newData.parent().parent().child('publicScores').child(newData.child('profileId').val()).child('generationId').val() === newData.child('generationId').val() && newData.parent().parent().child('publicScores').child(newData.child('profileId').val()).child('profileRevision').val() === newData.child('profileRevision').val() && (newData.child('generationId').val() !== newData.parent().parent().child('membership').child('activeGenerationId').val() || (newData.child('nameClaimKey').val() === newData.child('name').val() && newData.parent().parent().child('nameClaims').child(newData.child('generationId').val()).child(newData.child('nameClaimKey').val()).child('ownerUid').val() === $uid && ((!newData.child('pendingName').exists() && !newData.child('pendingNameClaimKey').exists()) || (newData.child('pendingName').exists() && newData.child('pendingNameClaimKey').val() === newData.child('pendingName').val() && newData.parent().parent().child('nameClaims').child(newData.child('generationId').val()).child(newData.child('pendingNameClaimKey').val()).child('ownerUid').val() === $uid))))",
             "profileId": { ".validate": "newData.isString() && newData.val().matches(/^p_[a-z0-9]+$/)" },
-            "name": { ".validate": "newData.isString() && newData.val().matches(/^[^.#$\\/\\[\\]\\x00-\\x1F\\x7F]{1,24}$/) && (auth.uid === $uid || !data.parent().exists() || data.val() === newData.val() || (data.parent().child('pendingName').exists() && newData.val() === data.parent().child('pendingName').val()))" },
+            "name": { ".validate": "newData.isString() && newData.val().matches(/^[^.#$\\/\\[\\]\u0000-\u001F\u007F]{1,24}$/) && (auth.uid === $uid || !data.parent().exists() || data.val() === newData.val() || (data.parent().child('pendingName').exists() && newData.val() === data.parent().child('pendingName').val()))" },
             "connected": { ".validate": "newData.isBoolean()" },
             "joinedAt": { ".validate": "newData.isString()" },
             "lastSeenAt": { ".validate": "newData.isString()" },
-            "pendingName": { ".validate": "newData.isString() && newData.val().matches(/^[^.#$\\/\\[\\]\\x00-\\x1F\\x7F]{1,24}$/)" },
+            "pendingName": { ".validate": "newData.isString() && newData.val().matches(/^[^.#$\\/\\[\\]\u0000-\u001F\u007F]{1,24}$/)" },
             "generationId": { ".validate": "newData.isString() && (newData.val() === '' || newData.val().matches(/^g_[A-Za-z0-9_-]{8,80}$/))" },
             "profileRevision": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() % 1 === 0" },
             "nameClaimKey": { ".validate": "newData.isString() && newData.val() === newData.parent().child('name').val()" },

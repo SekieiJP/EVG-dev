@@ -12,8 +12,11 @@ const productionRoomId = "elevator-game-live";
 const versionRoomId = "version-room";
 const privacyRoomId = "privacy-room";
 const strictRoomId = "membership-room";
+const migrationRoomId = "membership-migration-room";
 const activeGenerationId = "g_membership0001";
 const nextGenerationId = "g_membership0002";
+const migrationGenerationId = "g_migration0001";
+const migrationStageIds = ["migration-stage-1", "migration-stage-2"];
 const aliceProfileId = Projection.publicProfileId("alice");
 const bobProfileId = Projection.publicProfileId("bob");
 const missingRootProfileId = Projection.publicProfileId("missing-root");
@@ -301,6 +304,209 @@ function strictJoinUpdates(uid, name, order) {
   };
 }
 
+function adminMigrationReceipt() {
+  const acquiredAtMs = Date.now();
+  return {
+    state: "complete",
+    ownerUid: "maintenance-admin-cli",
+    token: "m_maintenance_admin_0001",
+    sourceSchemaVersion: "firebase-rtdb-v4-public-projection",
+    targetSchemaVersion: "firebase-rtdb-v5-membership-generation",
+    acquiredAtMs,
+    expiresAtMs: acquiredAtMs + 45000,
+    completedAtMs: acquiredAtMs + 1000,
+  };
+}
+
+function legacyMembershipRoomNode(roomId, hostUid, uid) {
+  const at = "2026-08-01T01:00:00.000Z";
+  const profileId = Projection.publicProfileId(uid);
+  const currentStageId = migrationStageIds[1];
+  const name = uid === "migration-player" ? "Migration Player" : "Partial Player";
+  const hostUids = Array.isArray(hostUid) ? hostUid : [hostUid];
+  const room = {
+    roles: {
+      hosts: hostUids.reduce((hosts, currentUid) => {
+        hosts[currentUid] = true;
+        return hosts;
+      }, {}),
+    },
+    meta: {
+      roomId,
+      title: "Legacy membership migration",
+      schemaVersion: "firebase-rtdb-v4-public-projection",
+      activeGameId: "migration-game",
+      status: "active",
+      createdAt: at,
+      updatedAt: at,
+    },
+    public: publicNode({
+      gameId: "migration-game",
+      phase: "countdown",
+      roomVersion: 4,
+      currentStageId,
+      playerCount: 1,
+      submittedCount: 1,
+    }),
+    players: {
+      [uid]: {
+        profileId,
+        name,
+        connected: true,
+        joinedAt: at,
+        lastSeenAt: at,
+      },
+    },
+    playerStats: {
+      [uid]: {
+        currentSkill: 25,
+        stageSkillHistoryJson: "[25]",
+        appliedSkillStageIdsJson: JSON.stringify(migrationStageIds),
+        updatedAt: at,
+      },
+    },
+    publicProfileOwners: { [profileId]: uid },
+    publicPlayers: {
+      [profileId]: { profileId, name, connected: true, order: 0 },
+    },
+    scores: { [uid]: { total: 7, updatedAt: at } },
+    publicScores: {
+      [profileId]: { profileId, name, total: 7, order: 0 },
+    },
+    tickets: {},
+    ticketPresence: {},
+    publicTicketPresence: {},
+  };
+  migrationStageIds.forEach((stageId) => {
+    room.tickets[stageId] = {
+      [uid]: {
+        uuid: uid,
+        boardFloor: 1,
+        exitFloor: 2,
+        predictions: [],
+        abstained: false,
+        submittedAt: at,
+      },
+    };
+    room.ticketPresence[stageId] = {
+      [uid]: { status: "submitted", updatedAt: at },
+    };
+    room.publicTicketPresence[stageId] = {
+      [profileId]: { profileId, status: "submitted" },
+    };
+  });
+  return room;
+}
+
+function membershipMigrationUpdates(roomId, uid, receipt) {
+  const at = "2026-08-01T01:00:01.000Z";
+  const profileId = Projection.publicProfileId(uid);
+  const currentStageId = migrationStageIds[1];
+  const name = uid === "migration-player" ? "Migration Player" : "Partial Player";
+  const updates = {
+    [`rooms/${roomId}/meta`]: {
+      roomId,
+      title: "Legacy membership migration",
+      schemaVersion: "firebase-rtdb-v5-membership-generation",
+      membershipSchemaVersion: "game-membership-v1",
+      activeGameId: "migration-game",
+      status: "active",
+      createdAt: "2026-08-01T01:00:00.000Z",
+      updatedAt: at,
+    },
+    [`rooms/${roomId}/membership`]: { activeGenerationId: migrationGenerationId },
+    [`rooms/${roomId}/membershipMigration`]: receipt,
+    [`rooms/${roomId}/public`]: publicNode({
+      gameId: "migration-game",
+      activeGenerationId: migrationGenerationId,
+      phase: "countdown",
+      roomVersion: 5,
+      currentStageId,
+      playerCount: 1,
+      submittedCount: 1,
+    }),
+    [`rooms/${roomId}/players/${uid}`]: {
+      profileId,
+      name,
+      connected: true,
+      joinedAt: "2026-08-01T01:00:00.000Z",
+      lastSeenAt: at,
+      generationId: migrationGenerationId,
+      profileRevision: 1,
+      nameClaimKey: name,
+    },
+    [`rooms/${roomId}/playerStats/${uid}`]: {
+      currentSkill: 25,
+      stageSkillHistoryJson: "[25]",
+      appliedSkillStageIdsJson: JSON.stringify(migrationStageIds),
+      updatedAt: at,
+    },
+    [`rooms/${roomId}/publicProfileOwners/${profileId}`]: uid,
+    [`rooms/${roomId}/publicPlayers/${profileId}`]: {
+      profileId,
+      name,
+      connected: true,
+      order: 0,
+      generationId: migrationGenerationId,
+      profileRevision: 1,
+    },
+    [`rooms/${roomId}/nameClaims/${migrationGenerationId}/${name}`]: {
+      ownerUid: uid,
+      profileId,
+      generationId: migrationGenerationId,
+      name,
+    },
+    [`rooms/${roomId}/scores/${uid}`]: {
+      total: 7,
+      updatedAt: at,
+      generationId: migrationGenerationId,
+    },
+    [`rooms/${roomId}/publicScores/${profileId}`]: {
+      profileId,
+      name,
+      total: 7,
+      order: 0,
+      generationId: migrationGenerationId,
+      profileRevision: 1,
+    },
+    [`players/${uid}`]: {
+      name,
+      currentSkill: 25,
+      stageSkillHistoryJson: "[25]",
+      appliedSkillStageIdsJson: JSON.stringify(migrationStageIds),
+      joinedAt: "2026-08-01T01:00:00.000Z",
+      lastSeenAt: at,
+      updatedAt: at,
+      roomId,
+    },
+  };
+  migrationStageIds.forEach((stageId) => {
+    updates[`rooms/${roomId}/tickets/${stageId}/${uid}`] = {
+      uuid: uid,
+      stageId,
+      generationId: migrationGenerationId,
+      boardFloor: 1,
+      exitFloor: 2,
+      predictions: [],
+      abstained: false,
+      submittedAt: at,
+    };
+    updates[`rooms/${roomId}/ticketPresence/${stageId}/${uid}`] = {
+      status: "submitted",
+      updatedAt: at,
+      stageId,
+      generationId: migrationGenerationId,
+    };
+    updates[`rooms/${roomId}/publicTicketPresence/${stageId}/${profileId}`] = {
+      profileId,
+      status: "submitted",
+      stageId,
+      generationId: migrationGenerationId,
+    };
+  });
+  return updates;
+}
+
 function publicHistoryRanking(overrides = {}) {
   return Object.assign({
     profileId: aliceProfileId,
@@ -397,6 +603,11 @@ async function main() {
           },
           [privacyRoomId]: privacyRoomNode(),
           [strictRoomId]: strictMembershipRoomNode(),
+          [migrationRoomId]: legacyMembershipRoomNode(
+            migrationRoomId,
+            "migration-host",
+            "migration-player"
+          ),
         },
         archives: {
           "legacy-archive": {
@@ -415,6 +626,7 @@ async function main() {
     const privacyHost = env.authenticatedContext("privacy-host").database();
     const strictHost = env.authenticatedContext("strict-host").database();
     const strictAlice = env.authenticatedContext("strict-alice").database();
+    const migrationHost = env.authenticatedContext("migration-host").database();
     const guest = env.unauthenticatedContext().database();
 
     await assertSucceeds(strictHost.ref(`rooms/${strictRoomId}/nameClaims`).once("value"));
@@ -524,11 +736,144 @@ async function main() {
       },
     }));
 
+    const migrationReceipt = adminMigrationReceipt();
+    const fullClientMigration = membershipMigrationUpdates(
+      migrationRoomId,
+      "migration-player",
+      migrationReceipt
+    );
+    const markerOnlyMigration = {};
+    [
+      `rooms/${migrationRoomId}/meta`,
+      `rooms/${migrationRoomId}/membership`,
+      `rooms/${migrationRoomId}/membershipMigration`,
+      `rooms/${migrationRoomId}/public`,
+    ].forEach((path) => {
+      markerOnlyMigration[path] = fullClientMigration[path];
+    });
+
+    await assertFails(migrationHost.ref().update(markerOnlyMigration));
+    await assertFails(migrationHost.ref().update(fullClientMigration));
+
+    let rejectedMigrationMarker = null;
+    let rejectedMigrationPlayer = null;
+    let rejectedMigrationReceipt = null;
+    let rejectedRootPlayer = null;
+    await env.withSecurityRulesDisabled(async (context) => {
+      rejectedMigrationMarker = await context.database().ref(
+        `rooms/${migrationRoomId}/meta/membershipSchemaVersion`
+      ).once("value");
+      rejectedMigrationPlayer = await context.database().ref(
+        `rooms/${migrationRoomId}/players/migration-player/generationId`
+      ).once("value");
+      rejectedMigrationReceipt = await context.database().ref(
+        `rooms/${migrationRoomId}/membershipMigration`
+      ).once("value");
+      rejectedRootPlayer = await context.database().ref(
+        "players/migration-player"
+      ).once("value");
+    });
+    if (
+      rejectedMigrationMarker.exists() ||
+      rejectedMigrationPlayer.exists() ||
+      rejectedMigrationReceipt.exists() ||
+      rejectedRootPlayer.exists()
+    ) {
+      throw new Error("client membership migration was partially committed");
+    }
+
+    await env.withSecurityRulesDisabled(async (context) => {
+      await context.database().ref().update(fullClientMigration);
+    });
+
+    const migratedMarker = await assertSucceeds(migrationHost.ref(
+      `rooms/${migrationRoomId}/meta/membershipSchemaVersion`
+    ).once("value"));
+    const migratedPlayer = await assertSucceeds(migrationHost.ref(
+      `rooms/${migrationRoomId}/players/migration-player`
+    ).once("value"));
+    const migratedMembership = await assertSucceeds(migrationHost.ref(
+      `rooms/${migrationRoomId}/membership/activeGenerationId`
+    ).once("value"));
+    const migratedClaim = await assertSucceeds(migrationHost.ref(
+      `rooms/${migrationRoomId}/nameClaims/${migrationGenerationId}/Migration Player`
+    ).once("value"));
+    const migratedScore = await assertSucceeds(migrationHost.ref(
+      `rooms/${migrationRoomId}/scores/migration-player`
+    ).once("value"));
+    const migratedPublicScore = await assertSucceeds(migrationHost.ref(
+      `rooms/${migrationRoomId}/publicScores/${Projection.publicProfileId("migration-player")}`
+    ).once("value"));
+    const migratedStageNodes = await Promise.all(migrationStageIds.map(async (stageId) => ({
+      ticket: await assertSucceeds(migrationHost.ref(
+        `rooms/${migrationRoomId}/tickets/${stageId}/migration-player`
+      ).once("value")),
+      presence: await assertSucceeds(migrationHost.ref(
+        `rooms/${migrationRoomId}/ticketPresence/${stageId}/migration-player`
+      ).once("value")),
+      publicPresence: await assertSucceeds(migrationHost.ref(
+        `rooms/${migrationRoomId}/publicTicketPresence/${stageId}/${Projection.publicProfileId("migration-player")}`
+      ).once("value")),
+    })));
+    const migratedRootPlayer = await assertSucceeds(migrationHost.ref(
+      "players/migration-player"
+    ).once("value"));
+    const migratedReceipt = await assertSucceeds(migrationHost.ref(
+      `rooms/${migrationRoomId}/membershipMigration`
+    ).once("value"));
+    if (
+      migratedMarker.val() !== "game-membership-v1" ||
+      migratedMembership.val() !== migrationGenerationId ||
+      migratedPlayer.child("generationId").val() !== migrationGenerationId ||
+      migratedPlayer.child("profileRevision").val() !== 1 ||
+      migratedClaim.child("ownerUid").val() !== "migration-player" ||
+      migratedScore.child("generationId").val() !== migrationGenerationId ||
+      migratedPublicScore.child("generationId").val() !== migrationGenerationId ||
+      migratedStageNodes.some(({ ticket, presence, publicPresence }) => (
+        ticket.child("generationId").val() !== migrationGenerationId ||
+        presence.child("generationId").val() !== migrationGenerationId ||
+        publicPresence.child("generationId").val() !== migrationGenerationId
+      )) ||
+      migratedRootPlayer.child("currentSkill").val() !== 25 ||
+      migratedReceipt.child("state").val() !== "complete" ||
+      migratedReceipt.child("token").val() !== migrationReceipt.token ||
+      migratedReceipt.child("ownerUid").val() !== migrationReceipt.ownerUid
+    ) {
+      throw new Error("Admin membership migration payload was not seeded completely");
+    }
+    const migrationPlayer = env.authenticatedContext("migration-player").database();
+    await assertFails(migrationPlayer.ref(
+      `rooms/${migrationRoomId}/membershipMigration`
+    ).once("value"));
+    await assertFails(migrationHost.ref(
+      `rooms/${migrationRoomId}/membershipMigration/completedAtMs`
+    ).set(migrationReceipt.completedAtMs + 1));
+    await assertFails(migrationHost.ref().update({
+      [`rooms/${migrationRoomId}/players/legacy-after-marker`]: {
+        profileId: Projection.publicProfileId("legacy-after-marker"),
+        name: "Legacy After Marker",
+        connected: true,
+        joinedAt,
+        lastSeenAt: joinedAt,
+      },
+      [`rooms/${migrationRoomId}/publicPlayers/${Projection.publicProfileId("legacy-after-marker")}`]: {
+        profileId: Projection.publicProfileId("legacy-after-marker"),
+        name: "Legacy After Marker",
+        connected: true,
+        order: 1,
+      },
+    }));
+
+    const uniqueJoin = env.authenticatedContext("unique-join").database();
+    await assertSucceeds(uniqueJoin.ref().update(
+      strictJoinUpdates("unique-join", "Unique Name", 2)
+    ));
+
     const claimA = env.authenticatedContext("claim-a").database();
     const claimB = env.authenticatedContext("claim-b").database();
     const duplicateJoinResults = await Promise.allSettled([
-      claimA.ref().update(strictJoinUpdates("claim-a", "Same Name", 2)),
-      claimB.ref().update(strictJoinUpdates("claim-b", "Same Name", 3)),
+      claimA.ref().update(strictJoinUpdates("claim-a", "Same Name", 3)),
+      claimB.ref().update(strictJoinUpdates("claim-b", "Same Name", 4)),
     ]);
     if (duplicateJoinResults.filter((result) => result.status === "fulfilled").length !== 1) {
       throw new Error(`same-name claim race did not produce exactly one winner: ${JSON.stringify(duplicateJoinResults.map((item) => item.status))}`);
@@ -543,6 +888,16 @@ async function main() {
       throw new Error("same-name claim winner was not persisted");
     }
 
+    const parallelA = env.authenticatedContext("parallel-a").database();
+    const parallelB = env.authenticatedContext("parallel-b").database();
+    const differentNameJoinResults = await Promise.allSettled([
+      parallelA.ref().update(strictJoinUpdates("parallel-a", "Parallel A", 5)),
+      parallelB.ref().update(strictJoinUpdates("parallel-b", "Parallel B", 6)),
+    ]);
+    if (differentNameJoinResults.some((result) => result.status !== "fulfilled")) {
+      throw new Error(`different-name joins did not both succeed: ${JSON.stringify(differentNameJoinResults.map((item) => item.status))}`);
+    }
+
     const statsNew = env.authenticatedContext("stats-new").database();
     const statsNewProfile = {
       currentSkill: 0,
@@ -551,10 +906,10 @@ async function main() {
       updatedAt: "2026-08-01T00:00:01.000Z",
     };
     await assertFails(statsNew.ref().update(Object.assign(
-      strictJoinUpdates("stats-new", "Stats New", 4),
+      strictJoinUpdates("stats-new", "Stats New", 7),
       { [`rooms/${strictRoomId}/playerStats/stats-new`]: statsNewProfile }
     )));
-    await assertSucceeds(statsNew.ref().update(strictJoinUpdates("stats-new", "Stats New", 4)));
+    await assertSucceeds(statsNew.ref().update(strictJoinUpdates("stats-new", "Stats New", 7)));
     await assertSucceeds(statsNew.ref(
       `rooms/${strictRoomId}/playerStats/stats-new`
     ).set(statsNewProfile));

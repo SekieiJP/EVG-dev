@@ -43,7 +43,7 @@ function buildCompatRules(finalRules) {
   const compat = JSON.parse(JSON.stringify(finalRules));
   const room = compat.rules.rooms.$roomId;
 
-  room.meta[".validate"] = `((!data.child('membershipSchemaVersion').exists() && !newData.child('membershipSchemaVersion').exists()) || (${room.meta[".validate"]}))`;
+  room.meta[".validate"] = `((!data.child('membershipSchemaVersion').exists() && !newData.child('membershipSchemaVersion').exists()) || (data.child('membershipSchemaVersion').val() === '${MEMBERSHIP_MARKER}' && (${room.meta[".validate"]})))`;
   room.public[".validate"] = gatedValidation(
     room.public[".validate"],
     LEGACY.publicValidate,
